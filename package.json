@@ -6,21 +6,41 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "mcp:comfy": "tsx mcp/comfy/index.ts",
+    "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run dev\""
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.41",
+    "@assistant-ui/react": "^0.12.16",
+    "@assistant-ui/react-ai-sdk": "^1.3.13",
+    "@assistant-ui/react-ui": "^0.2.1",
+    "@lmstudio/sdk": "^1.5.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@reduxjs/toolkit": "^2.11.2",
+    "@stable-canvas/comfyui-client": "^1.5.9",
+    "ai": "^6.0.116",
+    "assistant-stream": "^0.3.4",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
     "next": "16.1.6",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "react-redux": "^9.2.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/express": "^5.0.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

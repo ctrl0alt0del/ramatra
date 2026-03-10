@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "../node_modules/@assistant-ui/react-ui/dist/styles/index.css";
+@import "../node_modules/@assistant-ui/react-ui/dist/styles/themes/default.css";
 
 :root {
   --background: #ffffff;

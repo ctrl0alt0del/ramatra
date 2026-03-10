@@ -1,0 +1,34 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+import { createThread, listThreads } from "@/lib/lmstudio/threads";
+
+const messageSchema = z.object({
+  role: z.enum(["system", "user", "assistant"]),
+  content: z.string(),
+});
+
+const createThreadSchema = z.object({
+  title: z.string().optional(),
+  status: z.enum(["regular", "archived"]).optional(),
+  messages: z.array(messageSchema).optional(),
+});
+
+export async function GET() {
+  return NextResponse.json({ threads: listThreads() });
+}
+
+export async function POST(req: Request) {
+  const json = await req.json();
+  const parsed = createThreadSchema.safeParse(json);
+
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: parsed.error.flatten() },
+      { status: 400 },
+    );
+  }
+
+  const thread = createThread(parsed.data);
+  return NextResponse.json({ thread }, { status: 201 });
+}
