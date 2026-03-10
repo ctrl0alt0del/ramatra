@@ -19,7 +19,10 @@ export function bootstrapExpressServerForMCPServer(
   app.use(express.json());
 
   const transports = new Map<string, StreamableHTTPServerTransport>();
-
+  app.use((req, _res, next) => {
+    console.log("[MCP]", req.method, req.path, req.headers["mcp-session-id"]);
+    next();
+  });
   app.post("/mcp", async (req, res) => {
     let transport = getTransportFromRequest(req, transports);
     if (!transport) {

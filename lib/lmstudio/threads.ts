@@ -11,6 +11,7 @@ export type ThreadSummary = {
   id: string;
   title: string;
   status: "regular" | "archived";
+  lmstudioResponseId: string | null;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -24,6 +25,7 @@ type ThreadRow = {
   id: string;
   title: string;
   status: ThreadSummary["status"];
+  lmstudio_response_id: string | null;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -50,6 +52,7 @@ export const listThreads = (): ThreadSummary[] => {
           t.id,
           t.title,
           t.status,
+          t.lmstudio_response_id,
           t.created_at,
           t.updated_at,
           COUNT(m.id) AS message_count
@@ -65,6 +68,7 @@ export const listThreads = (): ThreadSummary[] => {
     id: row.id,
     title: row.title,
     status: row.status,
+    lmstudioResponseId: row.lmstudio_response_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     messageCount: row.message_count,
@@ -121,6 +125,7 @@ export const getThread = (threadId: string) => {
           t.id,
           t.title,
           t.status,
+          t.lmstudio_response_id,
           t.created_at,
           t.updated_at,
           COUNT(m.id) AS message_count
@@ -149,6 +154,7 @@ export const getThread = (threadId: string) => {
     id: thread.id,
     title: thread.title,
     status: thread.status,
+    lmstudioResponseId: thread.lmstudio_response_id,
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
     messageCount: thread.message_count,
@@ -161,6 +167,7 @@ export const updateThread = (
   input: {
     title?: string;
     status?: ThreadSummary["status"];
+    lmstudioResponseId?: string | null;
     appendMessages?: ThreadMessage[];
     replaceMessages?: ThreadMessage[];
   },
@@ -179,6 +186,10 @@ export const updateThread = (
         ? deriveTitle(nextMessages)
         : existing.title;
   const nextStatus = input.status ?? existing.status;
+  const nextLmstudioResponseId =
+    input.lmstudioResponseId !== undefined
+      ? input.lmstudioResponseId
+      : existing.lmstudioResponseId;
 
   const timestamp = new Date().toISOString();
 
@@ -186,10 +197,10 @@ export const updateThread = (
     db.prepare(
       `
         UPDATE threads
-        SET title = ?, status = ?, updated_at = ?
+        SET title = ?, status = ?, lmstudio_response_id = ?, updated_at = ?
         WHERE id = ?
       `,
-    ).run(nextTitle, nextStatus, timestamp, threadId);
+    ).run(nextTitle, nextStatus, nextLmstudioResponseId, timestamp, threadId);
 
     if (input.replaceMessages) {
       db.prepare(`DELETE FROM messages WHERE thread_id = ?`).run(threadId);

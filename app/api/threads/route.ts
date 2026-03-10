@@ -11,6 +11,7 @@ const messageSchema = z.object({
 const createThreadSchema = z.object({
   title: z.string().optional(),
   status: z.enum(["regular", "archived"]).optional(),
+  lmstudioResponseId: z.string().nullable().optional(),
   messages: z.array(messageSchema).optional(),
 });
 

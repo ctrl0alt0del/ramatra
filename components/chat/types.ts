@@ -7,6 +7,7 @@ export type ThreadApiSummary = {
   id: string;
   title: string;
   status: "regular" | "archived";
+  lmstudioResponseId: string | null;
 };
 
 export type ThreadApiDetail = ThreadApiSummary & {
