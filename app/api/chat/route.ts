@@ -2,13 +2,8 @@ import { z } from "zod";
 
 import { extractComfyJobMarker } from "@/components/chat/comfy-marker";
 import { getThread, updateThread } from "@/lib/lmstudio/threads";
-import {
-  defaultPromptMode,
-  isPromptMode,
-} from "@/lib/lmstudio/prompt-modes";
-import {
-  getSystemPromptForMode,
-} from "@/lib/lmstudio/prompts";
+import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
+import { getSystemPromptForMode } from "@/lib/lmstudio/prompts";
 import {
   assertChatAvailable,
   getVramBalancerState,
@@ -188,7 +183,23 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-
+  const integrations = [
+    {
+      type: "ephemeral_mcp",
+      server_label: "comfy",
+      server_url: getComfyMcpUrl(),
+    },
+  ];
+  if (
+    process.env.WEB_SEARCH_MCP_ENABLED === "true" &&
+    process.env.WEB_SEARCH_MCP_URL
+  ) {
+    integrations.push({
+      type: "ephemeral_mcp",
+      server_label: "web_search",
+      server_url: process.env.WEB_SEARCH_MCP_URL,
+    });
+  }
   const response = await fetch(getLmStudioChatUrl(), {
     method: "POST",
     headers: {
@@ -206,13 +217,7 @@ export async function POST(req: Request) {
           ? parsed.data.promptMode
           : defaultPromptMode,
       ),
-      integrations: [
-        {
-          type: "ephemeral_mcp",
-          server_label: "comfy",
-          server_url: getComfyMcpUrl(),
-        },
-      ],
+      integrations: integrations,
     }),
   });
 

@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "mcp:comfy": "tsx mcp/comfy/index.ts",
-    "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run dev\""
+    "mcp:web-search": "tsx mcp/external/web-search.ts",
+    "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run mcp:web-search\" \"pnpm run dev\""
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.41",
