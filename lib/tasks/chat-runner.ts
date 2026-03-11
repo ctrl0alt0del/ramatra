@@ -44,6 +44,30 @@ type ChatResponse = {
   };
 };
 
+type ChatStreamEvent =
+  | {
+      type: "reasoning.delta";
+      content: string;
+    }
+  | {
+      type: "message.delta";
+      content: string;
+    }
+  | {
+      type: "error";
+      error?: {
+        message?: string;
+      };
+    }
+  | {
+      type: "chat.end";
+      result: ChatResponse;
+    }
+  | {
+      type: string;
+      content?: string;
+    };
+
 const getLmStudioChatUrl = () => {
   const rawBaseUrl = process.env.LM_STUDIO_BASE_URL;
   if (!rawBaseUrl) {
@@ -126,6 +150,52 @@ const buildIntegrations = () => {
   }
 
   return integrations;
+};
+
+const parseSseEvents = async (
+  stream: ReadableStream<Uint8Array>,
+  onEvent: (event: ChatStreamEvent) => void,
+) => {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    while (true) {
+      const separatorIndex = buffer.indexOf("\n\n");
+      if (separatorIndex === -1) break;
+
+      const rawEventBlock = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+
+      const lines = rawEventBlock.split(/\r?\n/);
+      let eventType = "";
+      const dataLines: string[] = [];
+
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          eventType = line.slice("event:".length).trim();
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice("data:".length).trim());
+        }
+      }
+
+      if (!eventType || dataLines.length === 0) {
+        continue;
+      }
+
+      const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+      onEvent({
+        type: eventType,
+        ...(data as object),
+      } as ChatStreamEvent);
+    }
+  }
 };
 
 export const executeQueuedChatTask = async (taskId: string) => {
@@ -214,40 +284,74 @@ export const executeQueuedChatTask = async (taskId: string) => {
         previous_response_id: thread?.lmstudioResponseId ?? undefined,
         system_prompt: getSystemPromptForMode(promptMode),
         integrations: buildIntegrations(),
+        stream: true,
       }),
     });
-
-    const data = (await response.json()) as ChatResponse;
     if (!response.ok) {
+      const data = (await response.json()) as ChatResponse;
       throw new Error(data.error?.message ?? "LM Studio chat request failed.");
     }
+    if (!response.body) {
+      throw new Error("LM Studio did not return a stream body.");
+    }
 
-    if (!data.output?.length) {
+    let streamedText = "";
+    let streamedReasoning = "";
+    let finalResponse: ChatResponse | null = null;
+
+    await parseSseEvents(response.body, (event) => {
+      if (event.type === "reasoning.delta" && typeof event.content === "string") {
+        streamedReasoning += event.content;
+        updateRunningTask(task.id, {
+          result: {
+            text: streamedText,
+            reasoning: streamedReasoning,
+            responseId: finalResponse?.response_id ?? null,
+          },
+        });
+        return;
+      }
+
+      if (event.type === "message.delta" && typeof event.content === "string") {
+        streamedText += event.content;
+        updateRunningTask(task.id, {
+          result: {
+            text: streamedText,
+            reasoning: streamedReasoning,
+            responseId: finalResponse?.response_id ?? null,
+          },
+        });
+        return;
+      }
+
+      if (event.type === "error") {
+        throw new Error(event.error?.message ?? "LM Studio streaming error.");
+      }
+
+      if (event.type === "chat.end") {
+        finalResponse = event.result;
+      }
+    });
+
+    if (!finalResponse?.output?.length) {
       throw new Error("LM Studio did not return any output.");
     }
 
     if (task.payload.threadId) {
       updateThread(task.payload.threadId, {
-        lmstudioResponseId: data.response_id ?? null,
+        lmstudioResponseId: finalResponse.response_id ?? null,
         lastPromptMode: promptMode,
       });
     }
 
-    const text = getAssistantText(data.output);
-    const reasoning = getAssistantReasoning(data.output);
-
-    updateRunningTask(task.id, {
-      result: {
-        text,
-        reasoning,
-        responseId: data.response_id ?? null,
-      },
-    });
+    const text = getAssistantText(finalResponse.output) || streamedText;
+    const reasoning =
+      getAssistantReasoning(finalResponse.output) || streamedReasoning;
 
     markTaskCompleted(task.id, {
       text,
       reasoning,
-      responseId: data.response_id ?? null,
+      responseId: finalResponse.response_id ?? null,
     });
   } catch (error) {
     markTaskFailed(

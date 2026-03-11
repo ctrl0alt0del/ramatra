@@ -1,5 +1,6 @@
 import { getChatTaskView } from "@/lib/tasks/chat-task-view";
 import { subscribeToTaskEvent } from "@/lib/tasks/event-bus";
+import { processTaskQueues } from "@/lib/tasks/processor";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,10 @@ export async function GET(_req: Request, context: RouteContext) {
       },
       { status: 404 },
     );
+  }
+
+  if (initialView.status === "queued") {
+    void processTaskQueues();
   }
 
   const stream = new ReadableStream<Uint8Array>({

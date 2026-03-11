@@ -18,94 +18,157 @@ import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 function usePersistedChatRuntime(promptMode: PromptMode) {
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
-      run({ messages, abortSignal, unstable_threadId }) {
-        return createAssistantStream(async (controller) => {
-          const serializedMessages = messages.map((message) => ({
-            role: message.role,
-            content: message.content
-              .flatMap((part) =>
-                part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
-              ),
-          }));
+      async *run({ messages, abortSignal, unstable_threadId }) {
+        const serializedMessages = messages.map((message) => ({
+          role: message.role,
+          content: message.content
+            .flatMap((part) =>
+              part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
+            ),
+        }));
 
-          const response = await fetch("/api/chat", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              messages: serializedMessages,
-              threadId: unstable_threadId,
-              promptMode,
-            }),
-            signal: abortSignal,
-          });
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            messages: serializedMessages,
+            threadId: unstable_threadId,
+            promptMode,
+          }),
+          signal: abortSignal,
+        });
 
-          if (!response.ok) {
-            throw new Error("Failed to queue assistant response");
+        if (!response.ok) {
+          throw new Error("Failed to queue assistant response");
+        }
+
+        const data = (await response.json()) as {
+          taskId: string;
+        };
+        const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
+        let lastText = "";
+        let lastReasoning = "";
+        let done = false;
+        let failure: Error | null = null;
+        const queue: Array<{
+          content: Array<
+            | { type: "text"; text: string }
+            | { type: "reasoning"; text: string }
+          >;
+        }> = [];
+        let notify:
+          | (() => void)
+          | null = null;
+
+        const pushUpdate = (update: {
+          content: Array<
+            | { type: "text"; text: string }
+            | { type: "reasoning"; text: string }
+          >;
+        }) => {
+          queue.push(update);
+          notify?.();
+          notify = null;
+        };
+
+        const markDone = () => {
+          if (done) return;
+          done = true;
+          eventSource.close();
+          notify?.();
+          notify = null;
+        };
+
+        eventSource.addEventListener("task", (event: MessageEvent<string>) => {
+          const payload = JSON.parse(event.data) as
+            | {
+                status: "queued" | "running" | "completed";
+                text: string;
+                reasoning?: string;
+              }
+            | {
+                status: "failed";
+                error: string;
+              };
+
+          if (payload.status === "failed") {
+            failure = new Error(payload.error);
+            markDone();
+            return;
           }
 
-          const data = (await response.json()) as {
-            taskId: string;
-          };
+          const nextReasoning = payload.reasoning ?? "";
+          if (
+            nextReasoning === lastReasoning &&
+            payload.text === lastText &&
+            payload.status !== "completed"
+          ) {
+            return;
+          }
 
-          const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
+          lastReasoning = nextReasoning;
+          lastText = payload.text;
 
-          const closeStream = () => {
-            eventSource.close();
-            controller.close();
-          };
+          const content: Array<
+            | { type: "text"; text: string }
+            | { type: "reasoning"; text: string }
+          > = [];
 
-          const reportStreamError = (message: string) => {
-            eventSource.close();
-            const maybeErrorController = controller as {
-              error?: (error: Error) => void;
-            };
-            if (maybeErrorController.error) {
-              maybeErrorController.error(new Error(message));
-              return;
-            }
-            controller.close();
-          };
+          if (nextReasoning) {
+            content.push({
+              type: "reasoning",
+              text: nextReasoning,
+            });
+          }
 
-          const onTaskEvent = (event: MessageEvent<string>) => {
-            const payload = JSON.parse(event.data) as
-              | {
-                  status: "queued" | "running" | "completed";
-                  text: string;
-                }
-              | {
-                  status: "failed";
-                  error: string;
-                };
+          if (payload.text) {
+            content.push({
+              type: "text",
+              text: payload.text,
+            });
+          }
 
-            if (payload.status === "failed") {
-              reportStreamError(payload.error);
-              return;
-            }
+          if (content.length > 0) {
+            pushUpdate({ content });
+          }
 
-            if (payload.status === "completed") {
-              if (payload.text) {
-                controller.appendText(payload.text);
-              }
-              closeStream();
-            }
-          };
-
-          eventSource.addEventListener("task", onTaskEvent);
-          eventSource.onerror = () => {
-            reportStreamError("Chat stream connection failed");
-          };
-
-          abortSignal.addEventListener(
-            "abort",
-            () => {
-              eventSource.close();
-              controller.close();
-            },
-            { once: true },
-          );
+          if (payload.status === "completed") {
+            markDone();
+          }
         });
+
+        eventSource.onerror = () => {
+          failure = new Error("Chat stream connection failed");
+          markDone();
+        };
+
+        abortSignal.addEventListener(
+          "abort",
+          () => {
+            markDone();
+          },
+          { once: true },
+        );
+
+        while (!done || queue.length > 0) {
+          if (queue.length === 0) {
+            await new Promise<void>((resolve) => {
+              notify = resolve;
+            });
+            continue;
+          }
+
+          const nextUpdate = queue.shift();
+          if (nextUpdate) {
+            yield nextUpdate;
+          }
+        }
+
+        if (failure) {
+          throw failure;
+        }
       },
     }),
     [promptMode],
