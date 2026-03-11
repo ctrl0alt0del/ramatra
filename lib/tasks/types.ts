@@ -26,9 +26,14 @@ export type TaskPayloadMap = {
     height: number;
     steps: number;
     cfg: number;
+    seed: number;
     samplerName: string;
     scheduler: string;
-    loraNames: string[];
+    loras: {
+      name: string;
+      strength_model: number;
+      strength_clip: number;
+    }[];
   };
 };
 

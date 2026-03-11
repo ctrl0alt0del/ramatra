@@ -326,7 +326,7 @@ export async function POST(req: Request) {
   const { marker } = extractComfyJobMarker(text);
 
   if (marker) {
-    await registerImageGenerationStart(marker.jobId);
+    await registerImageGenerationStart(marker.taskId);
   }
 
   return Response.json({
