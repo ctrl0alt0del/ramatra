@@ -16,6 +16,7 @@ type TaskStoreState = {
   activeTaskId: string | null;
   gpuMode: GpuMode;
   comfyJobToTaskId: Map<string, string>;
+  lastError: string | null;
 };
 
 declare global {
@@ -31,6 +32,7 @@ const getState = () => {
       activeTaskId: null,
       gpuMode: "chat",
       comfyJobToTaskId: new Map<string, string>(),
+      lastError: null,
     };
   }
 
@@ -138,6 +140,15 @@ export const setGpuMode = (gpuMode: GpuMode) => {
   state.gpuMode = gpuMode;
 };
 
+export const setSchedulerLastError = (error: string | null) => {
+  const state = getState();
+  state.lastError = error;
+};
+
+export const getSchedulerLastError = () => {
+  return getState().lastError;
+};
+
 export const attachComfyJobToTask = (jobId: string, taskId: string) => {
   const state = getState();
   state.comfyJobToTaskId.set(jobId, taskId);
@@ -173,4 +184,5 @@ export const resetTaskStore = () => {
   state.activeTaskId = null;
   state.gpuMode = "chat";
   state.comfyJobToTaskId.clear();
+  state.lastError = null;
 };

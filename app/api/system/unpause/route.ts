@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 
 import {
-  forceResumeChatMode,
-  getVramBalancerState,
-} from "@/lib/vram/balancer";
+  forceResumeChatGpuMode,
+  getSchedulerSystemState,
+} from "@/lib/tasks/gpu-manager";
+import { processTaskQueues } from "@/lib/tasks/processor";
 
 export async function POST() {
   try {
-    await forceResumeChatMode();
-    return NextResponse.json(getVramBalancerState());
+    await forceResumeChatGpuMode();
+    void processTaskQueues();
+    return NextResponse.json(getSchedulerSystemState());
   } catch (error) {
     return NextResponse.json(
       {
@@ -16,7 +18,7 @@ export async function POST() {
           error instanceof Error
             ? error.message
             : "Failed to force resume chat mode.",
-        state: getVramBalancerState(),
+        state: getSchedulerSystemState(),
       },
       { status: 500 },
     );

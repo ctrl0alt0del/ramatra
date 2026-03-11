@@ -4,10 +4,6 @@ import {
   markGenerationFailed,
 } from "@/lib/comfy/generations";
 import { ComfyJobStatus, getWorkflowStatus } from "@/lib/comfy/runner";
-import {
-  registerImageGenerationFinish,
-  registerImageGenerationStart,
-} from "@/lib/vram/balancer";
 import { updateComfyTaskForJob } from "@/lib/tasks/scheduler";
 
 type RouteContext = {
@@ -22,7 +18,6 @@ export async function GET(_req: Request, context: RouteContext) {
     updateComfyTaskForJob(jobId, {
       status: "completed",
     });
-    await registerImageGenerationFinish(jobId);
     return Response.json({
       jobId: stored.jobId,
       status: stored.status,
@@ -35,7 +30,6 @@ export async function GET(_req: Request, context: RouteContext) {
       status: "failed",
       error: stored.error ?? "Generation failed",
     });
-    await registerImageGenerationFinish(jobId);
     return Response.json({
       jobId: stored.jobId,
       status: stored.status,
@@ -48,7 +42,6 @@ export async function GET(_req: Request, context: RouteContext) {
       status: stored.status,
       progress: stored.progress,
     });
-    await registerImageGenerationStart(jobId);
   }
 
   try {
@@ -58,7 +51,6 @@ export async function GET(_req: Request, context: RouteContext) {
       updateComfyTaskForJob(jobId, {
         status: "completed",
       });
-      await registerImageGenerationFinish(jobId);
       return Response.json({
         jobId: result.jobId,
         status: result.status,
@@ -72,7 +64,6 @@ export async function GET(_req: Request, context: RouteContext) {
         status: "failed",
         error: "Generation failed",
       });
-      await registerImageGenerationFinish(jobId);
       return Response.json(
         {
           jobId,
@@ -83,7 +74,6 @@ export async function GET(_req: Request, context: RouteContext) {
       );
     }
 
-    await registerImageGenerationStart(jobId);
     updateComfyTaskForJob(jobId, {
       status: result.status,
       progress:
@@ -110,7 +100,6 @@ export async function GET(_req: Request, context: RouteContext) {
         status: "failed",
         error: message,
       });
-      await registerImageGenerationFinish(jobId);
       return Response.json({
         jobId,
         status: "failed",
@@ -122,7 +111,6 @@ export async function GET(_req: Request, context: RouteContext) {
       status: "failed",
       error: message,
     });
-    await registerImageGenerationFinish(jobId);
 
     return Response.json(
       {

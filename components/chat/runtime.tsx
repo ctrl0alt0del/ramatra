@@ -18,53 +18,94 @@ import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 function usePersistedChatRuntime(promptMode: PromptMode) {
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
-      async run({ messages, abortSignal, unstable_threadId }) {
-        const serializedMessages = messages.map((message) => ({
-          role: message.role,
-          content: message.content
-            .flatMap((part) =>
-              part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
-            ),
-        }));
+      run({ messages, abortSignal, unstable_threadId }) {
+        return createAssistantStream(async (controller) => {
+          const serializedMessages = messages.map((message) => ({
+            role: message.role,
+            content: message.content
+              .flatMap((part) =>
+                part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
+              ),
+          }));
 
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            messages: serializedMessages,
-            threadId: unstable_threadId,
-            promptMode,
-          }),
-          signal: abortSignal,
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to generate assistant response");
-        }
-
-        const data = (await response.json()) as {
-          text: string;
-          reasoning?: string;
-        };
-
-        return {
-          content: [
-            ...(data.reasoning?.trim()
-              ? [
-                  {
-                    type: "reasoning" as const,
-                    text: data.reasoning,
-                  },
-                ]
-              : []),
-            {
-              type: "text" as const,
-              text: data.text,
+          const response = await fetch("/api/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
             },
-          ],
-        };
+            body: JSON.stringify({
+              messages: serializedMessages,
+              threadId: unstable_threadId,
+              promptMode,
+            }),
+            signal: abortSignal,
+          });
+
+          if (!response.ok) {
+            throw new Error("Failed to queue assistant response");
+          }
+
+          const data = (await response.json()) as {
+            taskId: string;
+          };
+
+          const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
+
+          const closeStream = () => {
+            eventSource.close();
+            controller.close();
+          };
+
+          const reportStreamError = (message: string) => {
+            eventSource.close();
+            const maybeErrorController = controller as {
+              error?: (error: Error) => void;
+            };
+            if (maybeErrorController.error) {
+              maybeErrorController.error(new Error(message));
+              return;
+            }
+            controller.close();
+          };
+
+          const onTaskEvent = (event: MessageEvent<string>) => {
+            const payload = JSON.parse(event.data) as
+              | {
+                  status: "queued" | "running" | "completed";
+                  text: string;
+                }
+              | {
+                  status: "failed";
+                  error: string;
+                };
+
+            if (payload.status === "failed") {
+              reportStreamError(payload.error);
+              return;
+            }
+
+            if (payload.status === "completed") {
+              if (payload.text) {
+                controller.appendText(payload.text);
+              }
+              closeStream();
+            }
+          };
+
+          eventSource.addEventListener("task", onTaskEvent);
+          eventSource.onerror = () => {
+            reportStreamError("Chat stream connection failed");
+          };
+
+          abortSignal.addEventListener(
+            "abort",
+            () => {
+              eventSource.close();
+              controller.close();
+            },
+            { once: true },
+          );
+        });
       },
     }),
     [promptMode],

@@ -1,36 +1,30 @@
 import { getClient } from "@/lib/comfy/client";
 import { runWorkflow } from "@/lib/comfy/runner";
 import { type WorkflowInput, type WorkflowName } from "@/lib/comfy/workflows/types";
+import { processTaskQueues } from "@/lib/tasks/processor";
+import {
+  switchToChatGpuMode,
+  switchToComfyGpuMode,
+} from "@/lib/tasks/gpu-manager";
 import {
   bindComfyJobToTask,
-  canRunComfyQueue,
-  getNextSchedulableTask,
-  getSchedulerState,
   markTaskFailed,
   markTaskStarted,
-  setSchedulerGpuMode,
   updateRunningTask,
 } from "@/lib/tasks/scheduler";
 import { subscribeToTaskEvent } from "@/lib/tasks/event-bus";
-import {
-  registerImageGenerationFinish,
-  registerImageGenerationStart,
-} from "@/lib/vram/balancer";
 
 declare global {
-  var __comfyBridgeComfyQueueWorkerPromise: Promise<void> | null | undefined;
   var __comfyBridgeComfyQueueListenersReady: boolean | undefined;
 }
 
-const executeComfyTask = async (taskId: string) => {
+export const executeQueuedComfyTask = async (taskId: string) => {
   const task = markTaskStarted(taskId);
   if (!task || task.type !== "comfy") {
     return;
   }
 
-  setSchedulerGpuMode("switching");
-  await registerImageGenerationStart(task.id);
-  setSchedulerGpuMode("comfy");
+  await switchToComfyGpuMode();
 
   try {
     const result = await runWorkflow({
@@ -52,8 +46,7 @@ const executeComfyTask = async (taskId: string) => {
 
     if (!("jobId" in result)) {
       markTaskFailed(task.id, "Image generation failed before queueing.");
-      await registerImageGenerationFinish(task.id);
-      setSchedulerGpuMode("chat");
+      await switchToChatGpuMode();
       return;
     }
 
@@ -76,36 +69,7 @@ const executeComfyTask = async (taskId: string) => {
       task.id,
       error instanceof Error ? error.message : "Failed to start Comfy task.",
     );
-    await registerImageGenerationFinish(task.id);
-    setSchedulerGpuMode("chat");
-  }
-};
-
-export const processQueuedComfyTasks = async () => {
-  if (globalThis.__comfyBridgeComfyQueueWorkerPromise) {
-    return globalThis.__comfyBridgeComfyQueueWorkerPromise;
-  }
-
-  globalThis.__comfyBridgeComfyQueueWorkerPromise = (async () => {
-    while (canRunComfyQueue()) {
-      const nextTask = getNextSchedulableTask();
-      if (!nextTask || nextTask.type !== "comfy") {
-        break;
-      }
-
-      await executeComfyTask(nextTask.id);
-
-      const snapshot = getSchedulerState();
-      if (snapshot.activeTaskId !== null) {
-        break;
-      }
-    }
-  })();
-
-  try {
-    await globalThis.__comfyBridgeComfyQueueWorkerPromise;
-  } finally {
-    globalThis.__comfyBridgeComfyQueueWorkerPromise = null;
+    await switchToChatGpuMode();
   }
 };
 
@@ -116,23 +80,20 @@ export const ensureComfyQueueListeners = () => {
 
   subscribeToTaskEvent("task:completed", async ({ task }) => {
     if (task.type !== "comfy") return;
-    await registerImageGenerationFinish(task.id);
-    setSchedulerGpuMode("chat");
-    void processQueuedComfyTasks();
+    await switchToChatGpuMode();
+    void processTaskQueues();
   });
 
   subscribeToTaskEvent("task:failed", async ({ task }) => {
     if (task.type !== "comfy") return;
-    await registerImageGenerationFinish(task.id);
-    setSchedulerGpuMode("chat");
-    void processQueuedComfyTasks();
+    await switchToChatGpuMode();
+    void processTaskQueues();
   });
 
   subscribeToTaskEvent("task:cancelled", async ({ task }) => {
     if (task.type !== "comfy") return;
-    await registerImageGenerationFinish(task.id);
-    setSchedulerGpuMode("chat");
-    void processQueuedComfyTasks();
+    await switchToChatGpuMode();
+    void processTaskQueues();
   });
 
   globalThis.__comfyBridgeComfyQueueListenersReady = true;
