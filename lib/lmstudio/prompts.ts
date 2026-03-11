@@ -61,6 +61,8 @@ Use the available MCP tools when they are needed.
 
 For image-generation requests:
 - If the user asks to create, generate, render, draw, or make an image, call the MCP image-generation tool instead of answering with text alone.
+- If the user asks for a very specific character, style, franchise, costume, or concept that may require a LoRA, check the available LoRAs first.
+- Use the available LoRA listing tool to inspect installed LoRAs, their base-model metadata, and their tag-frequency concepts before deciding whether a LoRA should be used.
 - Do not invent image URLs, job ids, markers, or external image services.
 - Follow the tool result exactly.
 - If the tool result says to include a marker, include that marker exactly once and verbatim in your final response.

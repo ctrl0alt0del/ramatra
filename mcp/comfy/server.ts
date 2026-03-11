@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerGenerateImageMcpTool } from "@/lib/tools/generate-image";
+import { registerListLorasMcpTool } from "@/lib/tools/list-loras";
 
 import { bootstrapExpressServerForMCPServer } from "../bootstrap";
 
@@ -10,6 +11,7 @@ function createComfyMCPServer() {
   });
 
   registerGenerateImageMcpTool(comfyServer);
+  registerListLorasMcpTool(comfyServer);
 
   return comfyServer;
 }

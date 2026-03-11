@@ -244,6 +244,16 @@ export async function POST(req: Request) {
       server_url: process.env.WEB_SEARCH_MCP_URL,
     });
   }
+  if (
+    process.env.CIVITAI_MCP_ENABLED === "true" &&
+    process.env.CIVITAI_MCP_URL
+  ) {
+    integrations.push({
+      type: "ephemeral_mcp",
+      server_label: "civitai",
+      server_url: process.env.CIVITAI_MCP_URL,
+    });
+  }
   const response = await fetch(getLmStudioChatUrl(), {
     method: "POST",
     headers: {
