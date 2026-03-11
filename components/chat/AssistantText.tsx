@@ -1,9 +1,16 @@
 "use client";
 
-import { MessagePartPrimitive, useMessagePartText } from "@assistant-ui/react";
+import {
+  MessagePartPrimitive,
+  TextMessagePartProvider,
+  useMessagePartText,
+} from "@assistant-ui/react";
+import { makeMarkdownText } from "@assistant-ui/react-ui";
 
 import { extractComfyJobMarker } from "./comfy-marker";
 import { GeneratedImageCard } from "./GeneratedImageCard";
+
+const MarkdownText = makeMarkdownText();
 
 export function AssistantText() {
   const part = useMessagePartText();
@@ -13,7 +20,9 @@ export function AssistantText() {
   return (
     <>
       {cleanText ? (
-        <p className="aui-text whitespace-pre-wrap">{cleanText}</p>
+        <TextMessagePartProvider text={cleanText} isRunning={part.status.type === "running"}>
+          <MarkdownText />
+        </TextMessagePartProvider>
       ) : null}
       {marker ? (
         <GeneratedImageCard
