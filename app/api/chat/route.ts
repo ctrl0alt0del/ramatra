@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { extractComfyJobMarker } from "@/components/chat/comfy-marker";
 import { getThread, updateThread } from "@/lib/lmstudio/threads";
+import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
 import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { getSystemPromptForMode } from "@/lib/lmstudio/prompts";
 import {
@@ -197,7 +198,9 @@ export async function POST(req: Request) {
     );
   }
 
-  if (thread && shouldRefreshConversationSummary(thread, promptMode)) {
+  const autoSummaryEnabled = process.env.LM_STUDIO_AUTO_SUMMARY === "true";
+
+  if (autoSummaryEnabled && thread && shouldRefreshConversationSummary(thread, promptMode)) {
     try {
       const unsummarizedMessages = thread.messages.slice(thread.summaryMessageCount);
       const conversationSummary = await generateConversationSummary({
@@ -251,6 +254,7 @@ export async function POST(req: Request) {
     },
     body: JSON.stringify({
       model: process.env.LM_STUDIO_MODEL,
+      context_length: getConfiguredContextLengthForMode(promptMode, process.env),
       input:
         thread?.lmstudioResponseId !== null && thread?.lmstudioResponseId !== undefined
           ? latestUserMessage.content
