@@ -6,11 +6,20 @@ import {
   useMessagePartText,
 } from "@assistant-ui/react";
 import { makeMarkdownText } from "@assistant-ui/react-ui";
+import remarkGfm from "remark-gfm";
 
 import { extractComfyJobMarker } from "./comfy-marker";
 import { GeneratedImageCard } from "./GeneratedImageCard";
 
-const MarkdownText = makeMarkdownText();
+const MarkdownText = makeMarkdownText({
+  remarkPlugins: [remarkGfm],
+  preprocess(text) {
+    return text
+      .replace(/\\r\\n/g, "\n")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t");
+  },
+});
 
 export function AssistantText() {
   const part = useMessagePartText();
