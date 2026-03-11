@@ -7,6 +7,11 @@ import { getClient } from "@/lib/comfy/client";
 import { validateRequestedLoras } from "@/lib/comfy/loras";
 import { runWorkflow } from "@/lib/comfy/runner";
 import { workflowNames } from "@/lib/comfy/workflows/types";
+import {
+  bindComfyJobToTask,
+  enqueueComfyTask,
+  markTaskStarted,
+} from "@/lib/tasks/scheduler";
 
 export const generateImageToolName = "generate_image";
 export const generateImageToolTitle = "Generate Image";
@@ -82,6 +87,20 @@ export const executeGenerateImage = async (
       };
     }
 
+    const task = enqueueComfyTask({
+      workflowName,
+      prompt,
+      negativePrompt,
+      width,
+      height,
+      steps,
+      cfg,
+      samplerName,
+      scheduler,
+      loraNames: validatedLoras.resolved.map((lora) => lora.name),
+    });
+    markTaskStarted(task.id);
+
     const result = await runWorkflow({
       client: await getClient(),
       workflowName,
@@ -105,6 +124,8 @@ export const executeGenerateImage = async (
         error: "Image generation failed before queueing.",
       };
     }
+
+    bindComfyJobToTask(task.id, result.jobId);
 
     return {
       ok: true,

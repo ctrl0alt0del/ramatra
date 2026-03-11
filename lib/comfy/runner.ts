@@ -5,6 +5,7 @@ import {
   storeCompletedGeneration,
   updateGenerationProgress,
 } from "./generations";
+import { updateComfyTaskForJob } from "@/lib/tasks/scheduler";
 import { buildBaseWorkflow } from "./workflows/base";
 import { buildQuickChromaWorkflow } from "./workflows/quickChroma";
 import { type WorkflowInput, type WorkflowName } from "./workflows/types";
@@ -12,6 +13,11 @@ import { type WorkflowInput, type WorkflowName } from "./workflows/types";
 const workflows: Record<WorkflowName, (input: WorkflowInput) => Workflow> = {
   base: buildBaseWorkflow,
   quick_chroma: buildQuickChromaWorkflow,
+};
+
+const getProgressPercentage = (value: number | null, max: number | null) => {
+  if (value === null || max === null || max <= 0) return null;
+  return Math.max(0, Math.min(100, Math.round((value / max) * 100)));
 };
 
 export enum ComfyJobStatus {
@@ -82,6 +88,15 @@ export async function runWorkflow({
       max: progress.max,
       node: progress.node,
     });
+    updateComfyTaskForJob(job.task_id!, {
+      status: ComfyJobStatus.Running,
+      progress: {
+        value: progress.value,
+        max: progress.max,
+        percentage: getProgressPercentage(progress.value, progress.max),
+        node: progress.node ?? null,
+      },
+    });
   }, job.task_id);
 
   const cleanup = () => {
@@ -94,6 +109,10 @@ export async function runWorkflow({
   const removeExecutionError = client.on("execution_error", (event) => {
     if (event.prompt_id !== job.task_id) return;
     markGenerationFailed(job.task_id!, event.exception_message);
+    updateComfyTaskForJob(job.task_id!, {
+      status: ComfyJobStatus.Failed,
+      error: event.exception_message,
+    });
     cleanup();
   });
 
@@ -102,6 +121,10 @@ export async function runWorkflow({
     (event) => {
       if (event.prompt_id !== job.task_id) return;
       markGenerationFailed(job.task_id!, "Generation was interrupted");
+      updateComfyTaskForJob(job.task_id!, {
+        status: ComfyJobStatus.Failed,
+        error: "Generation was interrupted",
+      });
       cleanup();
     },
   );
@@ -178,6 +201,9 @@ export async function getWorkflowStatus(
   storeCompletedGeneration({
     jobId,
     images,
+  });
+  updateComfyTaskForJob(jobId, {
+    status: ComfyJobStatus.Completed,
   });
 
   return {

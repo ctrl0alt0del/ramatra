@@ -15,6 +15,7 @@ type TaskStoreState = {
   comfyQueue: string[];
   activeTaskId: string | null;
   gpuMode: GpuMode;
+  comfyJobToTaskId: Map<string, string>;
 };
 
 declare global {
@@ -29,6 +30,7 @@ const getState = () => {
       comfyQueue: [],
       activeTaskId: null,
       gpuMode: "chat",
+      comfyJobToTaskId: new Map<string, string>(),
     };
   }
 
@@ -136,6 +138,19 @@ export const setGpuMode = (gpuMode: GpuMode) => {
   state.gpuMode = gpuMode;
 };
 
+export const attachComfyJobToTask = (jobId: string, taskId: string) => {
+  const state = getState();
+  state.comfyJobToTaskId.set(jobId, taskId);
+};
+
+export const getTaskIdForComfyJob = (jobId: string) => {
+  return getState().comfyJobToTaskId.get(jobId) ?? null;
+};
+
+export const detachComfyJob = (jobId: string) => {
+  getState().comfyJobToTaskId.delete(jobId);
+};
+
 export const getSchedulerSnapshot = (): SchedulerSnapshot => {
   const state = getState();
   const queues: TaskQueueSnapshot = {
@@ -157,4 +172,5 @@ export const resetTaskStore = () => {
   state.comfyQueue = [];
   state.activeTaskId = null;
   state.gpuMode = "chat";
+  state.comfyJobToTaskId.clear();
 };

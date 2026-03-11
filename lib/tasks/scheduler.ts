@@ -9,8 +9,11 @@ import {
   emitUpdatedTask,
 } from "@/lib/tasks/event-bus";
 import {
+  attachComfyJobToTask,
   createTask,
+  detachComfyJob,
   dequeueTask,
+  getTaskIdForComfyJob,
   getSchedulerSnapshot,
   getTask,
   listQueuedTasks,
@@ -36,6 +39,30 @@ export const enqueueChatTask = (payload: TaskPayloadMap["chat"]) => {
 export const enqueueComfyTask = (payload: TaskPayloadMap["comfy"]) => {
   const task = createTask("comfy", payload);
   emitQueuedTask(task);
+  emitSchedulerSnapshot();
+  return task;
+};
+
+export const bindComfyJobToTask = (taskId: string, jobId: string) => {
+  attachComfyJobToTask(jobId, taskId);
+
+  const task = updateTaskStatus(taskId, {
+    result: {
+      taskId,
+      jobId,
+      status: "queued",
+      progress: {
+        value: null,
+        max: null,
+        percentage: null,
+        node: null,
+      },
+    },
+  });
+
+  if (!task) return null;
+
+  emitUpdatedTask(task);
   emitSchedulerSnapshot();
   return task;
 };
@@ -134,18 +161,38 @@ export const markTaskCompleted = (
   taskId: string,
   result?: Task["result"],
 ) => {
-  return finishTask(taskId, "completed", { result, error: null });
+  const task = finishTask(taskId, "completed", { result, error: null });
+  const jobId =
+    task?.type === "comfy" ? task.result?.jobId ?? null : null;
+  if (jobId) {
+    detachComfyJob(jobId);
+  }
+  return task;
 };
 
 export const markTaskFailed = (taskId: string, error: string) => {
-  return finishTask(taskId, "failed", { error });
+  const existing = getTask(taskId);
+  const task = finishTask(taskId, "failed", { error });
+  const jobId =
+    existing?.type === "comfy" ? existing.result?.jobId ?? null : null;
+  if (jobId) {
+    detachComfyJob(jobId);
+  }
+  return task;
 };
 
 export const cancelTask = (taskId: string, error?: string) => {
   dequeueTask(taskId);
-  return finishTask(taskId, "cancelled", {
+  const existing = getTask(taskId);
+  const task = finishTask(taskId, "cancelled", {
     error: error ?? null,
   });
+  const jobId =
+    existing?.type === "comfy" ? existing.result?.jobId ?? null : null;
+  if (jobId) {
+    detachComfyJob(jobId);
+  }
+  return task;
 };
 
 export const setSchedulerGpuMode = (mode: "chat" | "comfy" | "switching") => {
@@ -172,4 +219,63 @@ export const canRunComfyQueue = () => {
     snapshot.activeTaskId === null &&
     snapshot.queues.chat.every((task) => task.status !== "queued")
   );
+};
+
+export const getTaskForComfyJob = (jobId: string) => {
+  const taskId = getTaskIdForComfyJob(jobId);
+  if (!taskId) return null;
+  return getTask(taskId);
+};
+
+export const updateComfyTaskForJob = (
+  jobId: string,
+  input: {
+    status?: "queued" | "running" | "completed" | "failed";
+    progress?: {
+      value: number | null;
+      max: number | null;
+      percentage: number | null;
+      node: string | null;
+    };
+    error?: string | null;
+  },
+) => {
+  const taskId = getTaskIdForComfyJob(jobId);
+  if (!taskId) return null;
+
+  const existing = getTask(taskId);
+  if (!existing || existing.type !== "comfy") return null;
+
+  const nextResult = {
+    taskId,
+    jobId,
+    status: input.status ?? existing.result?.status ?? "queued",
+    progress:
+      input.progress ??
+      existing.result?.progress ?? {
+        value: null,
+        max: null,
+        percentage: null,
+        node: null,
+      },
+  };
+
+  if (input.status === "completed") {
+    return markTaskCompleted(taskId, nextResult);
+  }
+
+  if (input.status === "failed") {
+    return markTaskFailed(taskId, input.error ?? "Comfy task failed.");
+  }
+
+  const task = updateTaskStatus(taskId, {
+    result: nextResult,
+    error: input.error ?? undefined,
+  });
+
+  if (!task) return null;
+
+  emitUpdatedTask(task);
+  emitSchedulerSnapshot();
+  return task;
 };

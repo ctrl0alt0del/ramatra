@@ -22,6 +22,13 @@ export type TaskPayloadMap = {
     workflowName: string;
     prompt: string;
     negativePrompt: string;
+    width: number;
+    height: number;
+    steps: number;
+    cfg: number;
+    samplerName: string;
+    scheduler: string;
+    loraNames: string[];
   };
 };
 
@@ -32,8 +39,15 @@ export type TaskResultMap = {
     responseId?: string | null;
   };
   comfy: {
+    taskId?: string;
     jobId?: string;
     status?: "queued" | "running" | "completed" | "failed";
+    progress?: {
+      value: number | null;
+      max: number | null;
+      percentage: number | null;
+      node: string | null;
+    };
   };
 };
 

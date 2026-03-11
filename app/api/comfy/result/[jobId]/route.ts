@@ -8,6 +8,7 @@ import {
   registerImageGenerationFinish,
   registerImageGenerationStart,
 } from "@/lib/vram/balancer";
+import { updateComfyTaskForJob } from "@/lib/tasks/scheduler";
 
 type RouteContext = {
   params: Promise<{ jobId: string }>;
@@ -18,6 +19,9 @@ export async function GET(_req: Request, context: RouteContext) {
   const stored = getStoredGeneration(jobId);
 
   if (stored?.status === "completed") {
+    updateComfyTaskForJob(jobId, {
+      status: "completed",
+    });
     await registerImageGenerationFinish(jobId);
     return Response.json({
       jobId: stored.jobId,
@@ -27,6 +31,10 @@ export async function GET(_req: Request, context: RouteContext) {
   }
 
   if (stored?.status === "failed") {
+    updateComfyTaskForJob(jobId, {
+      status: "failed",
+      error: stored.error ?? "Generation failed",
+    });
     await registerImageGenerationFinish(jobId);
     return Response.json({
       jobId: stored.jobId,
@@ -36,6 +44,10 @@ export async function GET(_req: Request, context: RouteContext) {
   }
 
   if (stored?.status === "queued" || stored?.status === "running") {
+    updateComfyTaskForJob(jobId, {
+      status: stored.status,
+      progress: stored.progress,
+    });
     await registerImageGenerationStart(jobId);
   }
 
@@ -43,6 +55,9 @@ export async function GET(_req: Request, context: RouteContext) {
     const result = await getWorkflowStatus(await getClient(), jobId);
 
     if (result.status === ComfyJobStatus.Completed) {
+      updateComfyTaskForJob(jobId, {
+        status: "completed",
+      });
       await registerImageGenerationFinish(jobId);
       return Response.json({
         jobId: result.jobId,
@@ -53,6 +68,10 @@ export async function GET(_req: Request, context: RouteContext) {
 
     if (result.status === ComfyJobStatus.Failed) {
       markGenerationFailed(jobId, "Generation failed");
+      updateComfyTaskForJob(jobId, {
+        status: "failed",
+        error: "Generation failed",
+      });
       await registerImageGenerationFinish(jobId);
       return Response.json(
         {
@@ -65,6 +84,13 @@ export async function GET(_req: Request, context: RouteContext) {
     }
 
     await registerImageGenerationStart(jobId);
+    updateComfyTaskForJob(jobId, {
+      status: result.status,
+      progress:
+        stored?.status === "queued" || stored?.status === "running"
+          ? stored.progress
+          : result.progress,
+    });
 
     return Response.json({
       jobId: result.jobId,
@@ -80,6 +106,10 @@ export async function GET(_req: Request, context: RouteContext) {
 
     if (stored) {
       markGenerationFailed(jobId, message);
+      updateComfyTaskForJob(jobId, {
+        status: "failed",
+        error: message,
+      });
       await registerImageGenerationFinish(jobId);
       return Response.json({
         jobId,
@@ -88,6 +118,10 @@ export async function GET(_req: Request, context: RouteContext) {
       });
     }
 
+    updateComfyTaskForJob(jobId, {
+      status: "failed",
+      error: message,
+    });
     await registerImageGenerationFinish(jobId);
 
     return Response.json(
