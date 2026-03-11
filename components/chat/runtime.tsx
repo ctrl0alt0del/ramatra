@@ -16,7 +16,7 @@ import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 function usePersistedChatRuntime() {
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
-      async run({ messages, abortSignal }) {
+      async run({ messages, abortSignal, unstable_threadId }) {
         const serializedMessages = messages.map((message) => ({
           role: message.role,
           content: message.content
@@ -32,6 +32,7 @@ function usePersistedChatRuntime() {
           },
           body: JSON.stringify({
             messages: serializedMessages,
+            threadId: unstable_threadId,
           }),
           signal: abortSignal,
         });
@@ -42,10 +43,19 @@ function usePersistedChatRuntime() {
 
         const data = (await response.json()) as {
           text: string;
+          reasoning?: string;
         };
 
         return {
           content: [
+            ...(data.reasoning?.trim()
+              ? [
+                  {
+                    type: "reasoning" as const,
+                    text: data.reasoning,
+                  },
+                ]
+              : []),
             {
               type: "text" as const,
               text: data.text,

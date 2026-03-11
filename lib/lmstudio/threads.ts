@@ -78,6 +78,7 @@ export const listThreads = (): ThreadSummary[] => {
 export const createThread = (input?: {
   title?: string;
   status?: ThreadSummary["status"];
+  lmstudioResponseId?: string | null;
   messages?: ThreadMessage[];
 }) => {
   const messages = input?.messages ?? [];
@@ -85,14 +86,22 @@ export const createThread = (input?: {
   const timestamp = new Date().toISOString();
   const title = input?.title?.trim() || deriveTitle(messages);
   const status = input?.status ?? "regular";
+  const lmstudioResponseId = input?.lmstudioResponseId ?? null;
 
   const insert = db.transaction(() => {
     db.prepare(
       `
-        INSERT INTO threads (id, title, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO threads (id, title, status, lmstudio_response_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
       `,
-    ).run(threadId, title, status, timestamp, timestamp);
+    ).run(
+      threadId,
+      title,
+      status,
+      lmstudioResponseId,
+      timestamp,
+      timestamp,
+    );
 
     const insertMessage = db.prepare(
       `

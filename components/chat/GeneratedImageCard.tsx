@@ -16,12 +16,18 @@ type GenerationResponse =
   | { jobId: string; status: "completed"; images: CompletedImage[] };
 
 export function GeneratedImageCard({
-  jobId,
+  jobId: _dirtyJobId,
   initialStatus,
 }: Readonly<{
   jobId: string;
   initialStatus: "queued" | "running";
 }>) {
+  let jobId = "";
+  try {
+    jobId = JSON.parse(_dirtyJobId.replace(/\\/g, "")).jobId;
+  } catch {
+    jobId = _dirtyJobId;
+  }
   const hasValidJobId = jobId.trim().length > 0;
   const [result, setResult] = useState<GenerationResponse>({
     jobId,
@@ -77,40 +83,40 @@ export function GeneratedImageCard({
 
       {hasValidJobId &&
         (result.status === "queued" || result.status === "running") && (
-        <div className="space-y-0">
-          <div className="relative aspect-square w-full overflow-hidden bg-[hsl(var(--aui-background))]">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,hsl(var(--aui-border)/0.22),transparent_48%),radial-gradient(circle_at_bottom_right,hsl(var(--aui-border)/0.18),transparent_42%)]" />
-            <div className="absolute inset-0 p-4 sm:p-5">
-              <div className="grid h-full gap-3">
-                <SkeletonBlock className="h-8 w-28 rounded-full" />
-                <div className="grid flex-1 gap-3 md:grid-cols-[1.2fr_0.8fr]">
-                  <SkeletonBlock className="h-full min-h-48 rounded-2xl" />
-                  <div className="grid gap-3">
-                    <SkeletonBlock className="h-10 w-full" />
-                    <SkeletonBlock className="h-10 w-4/5" />
-                    <SkeletonBlock className="h-10 w-3/5" />
-                    <SkeletonBlock className="h-full min-h-24 rounded-xl" />
+          <div className="space-y-0">
+            <div className="relative aspect-square w-full overflow-hidden bg-[hsl(var(--aui-background))]">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,hsl(var(--aui-border)/0.22),transparent_48%),radial-gradient(circle_at_bottom_right,hsl(var(--aui-border)/0.18),transparent_42%)]" />
+              <div className="absolute inset-0 p-4 sm:p-5">
+                <div className="grid h-full gap-3">
+                  <SkeletonBlock className="h-8 w-28 rounded-full" />
+                  <div className="grid flex-1 gap-3 md:grid-cols-[1.2fr_0.8fr]">
+                    <SkeletonBlock className="h-full min-h-48 rounded-2xl" />
+                    <div className="grid gap-3">
+                      <SkeletonBlock className="h-10 w-full" />
+                      <SkeletonBlock className="h-10 w-4/5" />
+                      <SkeletonBlock className="h-10 w-3/5" />
+                      <SkeletonBlock className="h-full min-h-24 rounded-xl" />
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-          <div className="space-y-2 border-t border-[hsl(var(--aui-border))] p-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm font-medium">Generating image</p>
-              <span className="rounded-full border border-[hsl(var(--aui-border))] px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-[hsl(var(--aui-muted-foreground))]">
-                {result.status}
-              </span>
+            <div className="space-y-2 border-t border-[hsl(var(--aui-border))] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">Generating image</p>
+                <span className="rounded-full border border-[hsl(var(--aui-border))] px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-[hsl(var(--aui-muted-foreground))]">
+                  {result.status}
+                </span>
+              </div>
+              <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
+                Preparing the ComfyUI job and waiting for the final render.
+              </p>
+              <p className="truncate text-xs text-[hsl(var(--aui-muted-foreground))]">
+                Job <code>{jobId}</code>
+              </p>
             </div>
-            <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
-              Preparing the ComfyUI job and waiting for the final render.
-            </p>
-            <p className="truncate text-xs text-[hsl(var(--aui-muted-foreground))]">
-              Job <code>{jobId}</code>
-            </p>
           </div>
-        </div>
-      )}
+        )}
 
       {hasValidJobId && result.status === "failed" && (
         <div className="space-y-2 p-4">

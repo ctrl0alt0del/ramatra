@@ -23,6 +23,9 @@ dependencies:
   '@modelcontextprotocol/sdk':
     specifier: ^1.27.1
     version: 1.27.1(zod@4.3.6)
+  '@radix-ui/react-dialog':
+    specifier: ^1.1.15
+    version: 1.1.15(@types/react-dom@19.2.3)(@types/react@19.2.14)(react-dom@19.2.3)(react@19.2.3)
   '@reduxjs/toolkit':
     specifier: ^2.11.2
     version: 2.11.2(react-redux@9.2.0)(react@19.2.3)
@@ -44,6 +47,9 @@ dependencies:
   express:
     specifier: ^5.2.1
     version: 5.2.1
+  lucide-react:
+    specifier: ^0.577.0
+    version: 0.577.0(react@19.2.3)
   next:
     specifier: 16.1.6
     version: 16.1.6(@babel/core@7.29.0)(react-dom@19.2.3)(react@19.2.3)
@@ -5411,6 +5417,14 @@ packages:
 
   /lucide-react@0.475.0(react@19.2.3):
     resolution: {integrity: sha512-NJzvVu1HwFVeZ+Gwq2q00KygM1aBhy/ZrhY9FsAgJtpB+E4R7uxRk9M2iKvHa6/vNxZydIB59htha4c2vvwvVg==}
+    peerDependencies:
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    dependencies:
+      react: 19.2.3
+    dev: false
+
+  /lucide-react@0.577.0(react@19.2.3):
+    resolution: {integrity: sha512-4LjoFv2eEPwYDPg/CUdBJQSDfPyzXCRrVW1X7jrx/trgxnxkHFjnVZINbzvzxjN70dxychOfg+FTYwBiS3pQ5A==}
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
     dependencies:

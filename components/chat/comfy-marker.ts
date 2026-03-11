@@ -7,6 +7,28 @@ export type ComfyJobMarker = {
   workflowName: string;
 };
 
+const parseNestedMarker = (rawMarker: string): ComfyJobMarker | null => {
+  let current: unknown = rawMarker;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (isComfyJobMarker(current)) {
+      return current;
+    }
+
+    if (typeof current !== "string") {
+      return null;
+    }
+
+    try {
+      current = JSON.parse(current);
+    } catch {
+      return null;
+    }
+  }
+
+  return isComfyJobMarker(current) ? current : null;
+};
+
 const isComfyJobMarker = (value: unknown): value is ComfyJobMarker => {
   if (!value || typeof value !== "object") return false;
 
@@ -40,12 +62,10 @@ export const extractComfyJobMarker = (text: string) => {
   ).trim();
 
   try {
-    const parsed = JSON.parse(rawMarker) as unknown;
-    if (!isComfyJobMarker(parsed)) {
+    const marker = parseNestedMarker(rawMarker);
+    if (!marker) {
       throw new Error("Invalid JSON marker shape");
     }
-
-    const marker = parsed;
     const cleanText = `${text.slice(0, start)}${text.slice(
       end + COMFY_JOB_MARKER_SUFFIX.length,
     )}`.trim();

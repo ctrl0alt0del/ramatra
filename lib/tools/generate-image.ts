@@ -17,14 +17,14 @@ export const generateImageParameters = {
   steps: z.number().int().positive().max(1000).default(50),
   width: z.number().int().positive().max(2048).default(512),
   height: z.number().int().positive().max(2048).default(512),
-  cfg: z.number().positive().max(20).default(7),
+  cfg: z.number().positive().max(20).default(2),
   seed: z
     .number()
     .int()
     .positive()
     .default(() => Math.floor(Math.random() * 1000000)),
-  samplerName: z.string().default("euler"),
-  scheduler: z.string().default("simple"),
+  samplerName: z.string().default("res_2s"),
+  scheduler: z.string().default("beta57"),
 };
 
 export const generateImageInputSchema = z.object(generateImageParameters);

@@ -1,11 +1,7 @@
 import { z } from "zod";
 
-import {
-  executeGenerateImage,
-  generateImageToolName,
-  getGenerateImageOpenAIToolSpec,
-  parseGenerateImageArguments,
-} from "@/lib/tools/generate-image";
+import { getThread, updateThread } from "@/lib/lmstudio/threads";
+import { lmStudioSystemPrompt } from "@/lib/lmstudio/prompts";
 
 const messageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
@@ -21,6 +17,7 @@ const messageSchema = z.object({
 
 const requestSchema = z.object({
   messages: z.array(messageSchema),
+  threadId: z.string().optional(),
 });
 
 const toChatMessages = (messages: Array<z.infer<typeof messageSchema>>) => {
@@ -54,44 +51,92 @@ const toChatMessages = (messages: Array<z.infer<typeof messageSchema>>) => {
     );
 };
 
-const getLmStudioChatCompletionsUrl = () => {
+const getLmStudioChatUrl = () => {
   const rawBaseUrl = process.env.LM_STUDIO_BASE_URL;
   if (!rawBaseUrl) {
     throw new Error("LM_STUDIO_BASE_URL is not configured.");
   }
 
   const url = new URL(rawBaseUrl);
-  if (!url.pathname.endsWith("/v1")) {
-    url.pathname = `${url.pathname.replace(/\/$/, "")}/v1`;
-  }
-
-  return `${url.toString().replace(/\/$/, "")}/chat/completions`;
+  url.pathname = "/api/v1/chat";
+  return url.toString();
 };
 
-type OpenAIChatMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
-};
-
-type OpenAIToolCall = {
-  id: string;
-  type: "function";
-  function: {
-    name: string;
-    arguments: string;
-  };
-};
-
-type ChatCompletionResponse = {
-  choices?: Array<{
-    message?: {
-      content?: string | null;
-      tool_calls?: OpenAIToolCall[];
+type LmStudioOutput =
+  | {
+      type: "message";
+      content: string;
+    }
+  | {
+      type: "reasoning";
+      content: string;
+    }
+  | {
+      type: "tool_call";
+      tool: string;
+      arguments: Record<string, unknown>;
+      output: string;
+      provider_info?: {
+        type: "plugin" | "ephemeral_mcp";
+        plugin_id?: string;
+        server_label?: string;
+      };
+    }
+  | {
+      type: "invalid_tool_call";
+      reason: string;
+      metadata?: {
+        type: "invalid_name" | "invalid_arguments";
+        tool_name: string;
+        arguments?: Record<string, unknown>;
+      };
     };
-  }>;
+
+type ChatResponse = {
+  output?: LmStudioOutput[];
+  response_id?: string;
   error?: {
     message?: string;
   };
+};
+
+const getComfyMcpUrl = () => {
+  const explicitUrl = process.env.COMFY_MCP_URL;
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  const port = process.env.COMFY_MCP_PORT ?? "4000";
+  return `http://127.0.0.1:${port}/mcp`;
+};
+
+const getAssistantText = (output: LmStudioOutput[] | undefined) => {
+  if (!output?.length) return "";
+
+  const text = output
+    .flatMap((item) => (item.type === "message" ? [item.content.trim()] : []))
+    .filter(Boolean)
+    .join("\n\n");
+
+  if (text) return text;
+
+  const invalidToolCall = output.find(
+    (item) => item.type === "invalid_tool_call",
+  );
+  if (invalidToolCall?.type === "invalid_tool_call") {
+    return `Tool call failed: ${invalidToolCall.reason}`;
+  }
+
+  return "";
+};
+
+const getAssistantReasoning = (output: LmStudioOutput[] | undefined) => {
+  if (!output?.length) return "";
+
+  return output
+    .flatMap((item) => (item.type === "reasoning" ? [item.content.trim()] : []))
+    .filter(Boolean)
+    .join("\n\n");
 };
 
 export async function POST(req: Request) {
@@ -106,6 +151,7 @@ export async function POST(req: Request) {
   }
 
   const inputMessages = toChatMessages(parsed.data.messages);
+  const thread = parsed.data.threadId ? getThread(parsed.data.threadId) : null;
   const latestUserMessage = [...inputMessages]
     .reverse()
     .find((message) => message.role === "user");
@@ -117,19 +163,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const lmStudioMessages: OpenAIChatMessage[] = [
-    {
-      role: "system",
-      content: `You are a helpful assistant.
-
-If the user asks to create, generate, render, draw, or make an image, call the generate_image function.
-Do not fabricate image URLs or external image services.
-For non-image requests, reply normally.`,
-    },
-    latestUserMessage,
-  ];
-
-  const response = await fetch(getLmStudioChatCompletionsUrl(), {
+  const response = await fetch(getLmStudioChatUrl(), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -139,58 +173,45 @@ For non-image requests, reply normally.`,
     },
     body: JSON.stringify({
       model: process.env.LM_STUDIO_MODEL,
-      messages: lmStudioMessages,
-      tools: [getGenerateImageOpenAIToolSpec()],
-      tool_choice: "auto",
+      input: latestUserMessage.content,
+      previous_response_id: thread?.lmstudioResponseId ?? undefined,
+      system_prompt: lmStudioSystemPrompt,
+      integrations: [
+        {
+          type: "ephemeral_mcp",
+          server_label: "comfy",
+          server_url: getComfyMcpUrl(),
+        },
+      ],
     }),
   });
 
-  const data = (await response.json()) as ChatCompletionResponse;
+  const data = (await response.json()) as ChatResponse;
   if (!response.ok) {
     return Response.json(
       {
-        error:
-          data.error?.message ??
-          "LM Studio chat completion request failed.",
+        error: data.error?.message ?? "LM Studio chat request failed.",
       },
       { status: response.status },
     );
   }
 
-  const choice = data.choices?.[0]?.message;
-  if (!choice) {
+  if (!data.output?.length) {
     return Response.json(
-      { error: "LM Studio did not return a chat choice." },
+      { error: "LM Studio did not return any output." },
       { status: 502 },
     );
   }
 
-  const generateImageCall = choice.tool_calls?.find(
-    (toolCall) => toolCall.function.name === generateImageToolName,
-  );
-
-  if (!generateImageCall) {
-    return Response.json({
-      text: choice.content?.trim() ?? "",
+  if (parsed.data.threadId) {
+    updateThread(parsed.data.threadId, {
+      lmstudioResponseId: data.response_id ?? null,
     });
   }
 
-  try {
-    const toolInput = parseGenerateImageArguments(
-      generateImageCall.function.arguments,
-    );
-    const toolResult = await executeGenerateImage(toolInput);
-
-    return Response.json({
-      text: toolResult.ok
-        ? `Started generating your image.\n\n${toolResult.marker}`
-        : toolResult.error,
-    });
-  } catch (error) {
-    return Response.json({
-      text: `Image generation failed: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`,
-    });
-  }
+  return Response.json({
+    text: getAssistantText(data.output),
+    reasoning: getAssistantReasoning(data.output),
+    responseId: data.response_id ?? null,
+  });
 }

@@ -52,6 +52,13 @@ const ensureSchema = (db: Database.Database) => {
       WHERE status IS NULL OR status = ''
     `);
   }
+
+  if (!columns.some((column) => column.name === "lmstudio_response_id")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN lmstudio_response_id TEXT
+    `);
+  }
 };
 
 export const getDb = () => {

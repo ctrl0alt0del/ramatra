@@ -26,3 +26,30 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@media (max-width: 767px) {
+  .aui-thread-root {
+    min-width: 0;
+  }
+
+  .aui-thread-viewport {
+    padding-inline: 0.75rem;
+    padding-top: 0.75rem;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .aui-thread-viewport-footer {
+    padding-inline: 0.75rem;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .aui-assistant-message-root,
+  .aui-user-message-root {
+    gap: 0.625rem;
+  }
+
+  .aui-assistant-message-content,
+  .aui-user-message-content {
+    min-width: 0;
+  }
+}

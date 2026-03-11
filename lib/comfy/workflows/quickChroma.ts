@@ -101,7 +101,7 @@ export function buildQuickChromaWorkflow(_input: QuickChromaInput) {
   });
   /*KSamplerSelect*/
   const [SAMPLER_1] = cls.KSamplerSelect({
-    sampler_name: "euler",
+    sampler_name: input.samplerName,
   });
   /*SamplerCustomAdvanced*/
   const [LATENT_2, LATENT_3] = cls.SamplerCustomAdvanced({
