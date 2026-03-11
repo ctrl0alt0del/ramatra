@@ -19,6 +19,9 @@ const ensureSchema = (db: Database.Database) => {
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'regular' CHECK (status IN ('regular', 'archived')),
       lmstudio_response_id TEXT,
+      conversation_summary TEXT,
+      summary_updated_at TEXT,
+      summary_message_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -83,6 +86,27 @@ const ensureSchema = (db: Database.Database) => {
     db.exec(`
       ALTER TABLE threads
       ADD COLUMN lmstudio_response_id TEXT
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "conversation_summary")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN conversation_summary TEXT
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "summary_updated_at")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN summary_updated_at TEXT
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "summary_message_count")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN summary_message_count INTEGER NOT NULL DEFAULT 0
     `);
   }
 };

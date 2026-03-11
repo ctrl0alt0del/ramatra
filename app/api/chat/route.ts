@@ -5,6 +5,11 @@ import { getThread, updateThread } from "@/lib/lmstudio/threads";
 import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { getSystemPromptForMode } from "@/lib/lmstudio/prompts";
 import {
+  buildFreshChainInput,
+  generateConversationSummary,
+  shouldRefreshConversationSummary,
+} from "@/lib/lmstudio/summaries";
+import {
   assertChatAvailable,
   getVramBalancerState,
   registerImageGenerationStart,
@@ -103,6 +108,10 @@ type LmStudioOutput =
 type ChatResponse = {
   output?: LmStudioOutput[];
   response_id?: string;
+  finish_reason?: string;
+  stop_reason?: string;
+  usage?: Record<string, unknown>;
+  model?: string;
   error?: {
     message?: string;
   };
@@ -172,7 +181,11 @@ export async function POST(req: Request) {
   }
 
   const inputMessages = toChatMessages(parsed.data.messages);
-  const thread = parsed.data.threadId ? getThread(parsed.data.threadId) : null;
+  let thread = parsed.data.threadId ? getThread(parsed.data.threadId) : null;
+  const promptMode =
+    parsed.data.promptMode && isPromptMode(parsed.data.promptMode)
+      ? parsed.data.promptMode
+      : defaultPromptMode;
   const latestUserMessage = [...inputMessages]
     .reverse()
     .find((message) => message.role === "user");
@@ -183,6 +196,34 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+
+  if (thread && shouldRefreshConversationSummary(thread, promptMode)) {
+    try {
+      const unsummarizedMessages = thread.messages.slice(thread.summaryMessageCount);
+      const conversationSummary = await generateConversationSummary({
+        mode: promptMode,
+        previousSummary: thread.conversationSummary,
+        messages: unsummarizedMessages,
+      });
+
+      const updatedThread = updateThread(thread.id, {
+        conversationSummary,
+        summaryUpdatedAt: new Date().toISOString(),
+        summaryMessageCount: thread.messageCount,
+        lmstudioResponseId: null,
+      });
+
+      if (updatedThread) {
+        thread = updatedThread;
+      }
+    } catch (error) {
+      console.warn(
+        "[api/chat] failed to refresh conversation summary",
+        error,
+      );
+    }
+  }
+
   const integrations = [
     {
       type: "ephemeral_mcp",
@@ -210,13 +251,15 @@ export async function POST(req: Request) {
     },
     body: JSON.stringify({
       model: process.env.LM_STUDIO_MODEL,
-      input: latestUserMessage.content,
+      input:
+        thread?.lmstudioResponseId !== null && thread?.lmstudioResponseId !== undefined
+          ? latestUserMessage.content
+          : buildFreshChainInput({
+              summary: thread?.conversationSummary ?? null,
+              userInput: latestUserMessage.content,
+            }),
       previous_response_id: thread?.lmstudioResponseId ?? undefined,
-      system_prompt: getSystemPromptForMode(
-        parsed.data.promptMode && isPromptMode(parsed.data.promptMode)
-          ? parsed.data.promptMode
-          : defaultPromptMode,
-      ),
+      system_prompt: getSystemPromptForMode(promptMode),
       integrations: integrations,
     }),
   });
@@ -256,5 +299,10 @@ export async function POST(req: Request) {
     text,
     reasoning,
     responseId: data.response_id ?? null,
+    meta: {
+      finishReason: data.finish_reason ?? data.stop_reason ?? null,
+      usage: data.usage ?? null,
+      model: data.model ?? null,
+    },
   });
 }

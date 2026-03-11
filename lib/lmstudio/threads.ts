@@ -12,6 +12,9 @@ export type ThreadSummary = {
   title: string;
   status: "regular" | "archived";
   lmstudioResponseId: string | null;
+  conversationSummary: string | null;
+  summaryUpdatedAt: string | null;
+  summaryMessageCount: number;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -26,6 +29,9 @@ type ThreadRow = {
   title: string;
   status: ThreadSummary["status"];
   lmstudio_response_id: string | null;
+  conversation_summary: string | null;
+  summary_updated_at: string | null;
+  summary_message_count: number;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -53,6 +59,9 @@ export const listThreads = (): ThreadSummary[] => {
           t.title,
           t.status,
           t.lmstudio_response_id,
+          t.conversation_summary,
+          t.summary_updated_at,
+          t.summary_message_count,
           t.created_at,
           t.updated_at,
           COUNT(m.id) AS message_count
@@ -69,6 +78,9 @@ export const listThreads = (): ThreadSummary[] => {
     title: row.title,
     status: row.status,
     lmstudioResponseId: row.lmstudio_response_id,
+    conversationSummary: row.conversation_summary,
+    summaryUpdatedAt: row.summary_updated_at,
+    summaryMessageCount: row.summary_message_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     messageCount: row.message_count,
@@ -79,6 +91,9 @@ export const createThread = (input?: {
   title?: string;
   status?: ThreadSummary["status"];
   lmstudioResponseId?: string | null;
+  conversationSummary?: string | null;
+  summaryUpdatedAt?: string | null;
+  summaryMessageCount?: number;
   messages?: ThreadMessage[];
 }) => {
   const messages = input?.messages ?? [];
@@ -87,18 +102,34 @@ export const createThread = (input?: {
   const title = input?.title?.trim() || deriveTitle(messages);
   const status = input?.status ?? "regular";
   const lmstudioResponseId = input?.lmstudioResponseId ?? null;
+  const conversationSummary = input?.conversationSummary ?? null;
+  const summaryUpdatedAt = input?.summaryUpdatedAt ?? null;
+  const summaryMessageCount = input?.summaryMessageCount ?? 0;
 
   const insert = db.transaction(() => {
     db.prepare(
       `
-        INSERT INTO threads (id, title, status, lmstudio_response_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO threads (
+          id,
+          title,
+          status,
+          lmstudio_response_id,
+          conversation_summary,
+          summary_updated_at,
+          summary_message_count,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       threadId,
       title,
       status,
       lmstudioResponseId,
+      conversationSummary,
+      summaryUpdatedAt,
+      summaryMessageCount,
       timestamp,
       timestamp,
     );
@@ -135,6 +166,9 @@ export const getThread = (threadId: string) => {
           t.title,
           t.status,
           t.lmstudio_response_id,
+          t.conversation_summary,
+          t.summary_updated_at,
+          t.summary_message_count,
           t.created_at,
           t.updated_at,
           COUNT(m.id) AS message_count
@@ -164,6 +198,9 @@ export const getThread = (threadId: string) => {
     title: thread.title,
     status: thread.status,
     lmstudioResponseId: thread.lmstudio_response_id,
+    conversationSummary: thread.conversation_summary,
+    summaryUpdatedAt: thread.summary_updated_at,
+    summaryMessageCount: thread.summary_message_count,
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
     messageCount: thread.message_count,
@@ -177,6 +214,9 @@ export const updateThread = (
     title?: string;
     status?: ThreadSummary["status"];
     lmstudioResponseId?: string | null;
+    conversationSummary?: string | null;
+    summaryUpdatedAt?: string | null;
+    summaryMessageCount?: number;
     appendMessages?: ThreadMessage[];
     replaceMessages?: ThreadMessage[];
   },
@@ -199,6 +239,18 @@ export const updateThread = (
     input.lmstudioResponseId !== undefined
       ? input.lmstudioResponseId
       : existing.lmstudioResponseId;
+  const nextConversationSummary =
+    input.conversationSummary !== undefined
+      ? input.conversationSummary
+      : existing.conversationSummary;
+  const nextSummaryUpdatedAt =
+    input.summaryUpdatedAt !== undefined
+      ? input.summaryUpdatedAt
+      : existing.summaryUpdatedAt;
+  const nextSummaryMessageCount =
+    input.summaryMessageCount !== undefined
+      ? input.summaryMessageCount
+      : existing.summaryMessageCount;
 
   const timestamp = new Date().toISOString();
 
@@ -206,10 +258,26 @@ export const updateThread = (
     db.prepare(
       `
         UPDATE threads
-        SET title = ?, status = ?, lmstudio_response_id = ?, updated_at = ?
+        SET
+          title = ?,
+          status = ?,
+          lmstudio_response_id = ?,
+          conversation_summary = ?,
+          summary_updated_at = ?,
+          summary_message_count = ?,
+          updated_at = ?
         WHERE id = ?
       `,
-    ).run(nextTitle, nextStatus, nextLmstudioResponseId, timestamp, threadId);
+    ).run(
+      nextTitle,
+      nextStatus,
+      nextLmstudioResponseId,
+      nextConversationSummary,
+      nextSummaryUpdatedAt,
+      nextSummaryMessageCount,
+      timestamp,
+      threadId,
+    );
 
     if (input.replaceMessages) {
       db.prepare(`DELETE FROM messages WHERE thread_id = ?`).run(threadId);

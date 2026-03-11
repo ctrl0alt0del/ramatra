@@ -16,6 +16,9 @@ const updateThreadSchema = z.object({
   title: z.string().optional(),
   status: z.enum(["regular", "archived"]).optional(),
   lmstudioResponseId: z.string().nullable().optional(),
+  conversationSummary: z.string().nullable().optional(),
+  summaryUpdatedAt: z.string().nullable().optional(),
+  summaryMessageCount: z.number().int().nonnegative().optional(),
   appendMessages: z.array(messageSchema).optional(),
   replaceMessages: z.array(messageSchema).optional(),
 });
