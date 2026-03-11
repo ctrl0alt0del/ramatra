@@ -198,6 +198,25 @@ export async function POST(req: Request) {
     );
   }
 
+  const shouldResetPromptState =
+    thread !== null &&
+    thread.lmstudioResponseId !== null &&
+    (thread.lastPromptMode === null || thread.lastPromptMode !== promptMode);
+
+  if (shouldResetPromptState && thread) {
+    const updatedThread = updateThread(thread.id, {
+      lmstudioResponseId: null,
+      lastPromptMode: promptMode,
+      conversationSummary: null,
+      summaryUpdatedAt: null,
+      summaryMessageCount: 0,
+    });
+
+    if (updatedThread) {
+      thread = updatedThread;
+    }
+  }
+
   const autoSummaryEnabled = process.env.LM_STUDIO_AUTO_SUMMARY === "true";
 
   if (autoSummaryEnabled && thread && shouldRefreshConversationSummary(thread, promptMode)) {
@@ -298,6 +317,7 @@ export async function POST(req: Request) {
   if (parsed.data.threadId) {
     updateThread(parsed.data.threadId, {
       lmstudioResponseId: data.response_id ?? null,
+      lastPromptMode: promptMode,
     });
   }
 

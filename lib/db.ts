@@ -19,6 +19,7 @@ const ensureSchema = (db: Database.Database) => {
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'regular' CHECK (status IN ('regular', 'archived')),
       lmstudio_response_id TEXT,
+      last_prompt_mode TEXT,
       conversation_summary TEXT,
       summary_updated_at TEXT,
       summary_message_count INTEGER NOT NULL DEFAULT 0,
@@ -96,6 +97,13 @@ const ensureSchema = (db: Database.Database) => {
     `);
   }
 
+  if (!columns.some((column) => column.name === "last_prompt_mode")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN last_prompt_mode TEXT
+    `);
+  }
+
   if (!columns.some((column) => column.name === "summary_updated_at")) {
     db.exec(`
       ALTER TABLE threads
@@ -117,8 +125,8 @@ export const getDb = () => {
   if (!globalDb.__comfyBridgeDb) {
     fs.mkdirSync(DB_DIR, { recursive: true });
     globalDb.__comfyBridgeDb = new Database(DB_PATH);
-    ensureSchema(globalDb.__comfyBridgeDb);
   }
 
+  ensureSchema(globalDb.__comfyBridgeDb);
   return globalDb.__comfyBridgeDb;
 };

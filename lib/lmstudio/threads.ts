@@ -1,6 +1,7 @@
 import { type ChatMessageRoleData } from "@lmstudio/sdk";
 
 import { getDb } from "@/lib/db";
+import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
 
 export type ThreadMessage = {
   role: Exclude<ChatMessageRoleData, "tool">;
@@ -12,6 +13,7 @@ export type ThreadSummary = {
   title: string;
   status: "regular" | "archived";
   lmstudioResponseId: string | null;
+  lastPromptMode: PromptMode | null;
   conversationSummary: string | null;
   summaryUpdatedAt: string | null;
   summaryMessageCount: number;
@@ -29,6 +31,7 @@ type ThreadRow = {
   title: string;
   status: ThreadSummary["status"];
   lmstudio_response_id: string | null;
+  last_prompt_mode: PromptMode | null;
   conversation_summary: string | null;
   summary_updated_at: string | null;
   summary_message_count: number;
@@ -59,6 +62,7 @@ export const listThreads = (): ThreadSummary[] => {
           t.title,
           t.status,
           t.lmstudio_response_id,
+          t.last_prompt_mode,
           t.conversation_summary,
           t.summary_updated_at,
           t.summary_message_count,
@@ -78,6 +82,7 @@ export const listThreads = (): ThreadSummary[] => {
     title: row.title,
     status: row.status,
     lmstudioResponseId: row.lmstudio_response_id,
+    lastPromptMode: row.last_prompt_mode,
     conversationSummary: row.conversation_summary,
     summaryUpdatedAt: row.summary_updated_at,
     summaryMessageCount: row.summary_message_count,
@@ -91,6 +96,7 @@ export const createThread = (input?: {
   title?: string;
   status?: ThreadSummary["status"];
   lmstudioResponseId?: string | null;
+  lastPromptMode?: PromptMode | null;
   conversationSummary?: string | null;
   summaryUpdatedAt?: string | null;
   summaryMessageCount?: number;
@@ -102,6 +108,7 @@ export const createThread = (input?: {
   const title = input?.title?.trim() || deriveTitle(messages);
   const status = input?.status ?? "regular";
   const lmstudioResponseId = input?.lmstudioResponseId ?? null;
+  const lastPromptMode = input?.lastPromptMode ?? null;
   const conversationSummary = input?.conversationSummary ?? null;
   const summaryUpdatedAt = input?.summaryUpdatedAt ?? null;
   const summaryMessageCount = input?.summaryMessageCount ?? 0;
@@ -114,19 +121,21 @@ export const createThread = (input?: {
           title,
           status,
           lmstudio_response_id,
+          last_prompt_mode,
           conversation_summary,
           summary_updated_at,
           summary_message_count,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       threadId,
       title,
       status,
       lmstudioResponseId,
+      lastPromptMode,
       conversationSummary,
       summaryUpdatedAt,
       summaryMessageCount,
@@ -166,6 +175,7 @@ export const getThread = (threadId: string) => {
           t.title,
           t.status,
           t.lmstudio_response_id,
+          t.last_prompt_mode,
           t.conversation_summary,
           t.summary_updated_at,
           t.summary_message_count,
@@ -198,6 +208,7 @@ export const getThread = (threadId: string) => {
     title: thread.title,
     status: thread.status,
     lmstudioResponseId: thread.lmstudio_response_id,
+    lastPromptMode: thread.last_prompt_mode,
     conversationSummary: thread.conversation_summary,
     summaryUpdatedAt: thread.summary_updated_at,
     summaryMessageCount: thread.summary_message_count,
@@ -214,6 +225,7 @@ export const updateThread = (
     title?: string;
     status?: ThreadSummary["status"];
     lmstudioResponseId?: string | null;
+    lastPromptMode?: PromptMode | null;
     conversationSummary?: string | null;
     summaryUpdatedAt?: string | null;
     summaryMessageCount?: number;
@@ -239,6 +251,10 @@ export const updateThread = (
     input.lmstudioResponseId !== undefined
       ? input.lmstudioResponseId
       : existing.lmstudioResponseId;
+  const nextLastPromptMode =
+    input.lastPromptMode !== undefined
+      ? input.lastPromptMode
+      : existing.lastPromptMode;
   const nextConversationSummary =
     input.conversationSummary !== undefined
       ? input.conversationSummary
@@ -262,6 +278,7 @@ export const updateThread = (
           title = ?,
           status = ?,
           lmstudio_response_id = ?,
+          last_prompt_mode = ?,
           conversation_summary = ?,
           summary_updated_at = ?,
           summary_message_count = ?,
@@ -272,6 +289,7 @@ export const updateThread = (
       nextTitle,
       nextStatus,
       nextLmstudioResponseId,
+      nextLastPromptMode,
       nextConversationSummary,
       nextSummaryUpdatedAt,
       nextSummaryMessageCount,

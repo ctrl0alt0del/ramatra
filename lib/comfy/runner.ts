@@ -5,12 +5,14 @@ import {
   storeCompletedGeneration,
   updateGenerationProgress,
 } from "./generations";
+import { buildBaseWorkflow } from "./workflows/base";
 import { buildQuickChromaWorkflow } from "./workflows/quickChroma";
+import { type WorkflowInput, type WorkflowName } from "./workflows/types";
 
-const workflows: Record<string, (input: WorkflowInput) => Workflow> = {
+const workflows: Record<WorkflowName, (input: WorkflowInput) => Workflow> = {
+  base: buildBaseWorkflow,
   quick_chroma: buildQuickChromaWorkflow,
 };
-type WorkflowInput = object;
 
 export enum ComfyJobStatus {
   Queued = "queued",
@@ -21,7 +23,7 @@ export enum ComfyJobStatus {
 
 type IRunnerOptions = {
   client: Client;
-  workflowName: string;
+  workflowName: WorkflowName;
   input: WorkflowInput;
 };
 
@@ -54,7 +56,6 @@ export async function runWorkflow({
   workflowName,
   input,
 }: IRunnerOptions): Promise<IWorkflowRun> {
-  console.log("Running workflow", workflowName, "with input", input);
   const workflowBuilder = workflows[workflowName];
   if (!workflowBuilder) {
     throw new Error(`Workflow ${workflowName} not found`);
@@ -96,11 +97,14 @@ export async function runWorkflow({
     cleanup();
   });
 
-  const removeExecutionInterrupted = client.on("execution_interrupted", (event) => {
-    if (event.prompt_id !== job.task_id) return;
-    markGenerationFailed(job.task_id!, "Generation was interrupted");
-    cleanup();
-  });
+  const removeExecutionInterrupted = client.on(
+    "execution_interrupted",
+    (event) => {
+      if (event.prompt_id !== job.task_id) return;
+      markGenerationFailed(job.task_id!, "Generation was interrupted");
+      cleanup();
+    },
+  );
 
   const removeExecutionSuccess = client.on("execution_success", (event) => {
     if (event.prompt_id !== job.task_id) return;

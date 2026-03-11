@@ -1,19 +1,7 @@
-import quickChromaWorkflow from "@/assets/comfy-workflows/quick_chroma.json";
 import { Workflow } from "@stable-canvas/comfyui-client";
+import { WorkflowInput } from "./types";
 
-export type QuickChromaInput = {
-  positivePrompt: string;
-  negativePrompt: string;
-  width: number;
-  height: number;
-  steps: number;
-  cfg: number;
-  seed: number;
-  samplerName: string;
-  scheduler: string;
-};
-
-const withDefaults = (input: Partial<QuickChromaInput>): QuickChromaInput => {
+const withDefaults = (input: Partial<WorkflowInput>): WorkflowInput => {
   return {
     positivePrompt: input.positivePrompt || "",
     negativePrompt: input.negativePrompt || "",
@@ -24,10 +12,11 @@ const withDefaults = (input: Partial<QuickChromaInput>): QuickChromaInput => {
     seed: input.seed || Math.floor(Math.random() * 1000000),
     samplerName: input.samplerName || "euler",
     scheduler: input.scheduler || "simple",
+    loras: input.loras || [],
   };
 };
 
-export function buildQuickChromaWorkflow(_input: QuickChromaInput) {
+export function buildQuickChromaWorkflow(_input: WorkflowInput) {
   const input = withDefaults(_input);
   const workflow = new Workflow();
   const cls = workflow.classes;
