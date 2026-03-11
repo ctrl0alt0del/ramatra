@@ -7,6 +7,7 @@ import { PanelLeft, X } from "lucide-react";
 import { Thread, ThreadList } from "@assistant-ui/react-ui";
 
 import { CustomAssistantMessage } from "./CustomAssistantMessage";
+import { CustomUserMessage } from "./CustomUserMessage";
 import { ManagedComposer } from "./ManagedComposer";
 import { PromptModeSelect } from "./prompt-mode";
 import { SystemStateProvider } from "./system-state";
@@ -132,6 +133,7 @@ export function ChatLayout() {
               components={{
                 AssistantMessage: CustomAssistantMessage,
                 Composer: ManagedComposer,
+                UserMessage: CustomUserMessage,
               }}
             />
           </div>

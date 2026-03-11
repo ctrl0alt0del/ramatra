@@ -42,6 +42,7 @@ export function GeneratedImageCard({
     jobId,
     status: initialStatus,
   });
+  const [hasResolvedInitialFetch, setHasResolvedInitialFetch] = useState(false);
 
   useEffect(() => {
     if (!hasValidJobId) return;
@@ -72,6 +73,7 @@ export function GeneratedImageCard({
         if (cancelled) return;
 
         setResult(data);
+        setHasResolvedInitialFetch(true);
 
         if (data.status === "queued" || data.status === "running") {
           timeoutId = window.setTimeout(poll, 2500);
@@ -87,6 +89,7 @@ export function GeneratedImageCard({
               ? error.message
               : "Failed to fetch generation result",
         });
+        setHasResolvedInitialFetch(true);
       }
     };
 
@@ -131,13 +134,17 @@ export function GeneratedImageCard({
             </div>
             <div className="space-y-2 border-t border-[hsl(var(--aui-border))] p-4">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium">Generating image</p>
+                <p className="text-sm font-medium">
+                  {hasResolvedInitialFetch ? "Generating image" : "Loading image"}
+                </p>
                 <span className="rounded-full border border-[hsl(var(--aui-border))] px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-[hsl(var(--aui-muted-foreground))]">
-                  {result.status}
+                  {hasResolvedInitialFetch ? result.status : "loading"}
                 </span>
               </div>
               <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
-                {result.progress?.percentage !== null &&
+                {!hasResolvedInitialFetch
+                  ? "Loading the latest saved result for this generation."
+                  : result.progress?.percentage !== null &&
                 result.progress?.percentage !== undefined
                   ? `Processing ${result.progress.percentage}% complete${
                       result.progress.node
