@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { createThread, getThread, updateThread } from "@/lib/lmstudio/threads";
 import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { processTaskQueues } from "@/lib/tasks/processor";
 import { enqueueChatTask } from "@/lib/tasks/scheduler";
@@ -80,8 +81,44 @@ export async function POST(req: Request) {
     );
   }
 
+  const requestedThreadId =
+    parsed.data.threadId && !parsed.data.threadId.startsWith("__LOCALID_")
+      ? parsed.data.threadId
+      : undefined;
+  const existingThread = requestedThreadId ? getThread(requestedThreadId) : null;
+
+  const thread =
+    existingThread ??
+    createThread({
+      title: "New Chat",
+      messages: [
+        {
+          role: "user",
+          content: latestUserMessage.content,
+        },
+      ],
+    });
+
+  if (existingThread) {
+    const lastMessage = existingThread.messages.at(-1);
+    if (
+      !lastMessage ||
+      lastMessage.role !== "user" ||
+      lastMessage.content !== latestUserMessage.content
+    ) {
+      updateThread(existingThread.id, {
+        appendMessages: [
+          {
+            role: "user",
+            content: latestUserMessage.content,
+          },
+        ],
+      });
+    }
+  }
+
   const task = enqueueChatTask({
-    threadId: parsed.data.threadId ?? null,
+    threadId: thread.id,
     promptMode,
     userMessage: latestUserMessage.content,
   });
@@ -91,6 +128,7 @@ export async function POST(req: Request) {
   return Response.json(
     {
       taskId: task.id,
+      threadId: thread.id,
       status: task.status,
     },
     { status: 202 },

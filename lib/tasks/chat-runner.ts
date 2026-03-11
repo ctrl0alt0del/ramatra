@@ -337,16 +337,30 @@ export const executeQueuedChatTask = async (taskId: string) => {
       throw new Error("LM Studio did not return any output.");
     }
 
-    if (task.payload.threadId) {
-      updateThread(task.payload.threadId, {
-        lmstudioResponseId: finalResponse.response_id ?? null,
-        lastPromptMode: promptMode,
-      });
-    }
-
     const text = getAssistantText(finalResponse.output) || streamedText;
     const reasoning =
       getAssistantReasoning(finalResponse.output) || streamedReasoning;
+
+    if (task.payload.threadId) {
+      const latestThread = getThread(task.payload.threadId);
+      const lastMessage = latestThread?.messages.at(-1);
+
+      updateThread(task.payload.threadId, {
+        lmstudioResponseId: finalResponse.response_id ?? null,
+        lastPromptMode: promptMode,
+        appendMessages:
+          !lastMessage ||
+          lastMessage.role !== "assistant" ||
+          lastMessage.content !== text
+            ? [
+                {
+                  role: "assistant",
+                  content: text,
+                },
+              ]
+            : undefined,
+      });
+    }
 
     markTaskCompleted(task.id, {
       text,
