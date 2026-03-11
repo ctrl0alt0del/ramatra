@@ -4,6 +4,10 @@ import {
   markGenerationFailed,
 } from "@/lib/comfy/generations";
 import { ComfyJobStatus, getWorkflowStatus } from "@/lib/comfy/runner";
+import {
+  registerImageGenerationFinish,
+  registerImageGenerationStart,
+} from "@/lib/vram/balancer";
 
 type RouteContext = {
   params: Promise<{ jobId: string }>;
@@ -14,6 +18,7 @@ export async function GET(_req: Request, context: RouteContext) {
   const stored = getStoredGeneration(jobId);
 
   if (stored?.status === "completed") {
+    await registerImageGenerationFinish(jobId);
     return Response.json({
       jobId: stored.jobId,
       status: stored.status,
@@ -22,6 +27,7 @@ export async function GET(_req: Request, context: RouteContext) {
   }
 
   if (stored?.status === "failed") {
+    await registerImageGenerationFinish(jobId);
     return Response.json({
       jobId: stored.jobId,
       status: stored.status,
@@ -29,10 +35,15 @@ export async function GET(_req: Request, context: RouteContext) {
     });
   }
 
+  if (stored?.status === "queued" || stored?.status === "running") {
+    await registerImageGenerationStart(jobId);
+  }
+
   try {
     const result = await getWorkflowStatus(await getClient(), jobId);
 
     if (result.status === ComfyJobStatus.Completed) {
+      await registerImageGenerationFinish(jobId);
       return Response.json({
         jobId: result.jobId,
         status: result.status,
@@ -42,6 +53,7 @@ export async function GET(_req: Request, context: RouteContext) {
 
     if (result.status === ComfyJobStatus.Failed) {
       markGenerationFailed(jobId, "Generation failed");
+      await registerImageGenerationFinish(jobId);
       return Response.json(
         {
           jobId,
@@ -51,6 +63,8 @@ export async function GET(_req: Request, context: RouteContext) {
         { status: 200 },
       );
     }
+
+    await registerImageGenerationStart(jobId);
 
     return Response.json({
       jobId: result.jobId,
@@ -66,12 +80,15 @@ export async function GET(_req: Request, context: RouteContext) {
 
     if (stored) {
       markGenerationFailed(jobId, message);
+      await registerImageGenerationFinish(jobId);
       return Response.json({
         jobId,
         status: "failed",
         error: message,
       });
     }
+
+    await registerImageGenerationFinish(jobId);
 
     return Response.json(
       {

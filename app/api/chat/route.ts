@@ -1,7 +1,13 @@
 import { z } from "zod";
 
+import { extractComfyJobMarker } from "@/components/chat/comfy-marker";
 import { getThread, updateThread } from "@/lib/lmstudio/threads";
 import { lmStudioSystemPrompt } from "@/lib/lmstudio/prompts";
+import {
+  assertChatAvailable,
+  getVramBalancerState,
+  registerImageGenerationStart,
+} from "@/lib/vram/balancer";
 
 const messageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
@@ -140,6 +146,19 @@ const getAssistantReasoning = (output: LmStudioOutput[] | undefined) => {
 };
 
 export async function POST(req: Request) {
+  try {
+    assertChatAvailable();
+  } catch (error) {
+    const state = getVramBalancerState();
+    return Response.json(
+      {
+        error: error instanceof Error ? error.message : "Chat is unavailable.",
+        state,
+      },
+      { status: 409 },
+    );
+  }
+
   const json = await req.json();
   const parsed = requestSchema.safeParse(json);
 
@@ -209,9 +228,17 @@ export async function POST(req: Request) {
     });
   }
 
+  const text = getAssistantText(data.output);
+  const reasoning = getAssistantReasoning(data.output);
+  const { marker } = extractComfyJobMarker(text);
+
+  if (marker) {
+    await registerImageGenerationStart(marker.jobId);
+  }
+
   return Response.json({
-    text: getAssistantText(data.output),
-    reasoning: getAssistantReasoning(data.output),
+    text,
+    reasoning,
     responseId: data.response_id ?? null,
   });
 }

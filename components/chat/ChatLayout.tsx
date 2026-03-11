@@ -7,13 +7,16 @@ import { PanelLeft, X } from "lucide-react";
 import { Thread, ThreadList } from "@assistant-ui/react-ui";
 
 import { CustomAssistantMessage } from "./CustomAssistantMessage";
+import { ManagedComposer } from "./ManagedComposer";
+import { SystemStateProvider } from "./system-state";
 
 export function ChatLayout() {
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   return (
-    <div className="aui-root flex h-[100dvh] w-full overflow-hidden bg-[hsl(var(--aui-background))] text-[hsl(var(--aui-foreground))]">
+    <SystemStateProvider>
+      <div className="aui-root flex h-[100dvh] w-full overflow-hidden bg-[hsl(var(--aui-background))] text-[hsl(var(--aui-foreground))]">
       <aside
         className={`hidden h-full shrink-0 border-r border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))] transition-[width,padding] duration-200 md:flex md:flex-col ${
           desktopSidebarOpen ? "md:w-80 md:p-4" : "md:w-0 md:px-0 md:py-4"
@@ -94,10 +97,7 @@ export function ChatLayout() {
                       </button>
                     </Dialog.Close>
                   </div>
-                  <div
-                    className="min-h-0 flex-1 overflow-hidden"
-                    onClickCapture={() => setMobileSidebarOpen(false)}
-                  >
+                  <div className="min-h-0 flex-1 overflow-hidden">
                     <ThreadList />
                   </div>
                 </Dialog.Content>
@@ -120,10 +120,12 @@ export function ChatLayout() {
           }}
           components={{
             AssistantMessage: CustomAssistantMessage,
+            Composer: ManagedComposer,
           }}
         />
         </div>
       </section>
-    </div>
+      </div>
+    </SystemStateProvider>
   );
 }
