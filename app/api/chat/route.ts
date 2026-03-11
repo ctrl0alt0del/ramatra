@@ -2,7 +2,13 @@ import { z } from "zod";
 
 import { extractComfyJobMarker } from "@/components/chat/comfy-marker";
 import { getThread, updateThread } from "@/lib/lmstudio/threads";
-import { lmStudioSystemPrompt } from "@/lib/lmstudio/prompts";
+import {
+  defaultPromptMode,
+  isPromptMode,
+} from "@/lib/lmstudio/prompt-modes";
+import {
+  getSystemPromptForMode,
+} from "@/lib/lmstudio/prompts";
 import {
   assertChatAvailable,
   getVramBalancerState,
@@ -24,6 +30,7 @@ const messageSchema = z.object({
 const requestSchema = z.object({
   messages: z.array(messageSchema),
   threadId: z.string().optional(),
+  promptMode: z.string().optional(),
 });
 
 const toChatMessages = (messages: Array<z.infer<typeof messageSchema>>) => {
@@ -194,7 +201,11 @@ export async function POST(req: Request) {
       model: process.env.LM_STUDIO_MODEL,
       input: latestUserMessage.content,
       previous_response_id: thread?.lmstudioResponseId ?? undefined,
-      system_prompt: lmStudioSystemPrompt,
+      system_prompt: getSystemPromptForMode(
+        parsed.data.promptMode && isPromptMode(parsed.data.promptMode)
+          ? parsed.data.promptMode
+          : defaultPromptMode,
+      ),
       integrations: [
         {
           type: "ephemeral_mcp",

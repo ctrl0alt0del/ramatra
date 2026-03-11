@@ -1,11 +1,40 @@
 "use client";
 
+import { RotateCcw, Sparkles } from "lucide-react";
+import { useState } from "react";
+
 import { Composer } from "@assistant-ui/react-ui";
 
 import { useSystemState } from "./system-state";
 
 export function ManagedComposer() {
-  const systemState = useSystemState();
+  const { state: systemState, refresh } = useSystemState();
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [recoverError, setRecoverError] = useState<string | null>(null);
+
+  const handleForceResume = async () => {
+    try {
+      setIsRecovering(true);
+      setRecoverError(null);
+
+      const response = await fetch("/api/system/unpause", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        throw new Error(data.error ?? "Failed to force resume chat.");
+      }
+
+      await refresh();
+    } catch (error) {
+      setRecoverError(
+        error instanceof Error ? error.message : "Failed to force resume chat.",
+      );
+    } finally {
+      setIsRecovering(false);
+    }
+  };
 
   return (
     <div className="w-full space-y-2">
@@ -18,6 +47,24 @@ export function ManagedComposer() {
           {systemState.lastError ? (
             <p className="mt-1 text-xs">Last error: {systemState.lastError}</p>
           ) : null}
+          {recoverError ? (
+            <p className="mt-1 text-xs text-red-500">{recoverError}</p>
+          ) : null}
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => void handleForceResume()}
+              disabled={isRecovering}
+              className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))] px-4 py-2 text-sm font-medium text-[hsl(var(--aui-foreground))] shadow-sm transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isRecovering ? (
+                <Sparkles className="h-4 w-4 animate-pulse" />
+              ) : (
+                <RotateCcw className="h-4 w-4" />
+              )}
+              {isRecovering ? "Recovering chat..." : "Force Resume Chat"}
+            </button>
+          </div>
         </div>
       ) : null}
 

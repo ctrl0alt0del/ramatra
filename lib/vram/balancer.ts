@@ -83,6 +83,18 @@ const restoreChatMode = async () => {
   await loadLmStudioModel(getChatModelKey());
 };
 
+const resetStoreToChatReady = (lastError: string | null = null) => {
+  const store = getStore();
+  store.activeJobIds.clear();
+  store.state = {
+    phase: "chat_ready",
+    canChat: true,
+    activeGenerationCount: 0,
+    message: "Chat model ready.",
+    lastError,
+  };
+};
+
 const runTransition = async (task: () => Promise<void>) => {
   const store = getStore();
   const previous = store.transitionPromise ?? Promise.resolve();
@@ -196,4 +208,40 @@ export const registerImageGenerationFinish = async (jobId: string) => {
       lastError: error instanceof Error ? error.message : "Unknown error",
     });
   }
+};
+
+export const forceResumeChatMode = async () => {
+  const store = getStore();
+
+  updateState({
+    phase: "restoring_chat",
+    canChat: false,
+    message: "Force restoring the chat model.",
+    lastError: null,
+  });
+
+  await runTransition(async () => {
+    const client = await getClient();
+
+    try {
+      await client.interrupt();
+    } catch {
+      // Ignore if nothing is currently running.
+    }
+
+    try {
+      await client.clearItems("queue");
+    } catch {
+      // Ignore queue clear failures and continue recovery.
+    }
+
+    await client.free({
+      unload_models: true,
+      free_memory: true,
+    });
+
+    store.activeJobIds.clear();
+    await loadLmStudioModel(getChatModelKey());
+    resetStoreToChatReady();
+  });
 };

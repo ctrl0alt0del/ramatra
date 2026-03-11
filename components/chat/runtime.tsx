@@ -10,10 +10,12 @@ import {
 } from "@assistant-ui/react";
 import { createAssistantStream } from "assistant-stream";
 
+import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
+
 import { PersistedHistoryProvider } from "./history";
 import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 
-function usePersistedChatRuntime() {
+function usePersistedChatRuntime(promptMode: PromptMode) {
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
       async run({ messages, abortSignal, unstable_threadId }) {
@@ -33,6 +35,7 @@ function usePersistedChatRuntime() {
           body: JSON.stringify({
             messages: serializedMessages,
             threadId: unstable_threadId,
+            promptMode,
           }),
           signal: abortSignal,
         });
@@ -64,13 +67,13 @@ function usePersistedChatRuntime() {
         };
       },
     }),
-    [],
+    [promptMode],
   );
 
   return useLocalRuntime(modelAdapter);
 }
 
-export function usePersistedRuntime() {
+export function usePersistedRuntime(promptMode: PromptMode) {
   const adapter = useMemo<RemoteThreadListAdapter>(
     () => ({
       async list() {
@@ -195,7 +198,9 @@ export function usePersistedRuntime() {
   );
 
   return useRemoteThreadListRuntime({
-    runtimeHook: usePersistedChatRuntime,
+    runtimeHook: function UsePromptModeRuntimeHook() {
+      return usePersistedChatRuntime(promptMode);
+    },
     adapter,
   });
 }

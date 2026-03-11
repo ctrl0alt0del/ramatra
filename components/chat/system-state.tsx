@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -16,6 +17,11 @@ type SystemState = {
   lastError: string | null;
 };
 
+type SystemStateContextValue = {
+  state: SystemState;
+  refresh: () => Promise<void>;
+};
+
 const defaultState: SystemState = {
   phase: "chat_ready",
   canChat: true,
@@ -24,12 +30,27 @@ const defaultState: SystemState = {
   lastError: null,
 };
 
-const SystemStateContext = createContext<SystemState>(defaultState);
+const SystemStateContext = createContext<SystemStateContextValue>({
+  state: defaultState,
+  refresh: async () => {},
+});
 
 export function SystemStateProvider({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const [state, setState] = useState<SystemState>(defaultState);
+
+  const refresh = useCallback(async () => {
+    const response = await fetch("/api/system/state", {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error("Failed to fetch system state");
+    }
+
+    const data = (await response.json()) as SystemState;
+    setState(data);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +84,7 @@ export function SystemStateProvider({
     };
   }, []);
 
-  const value = useMemo(() => state, [state]);
+  const value = useMemo(() => ({ state, refresh }), [state, refresh]);
   return (
     <SystemStateContext.Provider value={value}>
       {children}

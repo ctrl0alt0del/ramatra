@@ -18,6 +18,7 @@
     "@lmstudio/sdk": "^1.5.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-select": "^2.2.6",
     "@reduxjs/toolkit": "^2.11.2",
     "@stable-canvas/comfyui-client": "^1.5.9",
     "ai": "^6.0.116",
