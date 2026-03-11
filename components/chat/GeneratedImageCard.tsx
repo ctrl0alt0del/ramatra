@@ -71,41 +71,24 @@ export function GeneratedImageCard({
 
   useEffect(() => {
     if (!hasValidTaskId) return;
-    if (result.status === "completed" || result.status === "failed") return;
 
     let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let resolvedFirstEvent = false;
+    const eventSource = new EventSource(`/api/comfy/task/${taskId}/events`);
 
-    const poll = async () => {
+    const fallbackFetch = async () => {
       try {
         const response = await fetch(`/api/comfy/task/${taskId}`);
         if (!response.ok) {
-          let errorMessage = "Failed to fetch generation result";
-
-          try {
-            const errorData = (await response.json()) as { error?: string };
-            if (typeof errorData.error === "string" && errorData.error.trim()) {
-              errorMessage = errorData.error;
-            }
-          } catch {
-            // Keep the default error message when the response body is not JSON.
-          }
-
-          throw new Error(errorMessage);
+          throw new Error("Failed to fetch generation result");
         }
 
         const data = (await response.json()) as GenerationResponse;
         if (cancelled) return;
-
         setResult(data);
         setHasResolvedInitialFetch(true);
-
-        if (data.status === "queued" || data.status === "running") {
-          timeoutId = window.setTimeout(poll, 2500);
-        }
       } catch (error) {
         if (cancelled) return;
-
         setResult({
           taskId,
           jobId,
@@ -119,13 +102,36 @@ export function GeneratedImageCard({
       }
     };
 
-    timeoutId = window.setTimeout(poll, 1500);
+    const onTaskEvent = (event: MessageEvent<string>) => {
+      try {
+        const data = JSON.parse(event.data) as GenerationResponse;
+        if (cancelled) return;
+
+        resolvedFirstEvent = true;
+        setResult(data);
+        setHasResolvedInitialFetch(true);
+
+        if (data.status === "completed" || data.status === "failed") {
+          eventSource.close();
+        }
+      } catch {
+        // Ignore malformed events and wait for the next update.
+      }
+    };
+
+    eventSource.addEventListener("task", onTaskEvent);
+    eventSource.onerror = () => {
+      eventSource.close();
+      if (!resolvedFirstEvent) {
+        void fallbackFetch();
+      }
+    };
 
     return () => {
       cancelled = true;
-      if (timeoutId) window.clearTimeout(timeoutId);
+      eventSource.close();
     };
-  }, [hasValidTaskId, jobId, result.status, taskId]);
+  }, [hasValidTaskId, jobId, taskId]);
 
   return (
     <div className="mt-3 overflow-hidden rounded-2xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-muted))]">
