@@ -11,7 +11,16 @@ type CompletedImage = {
 };
 
 type GenerationResponse =
-  | { jobId: string; status: "queued" | "running" }
+  | {
+      jobId: string;
+      status: "queued" | "running";
+      progress?: {
+        value: number | null;
+        max: number | null;
+        percentage: number | null;
+        node: string | null;
+      };
+    }
   | { jobId: string; status: "failed"; error?: string }
   | { jobId: string; status: "completed"; images: CompletedImage[] };
 
@@ -45,7 +54,18 @@ export function GeneratedImageCard({
       try {
         const response = await fetch(`/api/comfy/result/${jobId}`);
         if (!response.ok) {
-          throw new Error("Failed to fetch generation result");
+          let errorMessage = "Failed to fetch generation result";
+
+          try {
+            const errorData = (await response.json()) as { error?: string };
+            if (typeof errorData.error === "string" && errorData.error.trim()) {
+              errorMessage = errorData.error;
+            }
+          } catch {
+            // Keep the default error message when the response body is not JSON.
+          }
+
+          throw new Error(errorMessage);
         }
 
         const data = (await response.json()) as GenerationResponse;
@@ -56,9 +76,17 @@ export function GeneratedImageCard({
         if (data.status === "queued" || data.status === "running") {
           timeoutId = window.setTimeout(poll, 2500);
         }
-      } catch {
+      } catch (error) {
         if (cancelled) return;
-        timeoutId = window.setTimeout(poll, 4000);
+
+        setResult({
+          jobId,
+          status: "failed",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to fetch generation result",
+        });
       }
     };
 
@@ -109,7 +137,14 @@ export function GeneratedImageCard({
                 </span>
               </div>
               <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
-                Preparing the ComfyUI job and waiting for the final render.
+                {result.progress?.percentage !== null &&
+                result.progress?.percentage !== undefined
+                  ? `Processing ${result.progress.percentage}% complete${
+                      result.progress.node
+                        ? ` on node ${result.progress.node}`
+                        : ""
+                    }.`
+                  : "Preparing the ComfyUI job and waiting for the final render."}
               </p>
               <p className="truncate text-xs text-[hsl(var(--aui-muted-foreground))]">
                 Job <code>{jobId}</code>

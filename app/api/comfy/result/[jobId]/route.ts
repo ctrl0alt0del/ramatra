@@ -1,4 +1,8 @@
 import { getClient } from "@/lib/comfy/client";
+import {
+  getStoredGeneration,
+  markGenerationFailed,
+} from "@/lib/comfy/generations";
 import { ComfyJobStatus, getWorkflowStatus } from "@/lib/comfy/runner";
 
 type RouteContext = {
@@ -7,29 +11,75 @@ type RouteContext = {
 
 export async function GET(_req: Request, context: RouteContext) {
   const { jobId } = await context.params;
-  const result = await getWorkflowStatus(await getClient(), jobId);
+  const stored = getStoredGeneration(jobId);
 
-  if (result.status === ComfyJobStatus.Completed) {
+  if (stored?.status === "completed") {
     return Response.json({
-      jobId: result.jobId,
-      status: result.status,
-      images: result.images,
+      jobId: stored.jobId,
+      status: stored.status,
+      images: stored.images,
     });
   }
 
-  if (result.status === ComfyJobStatus.Failed) {
+  if (stored?.status === "failed") {
+    return Response.json({
+      jobId: stored.jobId,
+      status: stored.status,
+      error: stored.error ?? "Generation failed",
+    });
+  }
+
+  try {
+    const result = await getWorkflowStatus(await getClient(), jobId);
+
+    if (result.status === ComfyJobStatus.Completed) {
+      return Response.json({
+        jobId: result.jobId,
+        status: result.status,
+        images: result.images,
+      });
+    }
+
+    if (result.status === ComfyJobStatus.Failed) {
+      markGenerationFailed(jobId, "Generation failed");
+      return Response.json(
+        {
+          jobId,
+          status: result.status,
+          error: "Generation failed",
+        },
+        { status: 200 },
+      );
+    }
+
+    return Response.json({
+      jobId: result.jobId,
+      status: result.status,
+      progress:
+        stored?.status === "queued" || stored?.status === "running"
+          ? stored.progress
+          : result.progress,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to get generation result";
+
+    if (stored) {
+      markGenerationFailed(jobId, message);
+      return Response.json({
+        jobId,
+        status: "failed",
+        error: message,
+      });
+    }
+
     return Response.json(
       {
         jobId,
-        status: result.status,
-        error: "Generation failed",
+        status: "failed",
+        error: message,
       },
       { status: 200 },
     );
   }
-
-  return Response.json({
-    jobId: result.jobId,
-    status: result.status,
-  });
 }

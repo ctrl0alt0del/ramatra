@@ -35,6 +35,32 @@ const ensureSchema = (db: Database.Database) => {
 
     CREATE INDEX IF NOT EXISTS idx_messages_thread_position
       ON messages(thread_id, position);
+
+    CREATE TABLE IF NOT EXISTS comfy_generations (
+      job_id TEXT PRIMARY KEY,
+      workflow_name TEXT,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+      progress_value INTEGER,
+      progress_max INTEGER,
+      progress_node TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS comfy_generation_images (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (job_id) REFERENCES comfy_generations(job_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_comfy_generation_images_job_position
+      ON comfy_generation_images(job_id, position);
   `);
 
   const columns = db.prepare(`PRAGMA table_info(threads)`).all() as Array<{

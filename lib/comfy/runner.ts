@@ -1,7 +1,13 @@
 import { Client, outToB64Urls, Workflow } from "@stable-canvas/comfyui-client";
+import {
+  createGeneration,
+  markGenerationFailed,
+  storeCompletedGeneration,
+  updateGenerationProgress,
+} from "./generations";
 import { buildQuickChromaWorkflow } from "./workflows/quickChroma";
 
-const workflows: Record<string, (input: any) => Workflow> = {
+const workflows: Record<string, (input: WorkflowInput) => Workflow> = {
   quick_chroma: buildQuickChromaWorkflow,
 };
 type WorkflowInput = object;
@@ -23,8 +29,15 @@ type IWorkflowRun =
   | {
       jobId: string;
       status: ComfyJobStatus.Queued | ComfyJobStatus.Running;
+      progress?: {
+        value: number | null;
+        max: number | null;
+        percentage: number | null;
+        node: string | null;
+      };
     }
   | {
+      jobId?: string;
       status: ComfyJobStatus.Failed;
     }
   | {
@@ -54,9 +67,55 @@ export async function runWorkflow({
       status: ComfyJobStatus.Failed,
     };
   }
+
+  createGeneration({
+    jobId: job.task_id,
+    workflowName,
+    status: ComfyJobStatus.Queued,
+  });
+
+  const removeProgressListener = client.on_progress((progress) => {
+    updateGenerationProgress({
+      jobId: job.task_id!,
+      value: progress.value,
+      max: progress.max,
+      node: progress.node,
+    });
+  }, job.task_id);
+
+  const cleanup = () => {
+    removeProgressListener();
+    removeExecutionError();
+    removeExecutionInterrupted();
+    removeExecutionSuccess();
+  };
+
+  const removeExecutionError = client.on("execution_error", (event) => {
+    if (event.prompt_id !== job.task_id) return;
+    markGenerationFailed(job.task_id!, event.exception_message);
+    cleanup();
+  });
+
+  const removeExecutionInterrupted = client.on("execution_interrupted", (event) => {
+    if (event.prompt_id !== job.task_id) return;
+    markGenerationFailed(job.task_id!, "Generation was interrupted");
+    cleanup();
+  });
+
+  const removeExecutionSuccess = client.on("execution_success", (event) => {
+    if (event.prompt_id !== job.task_id) return;
+    cleanup();
+  });
+
   return {
     jobId: job.task_id,
     status: ComfyJobStatus.Queued,
+    progress: {
+      value: null,
+      max: null,
+      percentage: null,
+      node: null,
+    },
   };
 }
 
@@ -70,6 +129,12 @@ export async function getWorkflowStatus(
     return {
       jobId,
       status: ComfyJobStatus.Queued,
+      progress: {
+        value: null,
+        max: null,
+        percentage: null,
+        node: null,
+      },
     };
   }
 
@@ -77,6 +142,12 @@ export async function getWorkflowStatus(
     return {
       jobId,
       status: ComfyJobStatus.Running,
+      progress: {
+        value: null,
+        max: null,
+        percentage: null,
+        node: null,
+      },
     };
   }
 
@@ -98,6 +169,11 @@ export async function getWorkflowStatus(
       mimeType: match[1],
       data: match[2],
     };
+  });
+
+  storeCompletedGeneration({
+    jobId,
+    images,
   });
 
   return {

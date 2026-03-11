@@ -25,9 +25,14 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  min-height: 100dvh;
 }
 
 @media (max-width: 767px) {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
   .aui-thread-root {
     min-width: 0;
   }
@@ -51,5 +56,22 @@ body {
   .aui-assistant-message-content,
   .aui-user-message-content {
     min-width: 0;
+  }
+
+  .aui-composer-root,
+  .aui-edit-composer-root {
+    border-radius: 1rem;
+  }
+
+  .aui-composer-input,
+  .aui-edit-composer-input,
+  .aui-root input,
+  .aui-root textarea {
+    font-size: 16px;
+  }
+
+  .aui-composer-input::placeholder,
+  .aui-edit-composer-input::placeholder {
+    font-size: 16px;
   }
 }
