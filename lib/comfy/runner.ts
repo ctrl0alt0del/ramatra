@@ -15,9 +15,138 @@ const workflows: Record<WorkflowName, (input: WorkflowInput) => Workflow> = {
   quick_chroma: buildQuickChromaWorkflow,
 };
 
-const getProgressPercentage = (value: number | null, max: number | null) => {
-  if (value === null || max === null || max <= 0) return null;
-  return Math.max(0, Math.min(100, Math.round((value / max) * 100)));
+const getNodeProgressRatio = (value: number | null, max: number | null) => {
+  if (value === null || max === null || max <= 0) return 0;
+  return Math.max(0, Math.min(1, value / max));
+};
+
+const isCompletedProgressState = (state: string | null | undefined) => {
+  const normalized = state?.trim().toLowerCase() ?? "";
+  return (
+    normalized.includes("complete") ||
+    normalized.includes("executed") ||
+    normalized.includes("cached") ||
+    normalized.includes("success") ||
+    normalized.includes("done")
+  );
+};
+
+const isActiveProgressState = (state: string | null | undefined) => {
+  const normalized = state?.trim().toLowerCase() ?? "";
+  return (
+    normalized.includes("running") ||
+    normalized.includes("executing") ||
+    normalized.includes("progress")
+  );
+};
+
+const countWorkflowNodes = (workflow: Workflow) => {
+  const definition = workflow.workflow() as {
+    prompt?: Record<string, unknown>;
+  };
+
+  return Object.keys(definition.prompt ?? {}).length;
+};
+
+const getWorkflowProgressPercentage = ({
+  totalNodes,
+  completedNodeCount,
+  currentNodeProgressRatio,
+}: {
+  totalNodes: number;
+  completedNodeCount: number;
+  currentNodeProgressRatio: number;
+}) => {
+  if (totalNodes <= 0) {
+    return null;
+  }
+
+  const rawProgress =
+    ((completedNodeCount + currentNodeProgressRatio) / totalNodes) * 100;
+
+  return Math.max(0, Math.min(100, Math.round(rawProgress)));
+};
+
+const getWorkflowProgressFromProgressState = ({
+  nodes,
+  completedNodes,
+  currentNodeId,
+  totalNodesFallback,
+}: {
+  nodes: Record<
+    string,
+    {
+      value: number;
+      max: number;
+      state: string;
+      node_id: string;
+      display_node_id: string;
+      real_node_id: string;
+    }
+  >;
+  completedNodes: Set<string>;
+  currentNodeId: string | null;
+  totalNodesFallback: number;
+}) => {
+  const nodeEntries = Object.values(nodes);
+  const totalNodes = Math.max(totalNodesFallback, nodeEntries.length);
+  if (totalNodes <= 0) {
+    return {
+      percentage: null,
+      activeNode: null as
+        | {
+            value: number | null;
+            max: number | null;
+            node: string | null;
+            progressRatio: number;
+          }
+        | null,
+    };
+  }
+
+  let completedCount = 0;
+  let activeNode: {
+    value: number | null;
+    max: number | null;
+    node: string | null;
+    progressRatio: number;
+  } | null = null;
+
+  for (const node of nodeEntries) {
+    const nodeId = node.real_node_id || node.node_id;
+    if (completedNodes.has(nodeId) || isCompletedProgressState(node.state)) {
+      completedCount += 1;
+      continue;
+    }
+
+    const progressRatio = getNodeProgressRatio(node.value, node.max);
+    const isActive =
+      currentNodeId === node.display_node_id ||
+      currentNodeId === node.node_id ||
+      currentNodeId === node.real_node_id ||
+      isActiveProgressState(node.state) ||
+      (progressRatio > 0 && progressRatio < 1);
+
+    if (!activeNode && isActive) {
+      activeNode = {
+        value: node.value,
+        max: node.max,
+        node: node.display_node_id || node.node_id || node.real_node_id || null,
+        progressRatio,
+      };
+    }
+  }
+
+  const percentage = getWorkflowProgressPercentage({
+    totalNodes,
+    completedNodeCount: completedCount,
+    currentNodeProgressRatio: activeNode?.progressRatio ?? 0,
+  });
+
+  return {
+    percentage,
+    activeNode,
+  };
 };
 
 const extractImagesFromPromptResult = async (result: Awaited<ReturnType<Client["getPromptResult"]>>) => {
@@ -97,6 +226,7 @@ export async function runWorkflow({
     throw new Error(`Workflow ${workflowName} not found`);
   }
   const workflow = workflowBuilder(input);
+  const workflowNodeTotal = countWorkflowNodes(workflow);
   const job = workflow.instance(client);
   await job.enqueue();
   if (!job.task_id) {
@@ -111,26 +241,135 @@ export async function runWorkflow({
     status: ComfyJobStatus.Queued,
   });
 
-  const removeProgressListener = client.on_progress((progress) => {
+  const completedNodes = new Set<string>();
+  let currentNodeId: string | null = null;
+  let currentNodeProgressRatio = 0;
+  let highestWorkflowPercentage = 0;
+
+  const publishWorkflowProgress = (input: {
+    node: string | null;
+    value: number | null;
+    max: number | null;
+    percentage?: number | null;
+  }) => {
+    const rawWorkflowPercentage =
+      input.percentage ??
+      getWorkflowProgressPercentage({
+        totalNodes: workflowNodeTotal,
+        completedNodeCount: completedNodes.size,
+        currentNodeProgressRatio,
+      });
+    const workflowPercentage =
+      rawWorkflowPercentage === null
+        ? null
+        : Math.max(highestWorkflowPercentage, rawWorkflowPercentage);
+
+    if (workflowPercentage !== null) {
+      highestWorkflowPercentage = workflowPercentage;
+    }
+
     updateGenerationProgress({
       jobId: job.task_id!,
-      value: progress.value,
-      max: progress.max,
-      node: progress.node,
+      value: input.value,
+      max: input.max,
+      node: input.node,
     });
     updateComfyTaskForJob(job.task_id!, {
       status: ComfyJobStatus.Running,
       progress: {
-        value: progress.value,
-        max: progress.max,
-        percentage: getProgressPercentage(progress.value, progress.max),
-        node: progress.node ?? null,
+        value: input.value,
+        max: input.max,
+        percentage: workflowPercentage,
+        node: input.node,
       },
+    });
+  };
+
+  const removeProgressListener = client.on_progress((progress) => {
+    currentNodeId = progress.node ?? null;
+    currentNodeProgressRatio = getNodeProgressRatio(progress.value, progress.max);
+    publishWorkflowProgress({
+      node: progress.node ?? null,
+      value: progress.value,
+      max: progress.max,
     });
   }, job.task_id);
 
+  const removeProgressStateListener = client.on("progress_state", (event) => {
+    if (event.prompt_id !== job.task_id) return;
+
+    const progressState = getWorkflowProgressFromProgressState({
+      nodes: event.nodes,
+      completedNodes,
+      currentNodeId,
+      totalNodesFallback: workflowNodeTotal,
+    });
+
+    currentNodeProgressRatio = progressState.activeNode?.progressRatio ?? 0;
+    if (progressState.activeNode?.node) {
+      currentNodeId = progressState.activeNode.node;
+    }
+
+    publishWorkflowProgress({
+      node: progressState.activeNode?.node ?? currentNodeId,
+      value: progressState.activeNode?.value ?? null,
+      max: progressState.activeNode?.max ?? null,
+      percentage: progressState.percentage,
+    });
+  });
+
+  const removeExecutingListener = client.on("executing", (event) => {
+    if (event.prompt_id !== job.task_id) return;
+
+    if (currentNodeId && event.node && currentNodeId !== event.node) {
+      completedNodes.add(currentNodeId);
+    }
+
+    currentNodeId = event.node ?? null;
+    currentNodeProgressRatio = 0;
+    publishWorkflowProgress({
+      node: event.node ?? null,
+      value: null,
+      max: null,
+    });
+  });
+
+  const markNodeCompleted = (nodeId: string | null | undefined) => {
+    if (!nodeId) return;
+    completedNodes.add(nodeId);
+    if (currentNodeId === nodeId) {
+      currentNodeProgressRatio = 0;
+    }
+  };
+
+  const removeExecutedListener = client.on("executed", (event) => {
+    if (event.prompt_id !== job.task_id) return;
+    markNodeCompleted(event.node);
+    publishWorkflowProgress({
+      node: currentNodeId === event.node ? null : currentNodeId,
+      value: null,
+      max: null,
+    });
+  });
+
+  const removeExecutionCachedListener = client.on("execution_cached", (event) => {
+    if (event.prompt_id !== job.task_id) return;
+    for (const nodeId of event.nodes) {
+      markNodeCompleted(nodeId);
+    }
+    publishWorkflowProgress({
+      node: currentNodeId,
+      value: null,
+      max: null,
+    });
+  });
+
   const cleanup = () => {
     removeProgressListener();
+    removeProgressStateListener();
+    removeExecutingListener();
+    removeExecutedListener();
+    removeExecutionCachedListener();
     removeExecutionError();
     removeExecutionInterrupted();
     removeExecutionSuccess();
@@ -171,6 +410,7 @@ export async function runWorkflow({
         workflowName,
         images,
       });
+      highestWorkflowPercentage = 100;
       updateComfyTaskForJob(job.task_id!, {
         status: ComfyJobStatus.Completed,
       });

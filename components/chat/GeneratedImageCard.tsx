@@ -137,49 +137,36 @@ export function GeneratedImageCard({
             <div className="relative aspect-square w-full overflow-hidden bg-[hsl(var(--aui-background))]">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,hsl(var(--aui-border)/0.22),transparent_48%),radial-gradient(circle_at_bottom_right,hsl(var(--aui-border)/0.18),transparent_42%)]" />
               <div className="absolute inset-0 p-4 sm:p-5">
-                <div className="grid h-full gap-3">
-                  <SkeletonBlock className="h-8 w-28 rounded-full" />
-                  <div className="grid flex-1 gap-3 md:grid-cols-[1.2fr_0.8fr]">
-                    <SkeletonBlock className="h-full min-h-48 rounded-2xl" />
-                    <div className="grid gap-3">
-                      <SkeletonBlock className="h-10 w-full" />
-                      <SkeletonBlock className="h-10 w-4/5" />
-                      <SkeletonBlock className="h-10 w-3/5" />
-                      <SkeletonBlock className="h-full min-h-24 rounded-xl" />
-                    </div>
-                  </div>
-                </div>
+                <SkeletonBlock className="h-full w-full rounded-[28px]" />
               </div>
             </div>
-            <div className="space-y-2 border-t border-[hsl(var(--aui-border))] p-4">
+            <div className="h-1.5 w-full bg-[hsl(var(--aui-border))/0.45]">
+              <div
+                className="h-full bg-[linear-gradient(90deg,#7f74ff_0%,#b7adff_100%)] transition-[width] duration-500 ease-out"
+                style={{
+                  width:
+                    hasResolvedInitialFetch &&
+                    result.progress?.percentage !== null &&
+                    result.progress?.percentage !== undefined
+                      ? `${result.progress.percentage}%`
+                      : "8%",
+                }}
+              />
+            </div>
+            <div className="border-t border-[hsl(var(--aui-border))] p-4">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-medium">
                   {hasResolvedInitialFetch ? "Generating image" : "Loading image"}
                 </p>
                 <span className="rounded-full border border-[hsl(var(--aui-border))] px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-[hsl(var(--aui-muted-foreground))]">
-                  {hasResolvedInitialFetch ? result.status : "loading"}
+                  {hasResolvedInitialFetch
+                    ? result.progress?.percentage !== null &&
+                      result.progress?.percentage !== undefined
+                      ? `${result.progress.percentage}%`
+                      : result.status
+                    : "loading"}
                 </span>
               </div>
-              <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
-                {!hasResolvedInitialFetch
-                  ? "Loading the latest saved result for this generation."
-                  : result.progress?.percentage !== null &&
-                      result.progress?.percentage !== undefined
-                    ? `Processing ${result.progress.percentage}% complete${
-                        result.progress.node
-                          ? ` on node ${result.progress.node}`
-                          : ""
-                      }.`
-                    : "Preparing the ComfyUI job and waiting for the final render."}
-              </p>
-              <p className="truncate text-xs text-[hsl(var(--aui-muted-foreground))]">
-                Task <code>{taskId}</code>
-                {result.jobId ? (
-                  <>
-                    {" "}· Job <code>{result.jobId}</code>
-                  </>
-                ) : null}
-              </p>
             </div>
           </div>
         )}
@@ -189,14 +176,6 @@ export function GeneratedImageCard({
           <p className="text-sm font-medium">Generation failed</p>
           <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
             {result.error ?? "ComfyUI did not return an image."}
-          </p>
-          <p className="truncate text-xs text-[hsl(var(--aui-muted-foreground))]">
-            Task <code>{taskId}</code>
-            {result.jobId ? (
-              <>
-                {" "}· Job <code>{result.jobId}</code>
-              </>
-            ) : null}
           </p>
         </div>
       )}
