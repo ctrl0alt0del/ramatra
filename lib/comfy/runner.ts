@@ -5,6 +5,7 @@ import {
   storeCompletedGeneration,
   updateGenerationProgress,
 } from "./generations";
+import { updateComfyTaskForJob } from "@/lib/tasks/scheduler";
 import { buildBaseWorkflow } from "./workflows/base";
 import { buildQuickChromaWorkflow } from "./workflows/quickChroma";
 import { type WorkflowInput, type WorkflowName } from "./workflows/types";
@@ -12,6 +13,27 @@ import { type WorkflowInput, type WorkflowName } from "./workflows/types";
 const workflows: Record<WorkflowName, (input: WorkflowInput) => Workflow> = {
   base: buildBaseWorkflow,
   quick_chroma: buildQuickChromaWorkflow,
+};
+
+const getProgressPercentage = (value: number | null, max: number | null) => {
+  if (value === null || max === null || max <= 0) return null;
+  return Math.max(0, Math.min(100, Math.round((value / max) * 100)));
+};
+
+const extractImagesFromPromptResult = async (result: Awaited<ReturnType<Client["getPromptResult"]>>) => {
+  const base64Urls = await outToB64Urls(result);
+
+  return base64Urls.map((dataUrl) => {
+    const match = dataUrl.match(/^data:(.+);base64,(.+)$/);
+    if (!match) {
+      throw new Error("Invalid data URL");
+    }
+
+    return {
+      mimeType: match[1],
+      data: match[2],
+    };
+  });
 };
 
 export enum ComfyJobStatus {
@@ -82,6 +104,15 @@ export async function runWorkflow({
       max: progress.max,
       node: progress.node,
     });
+    updateComfyTaskForJob(job.task_id!, {
+      status: ComfyJobStatus.Running,
+      progress: {
+        value: progress.value,
+        max: progress.max,
+        percentage: getProgressPercentage(progress.value, progress.max),
+        node: progress.node ?? null,
+      },
+    });
   }, job.task_id);
 
   const cleanup = () => {
@@ -94,6 +125,10 @@ export async function runWorkflow({
   const removeExecutionError = client.on("execution_error", (event) => {
     if (event.prompt_id !== job.task_id) return;
     markGenerationFailed(job.task_id!, event.exception_message);
+    updateComfyTaskForJob(job.task_id!, {
+      status: ComfyJobStatus.Failed,
+      error: event.exception_message,
+    });
     cleanup();
   });
 
@@ -102,12 +137,38 @@ export async function runWorkflow({
     (event) => {
       if (event.prompt_id !== job.task_id) return;
       markGenerationFailed(job.task_id!, "Generation was interrupted");
+      updateComfyTaskForJob(job.task_id!, {
+        status: ComfyJobStatus.Failed,
+        error: "Generation was interrupted",
+      });
       cleanup();
     },
   );
 
-  const removeExecutionSuccess = client.on("execution_success", (event) => {
+  const removeExecutionSuccess = client.on("execution_success", async (event) => {
     if (event.prompt_id !== job.task_id) return;
+    try {
+      const result = await client.getPromptResult(job.task_id!);
+      const images = await extractImagesFromPromptResult(result);
+      storeCompletedGeneration({
+        jobId: job.task_id!,
+        workflowName,
+        images,
+      });
+      updateComfyTaskForJob(job.task_id!, {
+        status: ComfyJobStatus.Completed,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to store completed generation";
+      markGenerationFailed(job.task_id!, message);
+      updateComfyTaskForJob(job.task_id!, {
+        status: ComfyJobStatus.Failed,
+        error: message,
+      });
+    }
     cleanup();
   });
 
@@ -161,23 +222,14 @@ export async function getWorkflowStatus(
     };
   }
   const result = await client.getPromptResult(jobId);
-  const base64Urls = await outToB64Urls(result);
-
-  const images = base64Urls.map((dataUrl) => {
-    const match = dataUrl.match(/^data:(.+);base64,(.+)$/);
-    if (!match) {
-      throw new Error("Invalid data URL");
-    }
-
-    return {
-      mimeType: match[1],
-      data: match[2],
-    };
-  });
+  const images = await extractImagesFromPromptResult(result);
 
   storeCompletedGeneration({
     jobId,
     images,
+  });
+  updateComfyTaskForJob(jobId, {
+    status: ComfyJobStatus.Completed,
   });
 
   return {

@@ -12,6 +12,18 @@ type CompletedImage = {
 
 type GenerationResponse =
   | {
+      taskId: string;
+      jobId: string | null;
+      status: "queued" | "running";
+      progress?: {
+        value: number | null;
+        max: number | null;
+        percentage: number | null;
+        node: string | null;
+      };
+    }
+  | {
+      taskId: string;
       jobId: string;
       status: "queued" | "running";
       progress?: {
@@ -21,8 +33,13 @@ type GenerationResponse =
         node: string | null;
       };
     }
-  | { jobId: string; status: "failed"; error?: string }
-  | { jobId: string; status: "completed"; images: CompletedImage[] };
+  | { taskId: string; jobId: string | null; status: "failed"; error?: string }
+  | {
+      taskId: string;
+      jobId: string | null;
+      status: "completed";
+      images: CompletedImage[];
+    };
 
 export function GeneratedImageCard({
   jobId: _dirtyJobId,
@@ -31,57 +48,49 @@ export function GeneratedImageCard({
   jobId: string;
   initialStatus: "queued" | "running";
 }>) {
+  let taskId = "";
   let jobId = "";
   try {
-    jobId = JSON.parse(_dirtyJobId.replace(/\\/g, "")).jobId;
+    const parsed = JSON.parse(_dirtyJobId.replace(/\\/g, "")) as {
+      taskId?: string;
+      jobId?: string | null;
+    };
+    taskId = parsed.taskId ?? parsed.jobId ?? "";
+    jobId = parsed.jobId ?? "";
   } catch {
+    taskId = _dirtyJobId;
     jobId = _dirtyJobId;
   }
-  const hasValidJobId = jobId.trim().length > 0;
+  const hasValidTaskId = taskId.trim().length > 0;
   const [result, setResult] = useState<GenerationResponse>({
+    taskId,
     jobId,
     status: initialStatus,
   });
   const [hasResolvedInitialFetch, setHasResolvedInitialFetch] = useState(false);
 
   useEffect(() => {
-    if (!hasValidJobId) return;
-    if (result.status === "completed" || result.status === "failed") return;
+    if (!hasValidTaskId) return;
 
     let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let resolvedFirstEvent = false;
+    const eventSource = new EventSource(`/api/comfy/task/${taskId}/events`);
 
-    const poll = async () => {
+    const fallbackFetch = async () => {
       try {
-        const response = await fetch(`/api/comfy/result/${jobId}`);
+        const response = await fetch(`/api/comfy/task/${taskId}`);
         if (!response.ok) {
-          let errorMessage = "Failed to fetch generation result";
-
-          try {
-            const errorData = (await response.json()) as { error?: string };
-            if (typeof errorData.error === "string" && errorData.error.trim()) {
-              errorMessage = errorData.error;
-            }
-          } catch {
-            // Keep the default error message when the response body is not JSON.
-          }
-
-          throw new Error(errorMessage);
+          throw new Error("Failed to fetch generation result");
         }
 
         const data = (await response.json()) as GenerationResponse;
         if (cancelled) return;
-
         setResult(data);
         setHasResolvedInitialFetch(true);
-
-        if (data.status === "queued" || data.status === "running") {
-          timeoutId = window.setTimeout(poll, 2500);
-        }
       } catch (error) {
         if (cancelled) return;
-
         setResult({
+          taskId,
           jobId,
           status: "failed",
           error:
@@ -93,17 +102,40 @@ export function GeneratedImageCard({
       }
     };
 
-    timeoutId = window.setTimeout(poll, 1500);
+    const onTaskEvent = (event: MessageEvent<string>) => {
+      try {
+        const data = JSON.parse(event.data) as GenerationResponse;
+        if (cancelled) return;
+
+        resolvedFirstEvent = true;
+        setResult(data);
+        setHasResolvedInitialFetch(true);
+
+        if (data.status === "completed" || data.status === "failed") {
+          eventSource.close();
+        }
+      } catch {
+        // Ignore malformed events and wait for the next update.
+      }
+    };
+
+    eventSource.addEventListener("task", onTaskEvent);
+    eventSource.onerror = () => {
+      eventSource.close();
+      if (!resolvedFirstEvent) {
+        void fallbackFetch();
+      }
+    };
 
     return () => {
       cancelled = true;
-      if (timeoutId) window.clearTimeout(timeoutId);
+      eventSource.close();
     };
-  }, [hasValidJobId, jobId, result.status]);
+  }, [hasValidTaskId, jobId, taskId]);
 
   return (
     <div className="mt-3 overflow-hidden rounded-2xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-muted))]">
-      {!hasValidJobId && (
+      {!hasValidTaskId && (
         <div className="space-y-2 p-4">
           <p className="text-sm font-medium">Generation failed</p>
           <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
@@ -112,7 +144,7 @@ export function GeneratedImageCard({
         </div>
       )}
 
-      {hasValidJobId &&
+      {hasValidTaskId &&
         (result.status === "queued" || result.status === "running") && (
           <div className="space-y-0">
             <div className="relative aspect-square w-full overflow-hidden bg-[hsl(var(--aui-background))]">
@@ -154,25 +186,35 @@ export function GeneratedImageCard({
                   : "Preparing the ComfyUI job and waiting for the final render."}
               </p>
               <p className="truncate text-xs text-[hsl(var(--aui-muted-foreground))]">
-                Job <code>{jobId}</code>
+                Task <code>{taskId}</code>
+                {result.jobId ? (
+                  <>
+                    {" "}• Job <code>{result.jobId}</code>
+                  </>
+                ) : null}
               </p>
             </div>
           </div>
         )}
 
-      {hasValidJobId && result.status === "failed" && (
+      {hasValidTaskId && result.status === "failed" && (
         <div className="space-y-2 p-4">
           <p className="text-sm font-medium">Generation failed</p>
           <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
             {result.error ?? "ComfyUI did not return an image."}
           </p>
           <p className="truncate text-xs text-[hsl(var(--aui-muted-foreground))]">
-            Job <code>{jobId}</code>
+            Task <code>{taskId}</code>
+            {result.jobId ? (
+              <>
+                {" "}• Job <code>{result.jobId}</code>
+              </>
+            ) : null}
           </p>
         </div>
       )}
 
-      {hasValidJobId && result.status === "completed" && (
+      {hasValidTaskId && result.status === "completed" && (
         <div className="space-y-3 p-4">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm font-medium">Generated image</p>

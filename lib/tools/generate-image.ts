@@ -3,10 +3,15 @@ import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { encodeComfyJobMarker } from "@/components/chat/comfy-marker";
-import { getClient } from "@/lib/comfy/client";
 import { validateRequestedLoras } from "@/lib/comfy/loras";
-import { runWorkflow } from "@/lib/comfy/runner";
 import { workflowNames } from "@/lib/comfy/workflows/types";
+import {
+  enqueueComfyTask,
+} from "@/lib/tasks/scheduler";
+import {
+  ensureComfyQueueListeners,
+  processQueuedComfyTasks,
+} from "@/lib/tasks/comfy-runner";
 
 export const generateImageToolName = "generate_image";
 export const generateImageToolTitle = "Generate Image";
@@ -47,7 +52,8 @@ export type GenerateImageResult =
   | {
       ok: true;
       workflowName: string;
-      jobId: string;
+      taskId: string;
+      jobId: string | null;
       status: "queued" | "running";
       marker: string;
     }
@@ -82,38 +88,32 @@ export const executeGenerateImage = async (
       };
     }
 
-    const result = await runWorkflow({
-      client: await getClient(),
+    const task = enqueueComfyTask({
       workflowName,
-      input: {
-        positivePrompt: prompt,
-        negativePrompt,
-        steps,
-        width,
-        height,
-        cfg,
-        seed,
-        samplerName,
-        scheduler,
-        loras: validatedLoras.resolved,
-      },
+      prompt,
+      negativePrompt,
+      width,
+      height,
+      steps,
+      cfg,
+      seed,
+      samplerName,
+      scheduler,
+      loras: validatedLoras.resolved,
     });
-
-    if (!("jobId" in result)) {
-      return {
-        ok: false,
-        error: "Image generation failed before queueing.",
-      };
-    }
+    ensureComfyQueueListeners();
+    void processQueuedComfyTasks();
 
     return {
       ok: true,
       workflowName,
-      jobId: result.jobId,
-      status: result.status,
+      taskId: task.id,
+      jobId: null,
+      status: "queued",
       marker: encodeComfyJobMarker({
-        jobId: result.jobId,
-        status: result.status,
+        taskId: task.id,
+        jobId: null,
+        status: "queued",
         workflowName,
       }),
     };
@@ -155,7 +155,7 @@ export const createGenerateImageLmStudioTool = (
       onResult?.(result);
 
       if (result.ok) {
-        ctx.status(`Queued ComfyUI job ${result.jobId}`);
+        ctx.status(`Queued image task ${result.taskId}`);
       } else {
         ctx.status("Image generation failed");
       }

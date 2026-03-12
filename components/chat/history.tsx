@@ -4,8 +4,8 @@ import { useMemo } from "react";
 
 import { RuntimeAdapterProvider, useAui } from "@assistant-ui/react";
 
+import { resolveRemoteThreadId } from "./runtime";
 import type {
-  ExportedHistoryItem,
   ThreadApiDetail,
   StoredThreadMessage,
 } from "./types";
@@ -86,11 +86,12 @@ export function PersistedHistoryProvider({
     () => ({
       async load() {
         const { remoteId } = aui.threadListItem().getState();
-        if (!remoteId) {
+        const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
+        if (!resolvedRemoteId || resolvedRemoteId.startsWith("__LOCALID_")) {
           return { messages: [] };
         }
 
-        const response = await fetch(`/api/threads/${remoteId}`);
+        const response = await fetch(`/api/threads/${resolvedRemoteId}`);
 
         if (!response.ok) {
           throw new Error("Failed to load thread history");
@@ -100,37 +101,12 @@ export function PersistedHistoryProvider({
 
         return {
           messages: data.thread.messages.map((storedMessage, index) =>
-            toExportedMessage(remoteId, storedMessage, index),
+            toExportedMessage(resolvedRemoteId, storedMessage, index),
           ),
         };
       },
-      async append(item: ExportedHistoryItem) {
-        const { remoteId } = await aui.threadListItem().initialize();
-        const text = (item.message.content ?? [])
-          .flatMap((part) =>
-            part.type === "text" && typeof part.text === "string"
-              ? [part.text]
-              : [],
-          )
-          .join("\n\n")
-          .trim();
-
-        if (!text) return;
-
-        await fetch(`/api/threads/${remoteId}`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            appendMessages: [
-              {
-                role: item.message.role,
-                content: text,
-              },
-            ],
-          }),
-        });
+      async append() {
+        // Chat persistence is server-owned through /api/chat and the chat runner.
       },
     }),
     [aui],

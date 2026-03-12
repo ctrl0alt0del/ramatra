@@ -2,7 +2,8 @@ export const COMFY_JOB_MARKER_PREFIX = "[[COMFY_JOB:";
 export const COMFY_JOB_MARKER_SUFFIX = "]]";
 
 export type ComfyJobMarker = {
-  jobId: string;
+  taskId: string;
+  jobId?: string | null;
   status: "queued" | "running";
   workflowName: string;
 };
@@ -34,8 +35,11 @@ const isComfyJobMarker = (value: unknown): value is ComfyJobMarker => {
 
   const marker = value as Record<string, unknown>;
   return (
-    typeof marker.jobId === "string" &&
-    marker.jobId.trim().length > 0 &&
+    typeof marker.taskId === "string" &&
+    marker.taskId.trim().length > 0 &&
+    (marker.jobId === undefined ||
+      marker.jobId === null ||
+      (typeof marker.jobId === "string" && marker.jobId.trim().length > 0)) &&
     (marker.status === "queued" || marker.status === "running") &&
     typeof marker.workflowName === "string" &&
     marker.workflowName.trim().length > 0
@@ -84,6 +88,7 @@ export const extractComfyJobMarker = (text: string) => {
     return {
       cleanText,
       marker: {
+        taskId: bareJobId,
         jobId: bareJobId,
         status: "queued",
         workflowName: "quick_chroma",
