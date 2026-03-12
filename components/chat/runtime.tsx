@@ -18,10 +18,6 @@ import { PersistedHistoryProvider } from "./history";
 import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 
 type ThreadListItemRuntime = ReturnType<typeof useThreadListItemRuntime>;
-type TitleRouteResponse = {
-  title?: string;
-  pending?: boolean;
-};
 
 const resolveThreadRemoteId = async (threadListItem: ThreadListItemRuntime) => {
   const { remoteId } = threadListItem.getState();
@@ -38,35 +34,63 @@ const normalizeIncomingTitle = (title: string | undefined) => {
   return normalized ? normalized : null;
 };
 
-const readPersistedThreadTitle = async (remoteId: string) => {
-  const response = await fetch(`/api/threads/${remoteId}`, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const data = (await response.json()) as { thread: ThreadApiDetail };
-  return normalizeIncomingTitle(data.thread.title);
-};
-
-const waitForGeneratedThreadTitle = async (
+const waitForGeneratedThreadTitle = (
   remoteId: string,
   timeoutMs = 45000,
 ) => {
-  const startedAt = Date.now();
+  return new Promise<string | null>((resolve) => {
+    let settled = false;
+    let eventSource: EventSource | null = null;
 
-  while (Date.now() - startedAt < timeoutMs) {
-    const title = await readPersistedThreadTitle(remoteId);
-    if (title && title !== "New Chat") {
-      return title;
-    }
+    const finish = (value: string | null) => {
+      if (settled) {
+        return;
+      }
 
-    await new Promise((resolve) => window.setTimeout(resolve, 300));
-  }
+      settled = true;
+      if (eventSource) {
+        eventSource.close();
+      }
+      resolve(value);
+    };
 
-  return readPersistedThreadTitle(remoteId);
+    const timeoutId = window.setTimeout(() => {
+      finish(null);
+    }, timeoutMs);
+
+    eventSource = new EventSource("/api/threads/events");
+    eventSource.addEventListener("threads", (event: MessageEvent<string>) => {
+      if (settled) {
+        return;
+      }
+
+      const payload = JSON.parse(event.data) as {
+        threads: ThreadApiSummary[];
+      };
+
+      const thread = payload.threads.find((item) => item.id === remoteId);
+      if (!thread) {
+        return;
+      }
+
+      if (!thread.titleGenerated) {
+        return;
+      }
+
+      const normalizedTitle = normalizeIncomingTitle(thread.title);
+      if (!normalizedTitle || normalizedTitle === "New Chat") {
+        return;
+      }
+
+      window.clearTimeout(timeoutId);
+      finish(normalizedTitle);
+    });
+
+    eventSource.onerror = () => {
+      window.clearTimeout(timeoutId);
+      finish(null);
+    };
+  });
 };
 
 function usePersistedChatRuntime(promptMode: PromptMode) {
@@ -431,26 +455,7 @@ export function usePersistedRuntime(promptMode: PromptMode) {
       },
       async generateTitle(remoteId) {
         return createAssistantStream(async (controller) => {
-          let title: string | null = null;
-
-          try {
-            const response = await fetch(`/api/threads/${remoteId}/title`, {
-              method: "POST",
-            });
-
-            if (response.ok || response.status === 202) {
-              const data = (await response.json()) as TitleRouteResponse;
-              const serverTitle = normalizeIncomingTitle(data.title);
-
-              if (!data.pending && serverTitle) {
-                title = serverTitle;
-              } else {
-                title = await waitForGeneratedThreadTitle(remoteId);
-              }
-            }
-          } catch {
-            title = await waitForGeneratedThreadTitle(remoteId);
-          }
+          const title = await waitForGeneratedThreadTitle(remoteId);
 
           controller.appendText(title ?? "New Chat");
           controller.close();

@@ -71,14 +71,24 @@ export const getNextSchedulableTask = () => {
   const chatQueue = listQueuedTasks("chat").filter(
     (task) => task.status === "queued",
   );
-  if (chatQueue.length > 0) {
-    return chatQueue[0];
+  const foregroundChatQueue = chatQueue.filter(
+    (task) => task.payload.kind !== "generate_title",
+  );
+  if (foregroundChatQueue.length > 0) {
+    return foregroundChatQueue[0];
   }
 
   const comfyQueue = listQueuedTasks("comfy").filter(
     (task) => task.status === "queued",
   );
-  return comfyQueue[0] ?? null;
+  if (comfyQueue.length > 0) {
+    return comfyQueue[0];
+  }
+
+  const backgroundTitleQueue = chatQueue.filter(
+    (task) => task.payload.kind === "generate_title",
+  );
+  return backgroundTitleQueue[0] ?? null;
 };
 
 export const markTaskStarted = (taskId: string) => {
@@ -211,6 +221,27 @@ export const getActiveTask = () => {
   const snapshot = getSchedulerSnapshot();
   if (!snapshot.activeTaskId) return null;
   return getTask(snapshot.activeTaskId);
+};
+
+export const hasPendingTitleGenerationTask = (threadId: string) => {
+  const activeTask = getActiveTask();
+  if (
+    activeTask?.type === "chat" &&
+    activeTask.payload.kind === "generate_title" &&
+    activeTask.payload.threadId === threadId
+  ) {
+    return true;
+  }
+
+  const queuedChatTasks = listQueuedTasks("chat").filter(
+    (task) => task.status === "queued",
+  );
+
+  return queuedChatTasks.some(
+    (task) =>
+      task.payload.kind === "generate_title" &&
+      task.payload.threadId === threadId,
+  );
 };
 
 export const canRunComfyQueue = () => {

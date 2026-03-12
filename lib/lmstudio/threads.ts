@@ -8,6 +8,7 @@ import {
 } from "@/lib/chat/message-content";
 import { getDb } from "@/lib/db";
 import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
+import { publishThreadChanged } from "@/lib/threads/event-bus";
 
 export type ThreadMessage = {
   role: Exclude<ChatMessageRoleData, "tool">;
@@ -17,6 +18,7 @@ export type ThreadMessage = {
 export type ThreadSummary = {
   id: string;
   title: string;
+  titleGenerated: boolean;
   status: "regular" | "archived";
   lmstudioResponseId: string | null;
   lmstudioModelInstanceId: string | null;
@@ -36,6 +38,7 @@ export type ThreadDetail = ThreadSummary & {
 type ThreadRow = {
   id: string;
   title: string;
+  title_generated: number;
   status: ThreadSummary["status"];
   lmstudio_response_id: string | null;
   lmstudio_model_instance_id: string | null;
@@ -55,6 +58,29 @@ type MessageRow = {
 
 const db = getDb();
 
+export const isPlaceholderThreadTitle = (title: string | null | undefined) => {
+  const normalized = title?.trim().toLowerCase() ?? "";
+  return normalized.length === 0 || normalized === "new chat";
+};
+
+const toThreadSummary = (thread: ThreadDetail): ThreadSummary => {
+  return {
+    id: thread.id,
+    title: thread.title,
+    titleGenerated: thread.titleGenerated,
+    status: thread.status,
+    lmstudioResponseId: thread.lmstudioResponseId,
+    lmstudioModelInstanceId: thread.lmstudioModelInstanceId,
+    lastPromptMode: thread.lastPromptMode,
+    conversationSummary: thread.conversationSummary,
+    summaryUpdatedAt: thread.summaryUpdatedAt,
+    summaryMessageCount: thread.summaryMessageCount,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    messageCount: thread.messageCount,
+  };
+};
+
 const deriveTitle = (messages: ThreadMessage[]) => {
   const firstUserMessage = messages.find((message) => message.role === "user");
   const source = firstUserMessage
@@ -70,6 +96,7 @@ export const listThreads = (): ThreadSummary[] => {
         SELECT
           t.id,
           t.title,
+          t.title_generated,
           t.status,
           t.lmstudio_response_id,
           t.lmstudio_model_instance_id,
@@ -91,6 +118,7 @@ export const listThreads = (): ThreadSummary[] => {
   return rows.map((row) => ({
     id: row.id,
     title: row.title,
+    titleGenerated: row.title_generated !== 0,
     status: row.status,
     lmstudioResponseId: row.lmstudio_response_id,
     lmstudioModelInstanceId: row.lmstudio_model_instance_id,
@@ -106,6 +134,7 @@ export const listThreads = (): ThreadSummary[] => {
 
 export const createThread = (input?: {
   title?: string;
+  titleGenerated?: boolean;
   status?: ThreadSummary["status"];
   lmstudioResponseId?: string | null;
   lmstudioModelInstanceId?: string | null;
@@ -119,6 +148,8 @@ export const createThread = (input?: {
   const threadId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const title = input?.title?.trim() || deriveTitle(messages);
+  const titleGenerated =
+    input?.titleGenerated ?? !isPlaceholderThreadTitle(title);
   const status = input?.status ?? "regular";
   const lmstudioResponseId = input?.lmstudioResponseId ?? null;
   const lmstudioModelInstanceId = input?.lmstudioModelInstanceId ?? null;
@@ -133,6 +164,7 @@ export const createThread = (input?: {
         INSERT INTO threads (
           id,
           title,
+          title_generated,
           status,
           lmstudio_response_id,
           lmstudio_model_instance_id,
@@ -143,11 +175,12 @@ export const createThread = (input?: {
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       threadId,
       title,
+      titleGenerated ? 1 : 0,
       status,
       lmstudioResponseId,
       lmstudioModelInstanceId,
@@ -179,7 +212,13 @@ export const createThread = (input?: {
   });
 
   insert();
-  return getThread(threadId)!;
+  const createdThread = getThread(threadId)!;
+  publishThreadChanged({
+    change: "created",
+    threadId,
+    thread: toThreadSummary(createdThread),
+  });
+  return createdThread;
 };
 
 export const getThread = (threadId: string) => {
@@ -189,6 +228,7 @@ export const getThread = (threadId: string) => {
         SELECT
           t.id,
           t.title,
+          t.title_generated,
           t.status,
           t.lmstudio_response_id,
           t.lmstudio_model_instance_id,
@@ -223,6 +263,7 @@ export const getThread = (threadId: string) => {
   return {
     id: thread.id,
     title: thread.title,
+    titleGenerated: thread.title_generated !== 0,
     status: thread.status,
     lmstudioResponseId: thread.lmstudio_response_id,
     lmstudioModelInstanceId: thread.lmstudio_model_instance_id,
@@ -244,6 +285,7 @@ export const updateThread = (
   threadId: string,
   input: {
     title?: string;
+    titleGenerated?: boolean;
     status?: ThreadSummary["status"];
     lmstudioResponseId?: string | null;
     lmstudioModelInstanceId?: string | null;
@@ -266,6 +308,12 @@ export const updateThread = (
     input.title !== undefined
       ? input.title.trim() || deriveTitle(nextMessages)
       : existing.title || deriveTitle(nextMessages);
+  const nextTitleGenerated =
+    input.titleGenerated !== undefined
+      ? input.titleGenerated
+      : input.title !== undefined
+        ? !isPlaceholderThreadTitle(nextTitle)
+        : existing.titleGenerated;
   const nextStatus = input.status ?? existing.status;
   const nextLmstudioResponseId =
     input.lmstudioResponseId !== undefined
@@ -300,6 +348,7 @@ export const updateThread = (
         UPDATE threads
         SET
           title = ?,
+          title_generated = ?,
           status = ?,
           lmstudio_response_id = ?,
           lmstudio_model_instance_id = ?,
@@ -312,6 +361,7 @@ export const updateThread = (
       `,
     ).run(
       nextTitle,
+      nextTitleGenerated ? 1 : 0,
       nextStatus,
       nextLmstudioResponseId,
       nextLmstudioModelInstanceId,
@@ -376,10 +426,28 @@ export const updateThread = (
   });
 
   update();
-  return getThread(threadId);
+  const updatedThread = getThread(threadId);
+  if (updatedThread) {
+    publishThreadChanged({
+      change: "updated",
+      threadId,
+      thread: toThreadSummary(updatedThread),
+    });
+  }
+  return updatedThread;
 };
 
 export const deleteThread = (threadId: string) => {
+  const existing = getThread(threadId);
   const result = db.prepare(`DELETE FROM threads WHERE id = ?`).run(threadId);
-  return result.changes > 0;
+  if (result.changes > 0) {
+    publishThreadChanged({
+      change: "deleted",
+      threadId,
+      thread: existing ? toThreadSummary(existing) : null,
+    });
+    return true;
+  }
+
+  return false;
 };

@@ -27,6 +27,7 @@ const messageSchema = z.object({
 
 const updateThreadSchema = z.object({
   title: z.string().optional(),
+  titleGenerated: z.boolean().optional(),
   status: z.enum(["regular", "archived"]).optional(),
   lmstudioResponseId: z.string().nullable().optional(),
   lastPromptMode: z.enum(["fast", "regular", "writer", "artist"]).nullable().optional(),

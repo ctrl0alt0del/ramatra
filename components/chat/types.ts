@@ -8,6 +8,7 @@ export type StoredThreadMessage = {
 export type ThreadApiSummary = {
   id: string;
   title: string;
+  titleGenerated: boolean;
   status: "regular" | "archived";
   lmstudioResponseId: string | null;
   lmstudioModelInstanceId: string | null;

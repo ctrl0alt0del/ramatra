@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 
-import { getThread } from "@/lib/lmstudio/threads";
+import { getThread, isPlaceholderThreadTitle } from "@/lib/lmstudio/threads";
 import { processTaskQueues } from "@/lib/tasks/processor";
-import { enqueueChatTask } from "@/lib/tasks/scheduler";
+import {
+  enqueueChatTask,
+  hasPendingTitleGenerationTask,
+} from "@/lib/tasks/scheduler";
 import { getTask } from "@/lib/tasks/store";
 
 type RouteContext = {
@@ -41,6 +44,23 @@ export async function POST(_req: Request, context: RouteContext) {
 
   if (!thread) {
     return NextResponse.json({ error: "Thread not found" }, { status: 404 });
+  }
+
+  if (thread.titleGenerated && !isPlaceholderThreadTitle(thread.title)) {
+    return NextResponse.json({
+      title: thread.title,
+      pending: false,
+    });
+  }
+
+  if (hasPendingTitleGenerationTask(threadId)) {
+    return NextResponse.json(
+      {
+        title: thread.title,
+        pending: true,
+      },
+      { status: 202 },
+    );
   }
 
   try {

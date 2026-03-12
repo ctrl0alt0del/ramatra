@@ -8,6 +8,7 @@ import {
   usePromptMode,
 } from "./chat/prompt-mode";
 import { usePersistedRuntime } from "./chat/runtime";
+import { ThreadEventsProvider } from "./chat/thread-events";
 
 function ChatShell() {
   const { mode } = usePromptMode();
@@ -15,7 +16,9 @@ function ChatShell() {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ChatLayout />
+      <ThreadEventsProvider>
+        <ChatLayout />
+      </ThreadEventsProvider>
     </AssistantRuntimeProvider>
   );
 }

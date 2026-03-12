@@ -5,12 +5,17 @@ import { useEffect, useRef, useState } from "react";
 
 import { ThreadListItemPrimitive, useAui } from "@assistant-ui/react";
 
+import { useThreadEvents } from "./thread-events";
+
 export function CustomThreadListItem() {
   const aui = useAui();
+  const { byId } = useThreadEvents();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const { status } = aui.threadListItem().getState();
+  const { remoteId, status, title } = aui.threadListItem().getState();
   const isArchived = status === "archived";
+  const streamedTitle = remoteId ? byId[remoteId]?.title : undefined;
+  const displayTitle = streamedTitle?.trim() || title?.trim() || "New Chat";
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -33,7 +38,7 @@ export function CustomThreadListItem() {
 
       <ThreadListItemPrimitive.Trigger className="min-w-0 flex-1 px-3 py-3 text-left">
         <p className="overflow-hidden whitespace-nowrap text-[15px]  font-medium leading-5 text-[#2a2146] transition-colors [mask-image:linear-gradient(90deg,#000_0%,#000_82%,transparent_100%)] [-webkit-mask-image:linear-gradient(90deg,#000_0%,#000_82%,transparent_100%)] group-data-[active]/thread-item:text-[#1f1838]">
-          <ThreadListItemPrimitive.Title fallback="New Chat" />
+          {displayTitle}
         </p>
       </ThreadListItemPrimitive.Trigger>
 

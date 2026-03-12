@@ -272,33 +272,44 @@ function useSystemMonitor() {
 
   useEffect(() => {
     let cancelled = false;
+    let reconnectId: number | null = null;
+    let source: EventSource | null = null;
 
-    const sync = async () => {
-      try {
-        const response = await fetch("/api/system/monitor", {
-          cache: "no-store",
-        });
-        if (!response.ok) {
-          throw new Error("Failed to fetch system monitor");
-        }
-
-        const nextData = (await response.json()) as MonitorState;
-        if (!cancelled) {
-          setData(nextData);
-        }
-      } catch {
-        if (!cancelled) {
-          setData((previous) => previous);
-        }
+    const connect = () => {
+      if (cancelled) {
+        return;
       }
+
+      source = new EventSource("/api/system/monitor/events");
+      source.addEventListener("monitor", (event: MessageEvent<string>) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextData = JSON.parse(event.data) as MonitorState;
+        setData(nextData);
+      });
+
+      source.onerror = () => {
+        source?.close();
+        source = null;
+
+        if (cancelled) {
+          return;
+        }
+
+        reconnectId = window.setTimeout(connect, 1000);
+      };
     };
 
-    void sync();
-    const intervalId = window.setInterval(sync, 5000);
+    connect();
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      if (reconnectId !== null) {
+        window.clearTimeout(reconnectId);
+      }
+      source?.close();
     };
   }, []);
 

@@ -17,6 +17,7 @@ const ensureSchema = (db: Database.Database) => {
     CREATE TABLE IF NOT EXISTS threads (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
+      title_generated INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'regular' CHECK (status IN ('regular', 'archived')),
       lmstudio_response_id TEXT,
       lmstudio_model_instance_id TEXT,
@@ -124,6 +125,22 @@ const ensureSchema = (db: Database.Database) => {
     db.exec(`
       ALTER TABLE threads
       ADD COLUMN lmstudio_response_id TEXT
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "title_generated")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN title_generated INTEGER NOT NULL DEFAULT 0
+    `);
+    db.exec(`
+      UPDATE threads
+      SET title_generated =
+        CASE
+          WHEN LOWER(TRIM(COALESCE(title, ''))) = 'new chat' OR TRIM(COALESCE(title, '')) = ''
+            THEN 0
+          ELSE 1
+        END
     `);
   }
 

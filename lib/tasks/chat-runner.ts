@@ -15,6 +15,7 @@ import {
 import { generateThreadTitle } from "@/lib/lmstudio/title";
 import {
   getThread,
+  isPlaceholderThreadTitle,
   updateThread,
 } from "@/lib/lmstudio/threads";
 import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
@@ -26,6 +27,8 @@ import {
 } from "@/lib/lmstudio/summaries";
 import { processTaskQueues } from "@/lib/tasks/processor";
 import {
+  enqueueChatTask,
+  hasPendingTitleGenerationTask,
   markTaskCompleted,
   markTaskFailed,
   markTaskStarted,
@@ -472,6 +475,10 @@ export const executeQueuedChatTask = async (taskId: string) => {
       reasoning,
       responseId: finalResponse?.response_id ?? null,
     });
+
+    if (task.payload.kind === "conversation" && task.payload.threadId) {
+      maybeEnqueueTitleGenerationTask(task.payload.threadId);
+    }
   } catch (error) {
     markTaskFailed(
       taskId,
@@ -511,9 +518,19 @@ const executeQueuedTitleTask = async (taskId: string, threadId: string) => {
     throw new Error("Thread not found.");
   }
 
+  if (thread.titleGenerated && !isPlaceholderThreadTitle(thread.title)) {
+    markTaskCompleted(taskId, {
+      title: thread.title,
+    });
+    return;
+  }
+
   const inferredTitle = await generateThreadTitle(thread);
   const nextTitle = inferredTitle || thread.title || "New Chat";
-  const updatedThread = updateThread(threadId, { title: nextTitle });
+  const updatedThread = updateThread(threadId, {
+    title: nextTitle,
+    titleGenerated: !isPlaceholderThreadTitle(nextTitle),
+  });
 
   markTaskCompleted(taskId, {
     title: updatedThread?.title ?? nextTitle,
@@ -644,4 +661,24 @@ const toLmStudioInputItems = (
   }
 
   return items;
+};
+
+const maybeEnqueueTitleGenerationTask = (threadId: string) => {
+  const thread = getThread(threadId);
+  if (!thread) {
+    return;
+  }
+
+  if (thread.titleGenerated && !isPlaceholderThreadTitle(thread.title)) {
+    return;
+  }
+
+  if (hasPendingTitleGenerationTask(threadId)) {
+    return;
+  }
+
+  enqueueChatTask({
+    kind: "generate_title",
+    threadId,
+  });
 };
