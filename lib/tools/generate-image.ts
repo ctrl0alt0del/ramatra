@@ -5,12 +5,12 @@ import { z } from "zod";
 import { encodeComfyJobMarker } from "@/components/chat/comfy-marker";
 import { validateRequestedLoras } from "@/lib/comfy/loras";
 import { workflowNames } from "@/lib/comfy/workflows/types";
+import { processTaskQueues } from "@/lib/tasks/processor";
 import {
   enqueueComfyTask,
 } from "@/lib/tasks/scheduler";
 import {
   ensureComfyQueueListeners,
-  processQueuedComfyTasks,
 } from "@/lib/tasks/comfy-runner";
 
 export const generateImageToolName = "generate_image";
@@ -102,7 +102,7 @@ export const executeGenerateImage = async (
       loras: validatedLoras.resolved,
     });
     ensureComfyQueueListeners();
-    void processQueuedComfyTasks();
+    void processTaskQueues();
 
     return {
       ok: true,

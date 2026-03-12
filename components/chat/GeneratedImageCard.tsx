@@ -24,16 +24,10 @@ type GenerationResponse =
     }
   | {
       taskId: string;
-      jobId: string;
-      status: "queued" | "running";
-      progress?: {
-        value: number | null;
-        max: number | null;
-        percentage: number | null;
-        node: string | null;
-      };
+      jobId: string | null;
+      status: "failed";
+      error?: string;
     }
-  | { taskId: string; jobId: string | null; status: "failed"; error?: string }
   | {
       taskId: string;
       jobId: string | null;
@@ -42,7 +36,7 @@ type GenerationResponse =
     };
 
 export function GeneratedImageCard({
-  jobId: _dirtyJobId,
+  jobId: dirtyJobId,
   initialStatus,
 }: Readonly<{
   jobId: string;
@@ -50,17 +44,19 @@ export function GeneratedImageCard({
 }>) {
   let taskId = "";
   let jobId = "";
+
   try {
-    const parsed = JSON.parse(_dirtyJobId.replace(/\\/g, "")) as {
+    const parsed = JSON.parse(dirtyJobId.replace(/\\/g, "")) as {
       taskId?: string;
       jobId?: string | null;
     };
     taskId = parsed.taskId ?? parsed.jobId ?? "";
-    jobId = parsed.jobId ?? "";
+    jobId = typeof parsed.jobId === "string" ? parsed.jobId : "";
   } catch {
-    taskId = _dirtyJobId;
-    jobId = _dirtyJobId;
+    taskId = dirtyJobId;
+    jobId = dirtyJobId;
   }
+
   const hasValidTaskId = taskId.trim().length > 0;
   const [result, setResult] = useState<GenerationResponse>({
     taskId,
@@ -177,19 +173,19 @@ export function GeneratedImageCard({
                 {!hasResolvedInitialFetch
                   ? "Loading the latest saved result for this generation."
                   : result.progress?.percentage !== null &&
-                result.progress?.percentage !== undefined
-                  ? `Processing ${result.progress.percentage}% complete${
-                      result.progress.node
-                        ? ` on node ${result.progress.node}`
-                        : ""
-                    }.`
-                  : "Preparing the ComfyUI job and waiting for the final render."}
+                      result.progress?.percentage !== undefined
+                    ? `Processing ${result.progress.percentage}% complete${
+                        result.progress.node
+                          ? ` on node ${result.progress.node}`
+                          : ""
+                      }.`
+                    : "Preparing the ComfyUI job and waiting for the final render."}
               </p>
               <p className="truncate text-xs text-[hsl(var(--aui-muted-foreground))]">
                 Task <code>{taskId}</code>
                 {result.jobId ? (
                   <>
-                    {" "}• Job <code>{result.jobId}</code>
+                    {" "}· Job <code>{result.jobId}</code>
                   </>
                 ) : null}
               </p>
@@ -207,7 +203,7 @@ export function GeneratedImageCard({
             Task <code>{taskId}</code>
             {result.jobId ? (
               <>
-                {" "}• Job <code>{result.jobId}</code>
+                {" "}· Job <code>{result.jobId}</code>
               </>
             ) : null}
           </p>
@@ -225,7 +221,7 @@ export function GeneratedImageCard({
           <div className="grid gap-3">
             {result.images.map((image, index) => (
               <Image
-                key={`${jobId}-${index}`}
+                key={`${taskId}-${index}`}
                 src={`data:${image.mimeType};base64,${image.data}`}
                 alt="Generated result"
                 width={1024}

@@ -131,7 +131,6 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
         let lastText = "";
         let lastReasoning = "";
         let done = false;
-        let failure: Error | null = null;
         const queue: Array<{
           content: Array<
             | { type: "text"; text: string }
@@ -151,6 +150,17 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
           queue.push(update);
           notify?.();
           notify = null;
+        };
+
+        const reportFailure = (message: string) => {
+          pushUpdate({
+            content: [
+              {
+                type: "text",
+                text: `Error: ${message}`,
+              },
+            ],
+          });
         };
 
         const markDone = () => {
@@ -174,7 +184,7 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
               };
 
           if (payload.status === "failed") {
-            failure = new Error(payload.error);
+            reportFailure(payload.error);
             markDone();
             return;
           }
@@ -220,7 +230,7 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
         });
 
         eventSource.onerror = () => {
-          failure = new Error("Chat stream connection failed");
+          reportFailure("Chat stream connection failed");
           markDone();
         };
 
@@ -244,10 +254,6 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
           if (nextUpdate) {
             yield nextUpdate;
           }
-        }
-
-        if (failure) {
-          throw failure;
         }
       },
     }),

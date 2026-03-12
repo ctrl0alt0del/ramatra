@@ -333,20 +333,25 @@ export const executeQueuedChatTask = async (taskId: string) => {
       }
     });
 
-    if (!finalResponse?.output?.length) {
+    const text =
+      (finalResponse?.output?.length
+        ? getAssistantText(finalResponse.output)
+        : "") || streamedText;
+    const reasoning =
+      (finalResponse?.output?.length
+        ? getAssistantReasoning(finalResponse.output)
+        : "") || streamedReasoning;
+
+    if (!text.trim() && !reasoning.trim()) {
       throw new Error("LM Studio did not return any output.");
     }
-
-    const text = getAssistantText(finalResponse.output) || streamedText;
-    const reasoning =
-      getAssistantReasoning(finalResponse.output) || streamedReasoning;
 
     if (task.payload.threadId) {
       const latestThread = getThread(task.payload.threadId);
       const lastMessage = latestThread?.messages.at(-1);
 
       updateThread(task.payload.threadId, {
-        lmstudioResponseId: finalResponse.response_id ?? null,
+        lmstudioResponseId: finalResponse?.response_id ?? null,
         lastPromptMode: promptMode,
         appendMessages:
           !lastMessage ||
@@ -365,7 +370,7 @@ export const executeQueuedChatTask = async (taskId: string) => {
     markTaskCompleted(task.id, {
       text,
       reasoning,
-      responseId: finalResponse.response_id ?? null,
+      responseId: finalResponse?.response_id ?? null,
     });
   } catch (error) {
     markTaskFailed(
