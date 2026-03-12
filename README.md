@@ -1,36 +1,347 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Ramatra
 
-## Getting Started
+Local chat + image generation app built on:
 
-First, run the development server:
+- Next.js
+- LM Studio native `/api/v1/chat`
+- ComfyUI
+- MCP integrations
+- SQLite thread persistence
+
+It supports:
+
+- stateful LM Studio chat via `previous_response_id`
+- server-owned thread/message persistence
+- queued chat and image tasks
+- streamed chat responses
+- streamed Comfy progress
+- prompt modes (`Fast`, `Regular`, `Writer`, `Artist`)
+- Comfy image generation through MCP
+- optional web search MCP
+- optional Civitai MCP
+
+## Architecture
+
+Main pieces:
+
+- `app/`
+  Next.js routes and UI
+- `components/chat/`
+  chat UI, runtime wiring, history provider
+- `lib/tasks/`
+  scheduler, task store, runners, GPU manager
+- `lib/comfy/`
+  Comfy client, workflow builders, generation persistence
+- `lib/lmstudio/`
+  prompts, summaries, thread persistence helpers
+- `mcp/comfy/`
+  local MCP server exposing Comfy-related tools
+- `mcp/external/`
+  wrappers for external MCP servers such as web search and Civitai
+
+Execution model:
+
+- chat requests go to `/api/chat`
+- server ensures a thread exists and persists the user message
+- a `chat` task is enqueued
+- the chat runner calls LM Studio and streams SSE updates to the client
+- assistant reply and `lmstudioResponseId` are persisted on the same thread
+- image generation uses queued `comfy` tasks
+- Comfy progress is pushed to the client through SSE
+
+## Required Components
+
+Minimum required services:
+
+1. LM Studio
+2. ComfyUI
+3. This Next.js app
+4. Local Comfy MCP server from this repo
+
+Optional services:
+
+1. Web search MCP
+2. Civitai MCP
+
+## Requirements
+
+- Node.js 20+
+- pnpm
+- LM Studio running locally
+- ComfyUI running locally
+
+Optional:
+
+- local web-search MCP repo with HTTP support
+- local `civitai-mcp-server`
+
+## Installation
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Environment
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Create `.env.local`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Minimum useful configuration:
 
-## Learn More
+```env
+LM_STUDIO_BASE_URL=http://127.0.0.1:1234
+LM_STUDIO_MODEL=your-loaded-model-id
 
-To learn more about Next.js, take a look at the following resources:
+COMFY_BASE_URL=http://127.0.0.1:8188
+COMFY_MCP_PORT=4000
+COMFY_LORA_DIR=E:\path\to\ComfyUI\models\loras
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Optional LM Studio auth:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```env
+LM_STUDIO_TOKEN=
+```
 
-## Deploy on Vercel
+Optional per-mode context lengths:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```env
+LM_STUDIO_CONTEXT_LENGTH_FAST=4096
+LM_STUDIO_CONTEXT_LENGTH_REGULAR=16384
+LM_STUDIO_CONTEXT_LENGTH_ARTIST=16384
+LM_STUDIO_CONTEXT_LENGTH_WRITER=65536
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Optional auto-summary:
+
+```env
+LM_STUDIO_AUTO_SUMMARY=false
+```
+
+Optional web search MCP:
+
+```env
+WEB_SEARCH_MCP_ENABLED=true
+WEB_SEARCH_MCP_URL=http://127.0.0.1:9556/mcp
+WEB_SEARCH_MCP_WORKDIR=E:\development\ai\web-search-mcp
+WEB_SEARCH_MCP_START_CMD=pnpm
+WEB_SEARCH_MCP_START_ARGS=start:http
+```
+
+Optional Civitai MCP:
+
+```env
+CIVITAI_MCP_ENABLED=true
+CIVITAI_MCP_URL=http://127.0.0.1:9557/mcp
+CIVITAI_MCP_WORKDIR=E:\development\ai\civitai-mcp-server
+CIVITAI_MCP_START_CMD=pnpm
+CIVITAI_MCP_START_ARGS=start:http
+CIVITAI_API_KEY=your_civitai_api_key
+```
+
+## Running
+
+Run only the app:
+
+```bash
+pnpm dev
+```
+
+Run app + local MCP wrappers:
+
+```bash
+pnpm run dev:all
+```
+
+Individual MCP processes:
+
+```bash
+pnpm run mcp:comfy
+pnpm run mcp:web-search
+pnpm run mcp:civitai
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+## LM Studio Setup
+
+This app uses LM Studio native REST chat, not the OpenAI-compatible endpoint.
+
+Requirements:
+
+- LM Studio server must be running
+- your chat model must be loaded in LM Studio
+- `LM_STUDIO_BASE_URL` must point at the LM Studio server root
+
+The app calls:
+
+- `/api/v1/chat`
+
+It relies on:
+
+- `previous_response_id`
+- `integrations` for MCP tools
+- SSE chat streaming
+
+## ComfyUI Setup
+
+Requirements:
+
+- ComfyUI must be reachable at `COMFY_BASE_URL`
+- your workflows must exist in the repo under `lib/comfy/workflows/`
+- LoRAs must live in `COMFY_LORA_DIR`
+
+Current workflow support includes:
+
+- `quick_chroma`
+- `base`
+
+The app persists completed generations under:
+
+- `.data/comfy-results/`
+
+and generation metadata in SQLite.
+
+## MCP Setup
+
+### Comfy MCP
+
+Provided by this repo:
+
+- `pnpm run mcp:comfy`
+
+Used by LM Studio through:
+
+- `COMFY_MCP_URL`
+or
+- `COMFY_MCP_PORT`
+
+### Web Search MCP
+
+Managed through:
+
+- `pnpm run mcp:web-search`
+
+This wrapper only starts the external MCP process. You need a separate local repo with HTTP MCP support.
+
+### Civitai MCP
+
+Managed through:
+
+- `pnpm run mcp:civitai`
+
+This wrapper forwards `CIVITAI_API_KEY` to the child process.
+
+## Prompt Modes
+
+Available modes:
+
+- `Fast`
+- `Regular`
+- `Writer`
+- `Artist`
+
+Notes:
+
+- `Fast`, `Regular`, and `Writer` are text-oriented modes
+- `Artist` is image-oriented and uses MCP tools for generation, LoRA listing, and optional Civitai/web search support
+
+## Thread Persistence
+
+Threads are stored in SQLite.
+
+Each thread can store:
+
+- messages
+- `lmstudioResponseId`
+- `lastPromptMode`
+- optional conversation summary state
+
+Important detail:
+
+- thread creation and chat persistence are server-owned through `/api/chat`
+- assistant messages are persisted by the chat runner
+
+## Task System
+
+The app uses a shared task runtime.
+
+Task types:
+
+- `chat`
+- `comfy`
+
+Features:
+
+- queued execution
+- streamed progress updates
+- scheduler-owned GPU mode transitions
+- SSE task event routes
+
+## Useful Routes
+
+Chat:
+
+- `POST /api/chat`
+- `GET /api/chat/task/:taskId/events`
+
+Threads:
+
+- `GET /api/threads`
+- `GET /api/threads/:threadId`
+- `PATCH /api/threads/:threadId`
+- `POST /api/threads/:threadId/collapse-context`
+
+Comfy tasks:
+
+- `GET /api/comfy/task/:taskId`
+- `GET /api/comfy/task/:taskId/events`
+- `GET /api/comfy/result/:jobId`
+
+System:
+
+- `GET /api/system/state`
+- `POST /api/system/unpause`
+
+## Development Notes
+
+- markdown rendering is handled through assistant-ui markdown support
+- chat and image updates are streamed to the UI with SSE
+- summaries are currently intended for manual collapse first; auto-summary can be enabled with env later
+
+## Troubleshooting
+
+If chat responses lose context:
+
+- check `/api/chat` payload includes the expected `threadId`
+- check the thread row in `/api/threads/:threadId`
+- confirm `lmstudioResponseId` is non-null after the first assistant reply
+
+If image progress does not update:
+
+- confirm ComfyUI websocket connectivity
+- confirm `/api/comfy/task/:taskId/events` is streaming
+
+If an external MCP wrapper exits immediately:
+
+- verify the relevant `*_MCP_ENABLED=true`
+- verify `*_MCP_WORKDIR`
+- verify the start command works directly in that external repo
+
+## Scripts
+
+```json
+{
+  "dev": "next dev",
+  "build": "next build",
+  "start": "next start",
+  "lint": "eslint",
+  "mcp:comfy": "tsx mcp/comfy/index.ts",
+  "mcp:web-search": "tsx mcp/external/web-search.ts",
+  "mcp:civitai": "tsx mcp/external/civitai.ts",
+  "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run mcp:web-search\" \"pnpm run mcp:civitai\" \"pnpm run dev\""
+}
+```
