@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { getVramBalancerState } from "@/lib/vram/balancer";
+import { getSchedulerSystemState } from "@/lib/tasks/gpu-manager";
 
 export async function GET() {
-  return NextResponse.json(getVramBalancerState());
+  return NextResponse.json(getSchedulerSystemState());
 }
