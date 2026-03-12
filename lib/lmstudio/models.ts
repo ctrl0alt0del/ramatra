@@ -155,12 +155,33 @@ export const cleanupRedundantLmStudioModels = async ({
   keepSelectors?: string[];
 }) => {
   if (!redundantSelectors.length) {
-    return [];
+    const loadedModels = await listLoadedLmStudioModels();
+    const duplicateActiveInstances = loadedModels.filter(
+      (model) => model.modelKey === activeModelKey,
+    );
+    const toUnload = duplicateActiveInstances.slice(1);
+
+    for (const model of toUnload) {
+      await unloadLmStudioModel(model.instanceId);
+    }
+
+    return toUnload;
   }
 
-  const keepSet = new Set([activeModelKey, ...keepSelectors]);
   const loadedModels = await listLoadedLmStudioModels();
+  const primaryActiveInstanceId =
+    loadedModels.find((model) => model.modelKey === activeModelKey)?.instanceId ??
+    null;
+
   const toUnload = loadedModels.filter((model) => {
+    if (
+      model.modelKey === activeModelKey &&
+      primaryActiveInstanceId &&
+      model.instanceId !== primaryActiveInstanceId
+    ) {
+      return true;
+    }
+
     const isRedundant = redundantSelectors.some(
       (selector) =>
         matchesModelSelector(model.modelKey, selector) ||
@@ -170,18 +191,37 @@ export const cleanupRedundantLmStudioModels = async ({
       return false;
     }
 
-    const isProtected = [...keepSet].some(
-      (selector) =>
-        matchesModelSelector(model.modelKey, selector) ||
-        matchesModelSelector(model.instanceId, selector),
-    );
+    const isProtected =
+      model.instanceId === primaryActiveInstanceId ||
+      keepSelectors.some(
+        (selector) =>
+          matchesModelSelector(model.modelKey, selector) ||
+          matchesModelSelector(model.instanceId, selector),
+      ) ||
+      (!keepSelectors.length &&
+        (matchesModelSelector(model.modelKey, activeModelKey) ||
+          matchesModelSelector(model.instanceId, activeModelKey)));
 
-    return !isProtected;
+    if (isProtected) {
+      return false;
+    }
+
+    const matchesActiveModel =
+      matchesModelSelector(model.modelKey, activeModelKey) ||
+      matchesModelSelector(model.instanceId, activeModelKey);
+
+    return !matchesActiveModel;
   });
 
-  for (const model of toUnload) {
+  const uniqueToUnload = toUnload.filter(
+    (model, index, models) =>
+      models.findIndex((candidate) => candidate.instanceId === model.instanceId) ===
+      index,
+  );
+
+  for (const model of uniqueToUnload) {
     await unloadLmStudioModel(model.instanceId);
   }
 
-  return toUnload;
+  return uniqueToUnload;
 };

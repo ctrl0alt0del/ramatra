@@ -17,7 +17,6 @@ import { PersistedHistoryProvider } from "./history";
 import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 
 const THREAD_ID_MAP_STORAGE_KEY = "comfy-bridge-thread-id-map";
-const PENDING_THREAD_ID_STORAGE_KEY = "comfy-bridge-pending-thread-id";
 
 const readThreadIdMap = () => {
   if (typeof window === "undefined") {
@@ -64,32 +63,11 @@ export const resolveRemoteThreadId = (threadId: string | undefined) => {
 };
 
 export const resolvePersistedThreadId = (threadId: string | undefined) => {
-  return resolveRemoteThreadId(threadId) ?? readPendingThreadId() ?? threadId;
+  return resolveRemoteThreadId(threadId) ?? threadId;
 };
 
 const resolveChatThreadId = (threadId: string | undefined) => {
-  return resolveRemoteThreadId(threadId) ?? readPendingThreadId() ?? undefined;
-};
-
-const readPendingThreadId = () => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  return window.localStorage.getItem(PENDING_THREAD_ID_STORAGE_KEY);
-};
-
-const writePendingThreadId = (threadId: string | null) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  if (threadId === null) {
-    window.localStorage.removeItem(PENDING_THREAD_ID_STORAGE_KEY);
-    return;
-  }
-
-  window.localStorage.setItem(PENDING_THREAD_ID_STORAGE_KEY, threadId);
+  return resolveRemoteThreadId(threadId) ?? undefined;
 };
 
 function usePersistedChatRuntime(promptMode: PromptMode) {
@@ -133,8 +111,6 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
 
         if (unstable_threadId) {
           rememberThreadIdMapping(unstable_threadId, data.threadId);
-        } else {
-          writePendingThreadId(data.threadId);
         }
         const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
         let lastText = "";
@@ -379,16 +355,6 @@ export function usePersistedRuntime(promptMode: PromptMode) {
         if (existingRemoteId) {
           return {
             remoteId: existingRemoteId,
-            externalId: threadId,
-          };
-        }
-
-        const pendingThreadId = readPendingThreadId();
-        if (pendingThreadId) {
-          rememberThreadIdMapping(threadId, pendingThreadId);
-          writePendingThreadId(null);
-          return {
-            remoteId: pendingThreadId,
             externalId: threadId,
           };
         }

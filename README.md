@@ -127,10 +127,11 @@ LM_STUDIO_KEEP_MODELS=
 Notes:
 
 - cleanup runs automatically after every chat task
+- extra loaded instances of `LM_STUDIO_MODEL` are automatically unloaded, so the active chat model is reduced to one instance by default
 - `LM_STUDIO_REDUNDANT_MODELS` is a comma-separated list of model keys or instance ids to unload.
 - `*` wildcards are supported, for example `qwen2.5-vl-*`.
 - `LM_STUDIO_KEEP_MODELS` is a comma-separated allowlist checked before unload.
-- `LM_STUDIO_MODEL` is always protected automatically, so the active chat model stays loaded.
+- one instance of `LM_STUDIO_MODEL` is always protected automatically, so the active chat model stays loaded.
 - for future speculative decoding, keep the draft model out of `LM_STUDIO_REDUNDANT_MODELS` or add it to `LM_STUDIO_KEEP_MODELS`.
 
 Optional web search MCP:

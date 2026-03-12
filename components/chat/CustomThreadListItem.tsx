@@ -28,8 +28,8 @@ export function CustomThreadListItem() {
   }, [menuOpen]);
 
   return (
-    <ThreadListItemPrimitive.Root className="group/thread-item relative flex items-center gap-2 overflow-hidden rounded-[10px] border border-transparent bg-transparent pl-4 pr-1 transition hover:border-white/50 hover:bg-[rgba(255,255,255,0.42)] data-[active]:border-[rgba(139,124,255,0.22)] data-[active]:bg-[linear-gradient(90deg,rgba(127,116,255,0.24)_0%,rgba(183,173,255,0.16)_36%,rgba(255,255,255,0.12)_100%)]">
-      <div className="pointer-events-none absolute inset-y-0 left-0 w-[3px] bg-[linear-gradient(180deg,#7f74ff_0%,#b7adff_100%)] opacity-0 transition-opacity duration-200 group-data-[active]/thread-item:opacity-100" />
+    <ThreadListItemPrimitive.Root className="group/thread-item relative flex items-center gap-2 overflow-visible rounded-[10px] border border-transparent bg-transparent pl-4 pr-1 transition hover:border-white/50 hover:bg-[rgba(255,255,255,0.42)] data-[active]:border-[rgba(139,124,255,0.22)] data-[active]:bg-[linear-gradient(90deg,rgba(127,116,255,0.24)_0%,rgba(183,173,255,0.16)_36%,rgba(255,255,255,0.12)_100%)]">
+      <div className="pointer-events-none absolute inset-y-0 left-0 w-[3px] rounded-l-[10px] bg-[linear-gradient(180deg,#7f74ff_0%,#b7adff_100%)] opacity-0 transition-opacity duration-200 group-data-[active]/thread-item:opacity-100" />
 
       <ThreadListItemPrimitive.Trigger className="min-w-0 flex-1 px-3 py-3 text-left">
         <p className="overflow-hidden whitespace-nowrap text-[15px]  font-medium leading-5 text-[#2a2146] transition-colors [mask-image:linear-gradient(90deg,#000_0%,#000_82%,transparent_100%)] [-webkit-mask-image:linear-gradient(90deg,#000_0%,#000_82%,transparent_100%)] group-data-[active]/thread-item:text-[#1f1838]">
@@ -37,10 +37,18 @@ export function CustomThreadListItem() {
         </p>
       </ThreadListItemPrimitive.Trigger>
 
-      <div ref={menuRef} className="relative shrink-0">
+      <div ref={menuRef} className="relative z-10 shrink-0">
         <button
           type="button"
-          onClick={() => setMenuOpen((open) => !open)}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setMenuOpen((open) => !open);
+          }}
           className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[hsl(var(--aui-muted-foreground))] transition hover:bg-white/70 hover:text-[hsl(var(--aui-foreground))]"
           aria-label="Thread actions"
         >
@@ -48,7 +56,15 @@ export function CustomThreadListItem() {
         </button>
 
         {menuOpen ? (
-          <div className="absolute right-0 top-11 z-20 min-w-44 overflow-hidden rounded-[18px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(245,240,255,0.96)_100%)] p-1.5 shadow-[0_24px_60px_rgba(37,28,86,0.2)]">
+          <div
+            className="absolute right-1 top-[calc(100%+0.45rem)] z-30 w-56 overflow-hidden rounded-[16px] border border-[rgba(139,124,255,0.16)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(246,241,255,0.98)_100%)] p-2 shadow-[0_18px_40px_rgba(37,28,86,0.18)] backdrop-blur-xl"
+            onPointerDown={(event) => {
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+            }}
+          >
             {isArchived ? (
               <ThreadListItemPrimitive.Unarchive
                 asChild
@@ -58,7 +74,7 @@ export function CustomThreadListItem() {
               >
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left text-sm transition hover:bg-white/80"
+                  className="flex w-full items-center gap-3 rounded-[12px] px-3.5 py-3 text-left text-[13px] font-medium text-[#2a2146] transition hover:bg-white/82"
                 >
                   <RotateCcw className="h-4 w-4" />
                   Unarchive
@@ -73,7 +89,7 @@ export function CustomThreadListItem() {
               >
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left text-sm transition hover:bg-white/80"
+                  className="flex w-full items-center gap-3 rounded-[12px] px-3.5 py-3 text-left text-[13px] font-medium text-[#2a2146] transition hover:bg-white/82"
                 >
                   <Archive className="h-4 w-4" />
                   Archive
@@ -89,10 +105,10 @@ export function CustomThreadListItem() {
             >
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left text-sm text-red-600 transition hover:bg-red-50"
+                className="flex w-full items-center gap-3 rounded-[12px] px-3.5 py-3 text-left text-[13px] font-medium text-[#c64f63] transition hover:bg-[#fff1f3]"
               >
                 <Trash2 className="h-4 w-4" />
-                Delete Permanently
+                Delete
               </button>
             </ThreadListItemPrimitive.Delete>
           </div>
