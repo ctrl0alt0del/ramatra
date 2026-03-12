@@ -1,5 +1,6 @@
 import { getClient } from "@/lib/comfy/client";
 import {
+  getLoadedChatInstanceId,
   loadLmStudioModel,
   unloadAllLmStudioModels,
 } from "@/lib/lmstudio/models";
@@ -36,6 +37,18 @@ const runTransition = async (task: () => Promise<void>) => {
   }
 };
 
+const ensureChatModelLoaded = async () => {
+  const modelKey = getChatModelKey();
+  const loadedInstanceId = await getLoadedChatInstanceId(modelKey);
+
+  if (loadedInstanceId) {
+    return loadedInstanceId;
+  }
+
+  await loadLmStudioModel(modelKey);
+  return getLoadedChatInstanceId(modelKey);
+};
+
 export const switchToComfyGpuMode = async () => {
   try {
     await runTransition(async () => {
@@ -67,7 +80,7 @@ export const switchToChatGpuMode = async () => {
         free_memory: true,
       });
 
-      await loadLmStudioModel(getChatModelKey());
+      await ensureChatModelLoaded();
       setSchedulerGpuMode("chat");
     });
   } catch (error) {
@@ -104,7 +117,7 @@ export const forceResumeChatGpuMode = async () => {
       });
 
       resetTaskStore();
-      await loadLmStudioModel(getChatModelKey());
+      await ensureChatModelLoaded();
       setSchedulerGpuMode("chat");
     });
   } catch (error) {
