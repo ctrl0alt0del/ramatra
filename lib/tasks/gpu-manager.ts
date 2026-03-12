@@ -1,9 +1,13 @@
 import { getClient } from "@/lib/comfy/client";
 import {
+  ensureLmStudioModelLoaded,
+  formatLoadedLmStudioModelsForDebug,
   getLoadedChatInstanceId,
-  loadLmStudioModel,
+  listLoadedLmStudioModels,
   unloadAllLmStudioModels,
 } from "@/lib/lmstudio/models";
+import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
+import { defaultPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { getActiveTask, getSchedulerState, setSchedulerGpuMode } from "@/lib/tasks/scheduler";
 import {
   getSchedulerLastError,
@@ -23,6 +27,17 @@ const getChatModelKey = () => {
   return modelKey;
 };
 
+const isLmStudioModelDebugEnabled = () =>
+  process.env.LM_STUDIO_DEBUG_MODEL_ROUTING === "true";
+
+const logGpuModelDebug = (phase: string, payload: Record<string, unknown>) => {
+  if (!isLmStudioModelDebugEnabled()) {
+    return;
+  }
+
+  console.info(`[gpu-manager] ${phase}`, payload);
+};
+
 const runTransition = async (task: () => Promise<void>) => {
   const previous = globalThis.__comfyBridgeGpuTransitionPromise ?? Promise.resolve();
   const next = previous.then(task, task);
@@ -39,14 +54,36 @@ const runTransition = async (task: () => Promise<void>) => {
 
 const ensureChatModelLoaded = async () => {
   const modelKey = getChatModelKey();
+  const before = await listLoadedLmStudioModels();
   const loadedInstanceId = await getLoadedChatInstanceId(modelKey);
+
+  logGpuModelDebug("ensure-chat-model-loaded:check", {
+    modelKey,
+    loadedInstanceId,
+    loadedModels: formatLoadedLmStudioModelsForDebug(before),
+  });
 
   if (loadedInstanceId) {
     return loadedInstanceId;
   }
 
-  await loadLmStudioModel(modelKey);
-  return getLoadedChatInstanceId(modelKey);
+  const loadedModel = await ensureLmStudioModelLoaded({
+    modelKey,
+    contextLength: getConfiguredContextLengthForMode(
+      defaultPromptMode,
+      process.env,
+    ),
+  });
+  const after = await listLoadedLmStudioModels();
+  const nextLoadedInstanceId = loadedModel.instanceId;
+
+  logGpuModelDebug("ensure-chat-model-loaded:loaded", {
+    modelKey,
+    loadedInstanceId: nextLoadedInstanceId,
+    loadedModels: formatLoadedLmStudioModelsForDebug(after),
+  });
+
+  return nextLoadedInstanceId;
 };
 
 export const switchToComfyGpuMode = async () => {

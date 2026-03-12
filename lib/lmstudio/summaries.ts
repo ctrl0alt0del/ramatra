@@ -1,6 +1,7 @@
 import "server-only";
 
 import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
+import { resolvePreferredLmStudioModelTarget } from "@/lib/lmstudio/models";
 import { type ThreadDetail, type ThreadMessage } from "@/lib/lmstudio/threads";
 
 import { type PromptMode } from "./prompt-modes";
@@ -161,10 +162,12 @@ export const shouldRefreshConversationSummary = (
 
 export const generateConversationSummary = async ({
   mode,
+  modelInstanceId,
   previousSummary,
   messages,
 }: {
   mode: PromptMode;
+  modelInstanceId?: string | null;
   previousSummary: string | null;
   messages: ThreadMessage[];
 }) => {
@@ -187,7 +190,10 @@ export const generateConversationSummary = async ({
     method: "POST",
     headers: getLmStudioHeaders(),
     body: JSON.stringify({
-      model: process.env.LM_STUDIO_MODEL,
+      model: await resolvePreferredLmStudioModelTarget({
+        preferredInstanceId: modelInstanceId,
+        modelKey: process.env.LM_STUDIO_MODEL!,
+      }),
       input: parts.join("\n"),
       system_prompt: summaryPromptByMode[mode],
     }),

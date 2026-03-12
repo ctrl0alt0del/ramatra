@@ -20,7 +20,7 @@ import { CustomThreadListItem } from "./CustomThreadListItem";
 import { CustomUserMessage } from "./CustomUserMessage";
 import { ManagedComposer } from "./ManagedComposer";
 import { PromptModeSelect } from "./prompt-mode";
-import { SystemStateProvider, useSystemState } from "./system-state";
+import { SystemStateProvider } from "./system-state";
 
 type MonitorState = {
   checkedAt: string;
@@ -61,7 +61,6 @@ export function ChatLayout() {
 function ChatWorkspace() {
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const { state: systemState } = useSystemState();
   const monitor = useSystemMonitor();
 
   const monitorCards = [
@@ -233,14 +232,11 @@ function ChatWorkspace() {
               <PromptModeSelect />
             </div>
 
-            {!systemState.canChat || monitor.data?.queue.lastError ? (
+            {monitor.data?.queue.lastError ? (
               <div className="mt-3 flex items-start gap-3 rounded-[20px] border border-[#ffd8cd] bg-[#fff7f3] px-4 py-3 text-sm text-[#7a4a3d] lg:hidden">
                 <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                 <div>
-                  <p>{systemState.message}</p>
-                  {monitor.data?.queue.lastError ? (
-                    <p className="mt-1 text-xs">{monitor.data.queue.lastError}</p>
-                  ) : null}
+                  <p className="text-xs">{monitor.data.queue.lastError}</p>
                 </div>
               </div>
             ) : null}

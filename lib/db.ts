@@ -19,6 +19,7 @@ const ensureSchema = (db: Database.Database) => {
       title TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'regular' CHECK (status IN ('regular', 'archived')),
       lmstudio_response_id TEXT,
+      lmstudio_model_instance_id TEXT,
       last_prompt_mode TEXT,
       conversation_summary TEXT,
       summary_updated_at TEXT,
@@ -123,6 +124,13 @@ const ensureSchema = (db: Database.Database) => {
     db.exec(`
       ALTER TABLE threads
       ADD COLUMN lmstudio_response_id TEXT
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "lmstudio_model_instance_id")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN lmstudio_model_instance_id TEXT
     `);
   }
 

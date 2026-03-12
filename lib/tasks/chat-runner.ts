@@ -5,7 +5,13 @@ import {
 } from "@/lib/chat/message-content";
 import { getGeneratedImagesForThread } from "@/lib/comfy/thread-generated-images";
 import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
-import { cleanupRedundantLmStudioModels } from "@/lib/lmstudio/models";
+import {
+  cleanupRedundantLmStudioModels,
+  ensureLmStudioModelLoaded,
+  formatLoadedLmStudioModelsForDebug,
+  listLoadedLmStudioModels,
+  resolvePreferredLmStudioModelTarget,
+} from "@/lib/lmstudio/models";
 import { generateThreadTitle } from "@/lib/lmstudio/title";
 import {
   getThread,
@@ -43,6 +49,7 @@ type LmStudioOutput =
 type ChatResponse = {
   output?: LmStudioOutput[];
   response_id?: string;
+  model_instance_id?: string;
   finish_reason?: string;
   stop_reason?: string;
   usage?: Record<string, unknown>;
@@ -114,6 +121,17 @@ const getChatModelKey = () => {
   }
 
   return modelKey;
+};
+
+const isLmStudioModelDebugEnabled = () =>
+  process.env.LM_STUDIO_DEBUG_MODEL_ROUTING === "true";
+
+const logChatModelDebug = (phase: string, payload: Record<string, unknown>) => {
+  if (!isLmStudioModelDebugEnabled()) {
+    return;
+  }
+
+  console.info(`[chat-runner] ${phase}`, payload);
 };
 
 const getAssistantText = (output: LmStudioOutput[] | undefined) => {
@@ -284,6 +302,7 @@ export const executeQueuedChatTask = async (taskId: string) => {
         );
         const conversationSummary = await generateConversationSummary({
           mode: promptMode,
+          modelInstanceId: thread.lmstudioModelInstanceId,
           previousSummary: thread.conversationSummary,
           messages: unsummarizedMessages,
         });
@@ -313,6 +332,35 @@ export const executeQueuedChatTask = async (taskId: string) => {
       userMessage: task.payload.userMessage,
     });
 
+    const requestedContextLength = getConfiguredContextLengthForMode(
+      promptMode,
+      process.env,
+    );
+    const exactLoadedModel = await ensureLmStudioModelLoaded({
+      modelKey: getChatModelKey(),
+      contextLength: requestedContextLength,
+    });
+    const modelTarget = await resolvePreferredLmStudioModelTarget({
+      preferredInstanceId:
+        thread?.lmstudioModelInstanceId === exactLoadedModel.instanceId
+          ? thread.lmstudioModelInstanceId
+          : exactLoadedModel.instanceId,
+      modelKey: getChatModelKey(),
+    });
+    const loadedBeforeRequest = await listLoadedLmStudioModels();
+
+    logChatModelDebug("request:start", {
+      taskId: task.id,
+      kind: task.payload.kind,
+      threadId: thread?.id ?? null,
+      configuredModelKey: getChatModelKey(),
+      preferredInstanceId: thread?.lmstudioModelInstanceId ?? null,
+      selectedModelTarget: modelTarget,
+      requestedContextLength,
+      previousResponseId: thread?.lmstudioResponseId ?? null,
+      loadedModels: formatLoadedLmStudioModelsForDebug(loadedBeforeRequest),
+    });
+
     const response = await fetch(getLmStudioChatUrl(), {
       method: "POST",
       headers: {
@@ -322,8 +370,8 @@ export const executeQueuedChatTask = async (taskId: string) => {
           : {}),
       },
       body: JSON.stringify({
-        model: process.env.LM_STUDIO_MODEL,
-        context_length: getConfiguredContextLengthForMode(promptMode, process.env),
+        model: modelTarget,
+        context_length: requestedContextLength,
         input: userInput,
         previous_response_id: thread?.lmstudioResponseId ?? undefined,
         system_prompt: getSystemPromptForMode(promptMode),
@@ -374,6 +422,13 @@ export const executeQueuedChatTask = async (taskId: string) => {
 
       if (event.type === "chat.end") {
         finalResponse = event.result;
+        logChatModelDebug("request:end", {
+          taskId: task.id,
+          threadId: thread?.id ?? null,
+          selectedModelTarget: modelTarget,
+          responseId: event.result.response_id ?? null,
+          responseModelInstanceId: event.result.model_instance_id ?? null,
+        });
       }
     });
 
@@ -396,6 +451,7 @@ export const executeQueuedChatTask = async (taskId: string) => {
 
       updateThread(task.payload.threadId, {
         lmstudioResponseId: finalResponse?.response_id ?? null,
+        lmstudioModelInstanceId: finalResponse?.model_instance_id ?? null,
         lastPromptMode: promptMode,
         appendMessages:
           !lastMessage ||
@@ -426,6 +482,7 @@ export const executeQueuedChatTask = async (taskId: string) => {
       const unloaded = await cleanupRedundantLmStudioModels({
         activeModelKey: getChatModelKey(),
       });
+      const loadedAfterCleanup = await listLoadedLmStudioModels();
 
       if (unloaded.length > 0) {
         console.info(
@@ -434,6 +491,12 @@ export const executeQueuedChatTask = async (taskId: string) => {
             .join(", ")}`,
         );
       }
+
+      logChatModelDebug("cleanup:after", {
+        taskId,
+        loadedModels: formatLoadedLmStudioModelsForDebug(loadedAfterCleanup),
+        unloaded: formatLoadedLmStudioModelsForDebug(unloaded),
+      });
     } catch (error) {
       console.warn("[chat-runner] failed to cleanup redundant LM Studio models", error);
     }
@@ -482,6 +545,7 @@ const executeQueuedCollapseContextTask = async (
 
   const conversationSummary = await generateConversationSummary({
     mode: promptMode,
+    modelInstanceId: thread.lmstudioModelInstanceId,
     previousSummary: thread.conversationSummary,
     messages: unsummarizedMessages,
   });

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
+import { resolvePreferredLmStudioModelTarget } from "@/lib/lmstudio/models";
 import { type ThreadDetail } from "@/lib/lmstudio/threads";
 
 const getLmStudioChatUrl = () => {
@@ -82,7 +83,10 @@ export const generateThreadTitle = async (thread: ThreadDetail) => {
         : {}),
     },
     body: JSON.stringify({
-      model: process.env.LM_STUDIO_MODEL,
+      model: await resolvePreferredLmStudioModelTarget({
+        preferredInstanceId: thread.lmstudioModelInstanceId,
+        modelKey: process.env.LM_STUDIO_MODEL!,
+      }),
       system_prompt: titleSystemPrompt,
       input: buildTitleInput(thread),
     }),
