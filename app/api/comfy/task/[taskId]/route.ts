@@ -1,4 +1,7 @@
 import { getComfyTaskView } from "@/lib/tasks/comfy-task-view";
+import { processTaskQueues } from "@/lib/tasks/processor";
+
+export const runtime = "nodejs";
 
 type RouteContext = {
   params: Promise<{ taskId: string }>;
@@ -17,5 +20,10 @@ export async function GET(_req: Request, context: RouteContext) {
       { status: 404 },
     );
   }
+
+  if (view.status === "queued") {
+    void processTaskQueues();
+  }
+
   return Response.json(view);
 }

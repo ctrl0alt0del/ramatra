@@ -65,7 +65,43 @@ const ensureSchema = (db: Database.Database) => {
 
     CREATE INDEX IF NOT EXISTS idx_comfy_generation_images_job_position
       ON comfy_generation_images(job_id, position);
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK (type IN ('chat', 'comfy')),
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+      payload_json TEXT NOT NULL,
+      result_json TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tasks_type_status_created_at
+      ON tasks(type, status, created_at);
+
+    CREATE TABLE IF NOT EXISTS task_runtime_state (
+      singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+      active_task_id TEXT,
+      gpu_mode TEXT NOT NULL DEFAULT 'chat' CHECK (gpu_mode IN ('chat', 'comfy', 'switching')),
+      last_error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS comfy_task_jobs (
+      job_id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL UNIQUE,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    );
   `);
+
+  db.prepare(
+    `
+      INSERT INTO task_runtime_state (singleton_id, active_task_id, gpu_mode, last_error)
+      VALUES (1, NULL, 'chat', NULL)
+      ON CONFLICT(singleton_id) DO NOTHING
+    `,
+  ).run();
 
   const columns = db.prepare(`PRAGMA table_info(threads)`).all() as Array<{
     name: string;

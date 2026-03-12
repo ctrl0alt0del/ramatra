@@ -5,7 +5,7 @@ import {
   storeCompletedGeneration,
   updateGenerationProgress,
 } from "./generations";
-import { updateComfyTaskForJob } from "@/lib/tasks/scheduler";
+import { getSchedulerState, updateComfyTaskForJob } from "@/lib/tasks/scheduler";
 import { buildBaseWorkflow } from "./workflows/base";
 import { buildQuickChromaWorkflow } from "./workflows/quickChroma";
 import { type WorkflowInput, type WorkflowName } from "./workflows/types";
@@ -34,6 +34,20 @@ const extractImagesFromPromptResult = async (result: Awaited<ReturnType<Client["
       data: match[2],
     };
   });
+};
+
+const finalizeComfyTaskCycle = async () => {
+  const snapshot = getSchedulerState();
+  const hasQueuedChatTasks = snapshot.queues.chat.some((task) => task.status === "queued");
+  const hasQueuedComfyTasks = snapshot.queues.comfy.some((task) => task.status === "queued");
+
+  if (hasQueuedChatTasks || !hasQueuedComfyTasks) {
+    const { switchToChatGpuMode } = await import("@/lib/tasks/gpu-manager");
+    await switchToChatGpuMode();
+  }
+
+  const { processTaskQueues } = await import("@/lib/tasks/processor");
+  await processTaskQueues();
 };
 
 export enum ComfyJobStatus {
@@ -130,6 +144,7 @@ export async function runWorkflow({
       error: event.exception_message,
     });
     cleanup();
+    void finalizeComfyTaskCycle();
   });
 
   const removeExecutionInterrupted = client.on(
@@ -142,6 +157,7 @@ export async function runWorkflow({
         error: "Generation was interrupted",
       });
       cleanup();
+      void finalizeComfyTaskCycle();
     },
   );
 
@@ -170,6 +186,7 @@ export async function runWorkflow({
       });
     }
     cleanup();
+    void finalizeComfyTaskCycle();
   });
 
   return {
@@ -231,6 +248,7 @@ export async function getWorkflowStatus(
   updateComfyTaskForJob(jobId, {
     status: ComfyJobStatus.Completed,
   });
+  void finalizeComfyTaskCycle();
 
   return {
     jobId,

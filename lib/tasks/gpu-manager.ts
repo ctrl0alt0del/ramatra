@@ -1,8 +1,7 @@
 import { getClient } from "@/lib/comfy/client";
 import {
-  getLoadedChatInstanceId,
   loadLmStudioModel,
-  unloadLmStudioModel,
+  unloadAllLmStudioModels,
 } from "@/lib/lmstudio/models";
 import { getActiveTask, getSchedulerState, setSchedulerGpuMode } from "@/lib/tasks/scheduler";
 import {
@@ -43,10 +42,7 @@ export const switchToComfyGpuMode = async () => {
       setSchedulerGpuMode("switching");
       setSchedulerLastError(null);
 
-      const instanceId = await getLoadedChatInstanceId(getChatModelKey());
-      if (instanceId) {
-        await unloadLmStudioModel(instanceId);
-      }
+      await unloadAllLmStudioModels();
 
       setSchedulerGpuMode("comfy");
     });

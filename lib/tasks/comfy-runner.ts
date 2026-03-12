@@ -1,9 +1,7 @@
 import { getClient } from "@/lib/comfy/client";
 import { runWorkflow } from "@/lib/comfy/runner";
 import { type WorkflowInput, type WorkflowName } from "@/lib/comfy/workflows/types";
-import { processTaskQueues } from "@/lib/tasks/processor";
 import {
-  switchToChatGpuMode,
   switchToComfyGpuMode,
 } from "@/lib/tasks/gpu-manager";
 import {
@@ -12,7 +10,6 @@ import {
   markTaskStarted,
   updateRunningTask,
 } from "@/lib/tasks/scheduler";
-import { subscribeToTaskEvent } from "@/lib/tasks/event-bus";
 
 declare global {
   var __comfyBridgeComfyQueueListenersReady: boolean | undefined;
@@ -77,24 +74,6 @@ export const ensureComfyQueueListeners = () => {
   if (globalThis.__comfyBridgeComfyQueueListenersReady) {
     return;
   }
-
-  subscribeToTaskEvent("task:completed", async ({ task }) => {
-    if (task.type !== "comfy") return;
-    await switchToChatGpuMode();
-    void processTaskQueues();
-  });
-
-  subscribeToTaskEvent("task:failed", async ({ task }) => {
-    if (task.type !== "comfy") return;
-    await switchToChatGpuMode();
-    void processTaskQueues();
-  });
-
-  subscribeToTaskEvent("task:cancelled", async ({ task }) => {
-    if (task.type !== "comfy") return;
-    await switchToChatGpuMode();
-    void processTaskQueues();
-  });
 
   globalThis.__comfyBridgeComfyQueueListenersReady = true;
 };

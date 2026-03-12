@@ -59,6 +59,13 @@ export const getLoadedChatInstanceId = async (modelKey: string) => {
   return byInstanceId?.id ?? null;
 };
 
+export const listLoadedLmStudioInstanceIds = async () => {
+  const data = await listLmStudioModels();
+  return data.models.flatMap((model) =>
+    model.loaded_instances.map((instance) => instance.id),
+  );
+};
+
 export const unloadLmStudioModel = async (instanceId: string) => {
   const response = await fetch(getLmStudioApiUrl("/api/v1/models/unload"), {
     method: "POST",
@@ -70,6 +77,13 @@ export const unloadLmStudioModel = async (instanceId: string) => {
 
   if (!response.ok) {
     throw new Error(`Failed to unload LM Studio model: HTTP ${response.status}`);
+  }
+};
+
+export const unloadAllLmStudioModels = async () => {
+  const instanceIds = await listLoadedLmStudioInstanceIds();
+  for (const instanceId of instanceIds) {
+    await unloadLmStudioModel(instanceId);
   }
 };
 
