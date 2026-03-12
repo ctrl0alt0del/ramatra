@@ -3,6 +3,7 @@ import {
   getTextFromMessageContent,
   type MessagePart,
 } from "@/lib/chat/message-content";
+import { getGeneratedImagesForThread } from "@/lib/comfy/thread-generated-images";
 import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
 import { cleanupRedundantLmStudioModels } from "@/lib/lmstudio/models";
 import { generateThreadTitle } from "@/lib/lmstudio/title";
@@ -305,6 +306,10 @@ export const executeQueuedChatTask = async (taskId: string) => {
     const userInput = buildLmStudioInput({
       summary: thread?.conversationSummary ?? null,
       previousResponseId: thread?.lmstudioResponseId ?? null,
+      generatedImages:
+        thread && task.payload.kind === "conversation"
+          ? getGeneratedImagesForThread(thread.messages)
+          : [],
       userMessage: task.payload.userMessage,
     });
 
@@ -496,24 +501,31 @@ const executeQueuedCollapseContextTask = async (
 const buildLmStudioInput = ({
   summary,
   previousResponseId,
+  generatedImages,
   userMessage,
 }: {
   summary: string | null;
   previousResponseId: string | null;
+  generatedImages: MessagePart[];
   userMessage: MessagePart[];
 }): string | LmStudioInputItem[] => {
+  const imageParts = [
+    ...generatedImages.filter(
+      (part): part is Extract<MessagePart, { type: "image" }> => part.type === "image",
+    ),
+    ...userMessage.filter(
+      (part): part is Extract<MessagePart, { type: "image" }> => part.type === "image",
+    ),
+  ];
+
   if (previousResponseId) {
-    return toLmStudioInputItems(userMessage);
+    return toLmStudioInputItems(userMessage, imageParts);
   }
 
   const text = buildFreshChainInput({
     summary,
     userInput: getTextFromMessageContent(userMessage),
   });
-
-  const imageParts = userMessage.filter(
-    (part): part is Extract<MessagePart, { type: "image" }> => part.type === "image",
-  );
 
   if (!imageParts.length) {
     return text;
@@ -524,7 +536,9 @@ const buildLmStudioInput = ({
       type: "text",
       content: [
         text,
-        "Use the attached image(s) together with the user request.",
+        generatedImages.length
+          ? "Use the attached image(s), including recent generated results from this conversation, together with the user request."
+          : "Use the attached image(s) together with the user request.",
       ]
         .filter(Boolean)
         .join("\n\n"),
@@ -536,11 +550,11 @@ const buildLmStudioInput = ({
   ];
 };
 
-const toLmStudioInputItems = (parts: MessagePart[]): LmStudioInputItem[] => {
+const toLmStudioInputItems = (
+  parts: MessagePart[],
+  imageParts: Extract<MessagePart, { type: "image" }>[],
+): LmStudioInputItem[] => {
   const text = getTextFromMessageContent(parts).trim();
-  const imageParts = parts.filter(
-    (part): part is Extract<MessagePart, { type: "image" }> => part.type === "image",
-  );
 
   const items: LmStudioInputItem[] = [];
 
