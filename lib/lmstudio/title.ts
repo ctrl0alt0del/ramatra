@@ -4,6 +4,9 @@ import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
 import { resolvePreferredLmStudioModelTarget } from "@/lib/lmstudio/models";
 import { type ThreadDetail } from "@/lib/lmstudio/threads";
 
+const TITLE_OUTPUT_TOKEN_BUDGET = 16;
+const TITLE_MESSAGE_CHAR_LIMIT = 220;
+
 const getLmStudioChatUrl = () => {
   const rawBaseUrl = process.env.LM_STUDIO_BASE_URL;
   if (!rawBaseUrl) {
@@ -15,23 +18,36 @@ const getLmStudioChatUrl = () => {
   return url.toString();
 };
 
+const clipForTitle = (value: string) => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= TITLE_MESSAGE_CHAR_LIMIT) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, TITLE_MESSAGE_CHAR_LIMIT - 3).trimEnd()}...`;
+};
+
 const buildTitleInput = (thread: ThreadDetail) => {
   const excerpt = thread.messages
     .slice(0, 8)
     .map(
       (message) =>
-        `${message.role.toUpperCase()}: ${formatMessageContentForPrompt(message.content)}`,
+        `${message.role.toUpperCase()}: ${clipForTitle(
+          formatMessageContentForPrompt(message.content),
+        )}`,
     )
     .join("\n\n");
 
   return [
-    "Create a short topic title for this conversation.",
+    "Write one concise title for this conversation.",
     "Rules:",
-    "- Return only the title.",
-    "- 2 to 6 words.",
-    "- Focus on the actual topic, not the first phrasing.",
+    "- Output only the title text.",
+    "- 2 to 5 words.",
+    "- Prefer the concrete topic or task.",
     "- No quotes.",
     "- No markdown.",
+    "- No explanation.",
+    "- No reasoning.",
     "- Avoid generic titles like New Chat or Question.",
     "",
     "Conversation:",
@@ -40,12 +56,13 @@ const buildTitleInput = (thread: ThreadDetail) => {
 };
 
 const titleSystemPrompt = [
-  "You generate short conversation titles.",
-  "Return only the final title.",
-  "Do not show reasoning.",
-  "Do not use long reasoning, use first draft immediately.",
-  "Answer immediately with a short title.",
-  "Use 2 to 6 words.",
+  "You generate extremely short conversation titles.",
+  "Reply with only the final title text.",
+  "Do not think aloud.",
+  "Do not include reasoning.",
+  "Do not include any explanation or preamble.",
+  "Use 2 to 5 words.",
+  "Be immediate and terse.",
   "No quotes.",
   "No markdown.",
 ].join("\n");
@@ -89,6 +106,8 @@ export const generateThreadTitle = async (thread: ThreadDetail) => {
       }),
       system_prompt: titleSystemPrompt,
       input: buildTitleInput(thread),
+      temperature: 0,
+      max_output_tokens: TITLE_OUTPUT_TOKEN_BUDGET,
     }),
   });
 

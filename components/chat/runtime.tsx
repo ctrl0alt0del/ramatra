@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import {
   SimpleImageAttachmentAdapter,
   useLocalRuntime,
+  useThreadListItemRuntime,
   type ChatModelAdapter,
   unstable_useRemoteThreadListRuntime as useRemoteThreadListRuntime,
   type unstable_RemoteThreadListAdapter as RemoteThreadListAdapter,
@@ -16,67 +17,56 @@ import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
 import { PersistedHistoryProvider } from "./history";
 import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 
-const THREAD_ID_MAP_STORAGE_KEY = "comfy-bridge-thread-id-map";
+type ThreadListItemRuntime = ReturnType<typeof useThreadListItemRuntime>;
+type TitleRouteResponse = {
+  title?: string;
+  pending?: boolean;
+};
 
-const readThreadIdMap = () => {
-  if (typeof window === "undefined") {
-    return {} as Record<string, string>;
+const resolveThreadRemoteId = async (threadListItem: ThreadListItemRuntime) => {
+  const { remoteId } = threadListItem.getState();
+  if (remoteId) {
+    return remoteId;
   }
 
-  try {
-    const raw = window.localStorage.getItem(THREAD_ID_MAP_STORAGE_KEY);
-    if (!raw) {
-      return {} as Record<string, string>;
+  const initialized = await threadListItem.initialize();
+  return initialized.remoteId;
+};
+
+const normalizeIncomingTitle = (title: string | undefined) => {
+  const normalized = title?.trim();
+  return normalized ? normalized : null;
+};
+
+const readPersistedThreadTitle = async (remoteId: string) => {
+  const response = await fetch(`/api/threads/${remoteId}`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = (await response.json()) as { thread: ThreadApiDetail };
+  return normalizeIncomingTitle(data.thread.title);
+};
+
+const waitForGeneratedThreadTitle = async (
+  remoteId: string,
+  timeoutMs = 45000,
+) => {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const title = await readPersistedThreadTitle(remoteId);
+    if (title && title !== "New Chat") {
+      return title;
     }
 
-    const parsed = JSON.parse(raw) as Record<string, string>;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {} as Record<string, string>;
-  }
-};
-
-const writeThreadIdMap = (mapping: Record<string, string>) => {
-  if (typeof window === "undefined") {
-    return;
+    await new Promise((resolve) => window.setTimeout(resolve, 300));
   }
 
-  window.localStorage.setItem(
-    THREAD_ID_MAP_STORAGE_KEY,
-    JSON.stringify(mapping),
-  );
-};
-
-const rememberThreadIdMapping = (externalId: string, remoteId: string) => {
-  const mapping = readThreadIdMap();
-  mapping[externalId] = remoteId;
-  writeThreadIdMap(mapping);
-};
-
-export const resolveRemoteThreadId = (threadId: string | undefined) => {
-  if (!threadId) {
-    return undefined;
-  }
-
-  const mapping = readThreadIdMap();
-  return mapping[threadId];
-};
-
-export const resolvePersistedThreadId = (threadId: string | undefined) => {
-  return resolveRemoteThreadId(threadId) ?? threadId;
-};
-
-const resolveChatThreadId = (threadId: string | undefined) => {
-  if (!threadId) {
-    return undefined;
-  }
-
-  const mappedRemoteId = resolveRemoteThreadId(threadId);
-  if (mappedRemoteId) {
-    return mappedRemoteId;
-  }
-
-  return threadId.startsWith("__LOCALID_") ? undefined : threadId;
+  return readPersistedThreadTitle(remoteId);
 };
 
 function usePersistedChatRuntime(promptMode: PromptMode) {
@@ -84,11 +74,12 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
     () => new SimpleImageAttachmentAdapter(),
     [],
   );
+  const threadListItem = useThreadListItemRuntime();
 
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
-      async *run({ messages, abortSignal, unstable_threadId }) {
-        const remoteThreadId = resolveChatThreadId(unstable_threadId);
+      async *run({ messages, abortSignal }) {
+        const remoteThreadId = await resolveThreadRemoteId(threadListItem);
         const serializedMessages = await Promise.all(
           messages.map(async (message) => ({
             role: message.role,
@@ -118,9 +109,10 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
           threadId: string;
         };
 
-        if (unstable_threadId) {
-          rememberThreadIdMapping(unstable_threadId, data.threadId);
+        if (data.threadId !== remoteThreadId) {
+          throw new Error("Thread identity mismatch while queueing assistant response.");
         }
+
         const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
         let lastText = "";
         let lastReasoning = "";
@@ -251,7 +243,7 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
         }
       },
     }),
-    [promptMode],
+    [promptMode, threadListItem],
   );
 
   return useLocalRuntime(modelAdapter, {
@@ -359,23 +351,32 @@ export function usePersistedRuntime(promptMode: PromptMode) {
           })),
         };
       },
-      async initialize(threadId) {
-        const existingRemoteId = resolveRemoteThreadId(threadId);
-        if (existingRemoteId) {
-          return {
-            remoteId: existingRemoteId,
-            externalId: threadId,
-          };
+      async initialize(localId) {
+        const response = await fetch("/api/threads", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: "New Chat",
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to create thread");
         }
 
+        const data = (await response.json()) as {
+          thread: ThreadApiDetail;
+        };
+
         return {
-          remoteId: threadId,
-          externalId: threadId,
+          remoteId: data.thread.id,
+          externalId: localId,
         };
       },
       async fetch(remoteId) {
-        const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
-        const response = await fetch(`/api/threads/${resolvedRemoteId}`, {
+        const response = await fetch(`/api/threads/${remoteId}`, {
           cache: "no-store",
         });
         if (!response.ok) {
@@ -393,8 +394,7 @@ export function usePersistedRuntime(promptMode: PromptMode) {
         };
       },
       async rename(remoteId, title) {
-        const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
-        await fetch(`/api/threads/${resolvedRemoteId}`, {
+        await fetch(`/api/threads/${remoteId}`, {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
@@ -403,8 +403,7 @@ export function usePersistedRuntime(promptMode: PromptMode) {
         });
       },
       async archive(remoteId) {
-        const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
-        await fetch(`/api/threads/${resolvedRemoteId}`, {
+        await fetch(`/api/threads/${remoteId}`, {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
@@ -413,8 +412,7 @@ export function usePersistedRuntime(promptMode: PromptMode) {
         });
       },
       async unarchive(remoteId) {
-        const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
-        await fetch(`/api/threads/${resolvedRemoteId}`, {
+        await fetch(`/api/threads/${remoteId}`, {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
@@ -423,8 +421,7 @@ export function usePersistedRuntime(promptMode: PromptMode) {
         });
       },
       async delete(remoteId) {
-        const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
-        const response = await fetch(`/api/threads/${resolvedRemoteId}`, {
+        const response = await fetch(`/api/threads/${remoteId}`, {
           method: "DELETE",
         });
 
@@ -432,29 +429,30 @@ export function usePersistedRuntime(promptMode: PromptMode) {
           throw new Error("Failed to delete thread");
         }
       },
-      async generateTitle(remoteId, messages) {
+      async generateTitle(remoteId) {
         return createAssistantStream(async (controller) => {
-          const resolvedRemoteId = resolvePersistedThreadId(remoteId);
-          const response = await fetch(`/api/threads/${resolvedRemoteId}/title`, {
-            method: "POST",
-          });
+          let title: string | null = null;
 
-          let title = "New Chat";
+          try {
+            const response = await fetch(`/api/threads/${remoteId}/title`, {
+              method: "POST",
+            });
 
-          if (response.ok) {
-            const data = (await response.json()) as { title?: string };
-            title = data.title?.trim() || title;
-          } else {
-            const firstUserMessage = messages.find(
-              (message) => message.role === "user",
-            );
-            const firstTextPart = firstUserMessage?.content.find(
-              (part) => part.type === "text",
-            );
-            title = firstTextPart?.text?.trim().slice(0, 60) || title;
+            if (response.ok || response.status === 202) {
+              const data = (await response.json()) as TitleRouteResponse;
+              const serverTitle = normalizeIncomingTitle(data.title);
+
+              if (!data.pending && serverTitle) {
+                title = serverTitle;
+              } else {
+                title = await waitForGeneratedThreadTitle(remoteId);
+              }
+            }
+          } catch {
+            title = await waitForGeneratedThreadTitle(remoteId);
           }
 
-          controller.appendText(title);
+          controller.appendText(title ?? "New Chat");
           controller.close();
         });
       },

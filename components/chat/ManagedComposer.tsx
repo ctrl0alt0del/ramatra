@@ -3,15 +3,14 @@
 import { Archive, RotateCcw, Sparkles } from "lucide-react";
 import { useState } from "react";
 
-import { useThreadRuntime } from "@assistant-ui/react";
+import { useThreadListItemRuntime } from "@assistant-ui/react";
 import { Composer } from "@assistant-ui/react-ui";
 
 import { usePromptMode } from "./prompt-mode";
-import { resolvePersistedThreadId } from "./runtime";
 import { useSystemState } from "./system-state";
 
 export function ManagedComposer() {
-  const threadRuntime = useThreadRuntime();
+  const threadListItem = useThreadListItemRuntime();
   const { mode } = usePromptMode();
   const { state: systemState, refresh } = useSystemState();
   const [isRecovering, setIsRecovering] = useState(false);
@@ -24,7 +23,7 @@ export function ManagedComposer() {
       setIsCollapsingContext(true);
       setCollapseError(null);
 
-      const remoteId = resolvePersistedThreadId(threadRuntime.getState().remoteId);
+      const remoteId = threadListItem.getState().remoteId;
       if (!remoteId) {
         throw new Error("No thread selected.");
       }

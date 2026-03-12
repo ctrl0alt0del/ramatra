@@ -265,9 +265,7 @@ export const updateThread = (
   const nextTitle =
     input.title !== undefined
       ? input.title.trim() || deriveTitle(nextMessages)
-      : !existing.title || existing.title === "New Chat"
-        ? deriveTitle(nextMessages)
-        : existing.title;
+      : existing.title || deriveTitle(nextMessages);
   const nextStatus = input.status ?? existing.status;
   const nextLmstudioResponseId =
     input.lmstudioResponseId !== undefined

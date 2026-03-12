@@ -2,11 +2,10 @@
 
 import { useMemo } from "react";
 
-import { RuntimeAdapterProvider, useAui } from "@assistant-ui/react";
+import { RuntimeAdapterProvider, useThreadListItemRuntime } from "@assistant-ui/react";
 
 import type { MessagePart } from "@/lib/chat/message-content";
 
-import { resolveRemoteThreadId } from "./runtime";
 import type {
   ThreadApiDetail,
   StoredThreadMessage,
@@ -120,18 +119,17 @@ const toImageAttachment = (
 export function PersistedHistoryProvider({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const aui = useAui();
+  const threadListItem = useThreadListItemRuntime();
 
   const history = useMemo(
     () => ({
       async load() {
-        const { remoteId } = aui.threadListItem().getState();
-        const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
-        if (!resolvedRemoteId || resolvedRemoteId.startsWith("__LOCALID_")) {
+        const { remoteId } = threadListItem.getState();
+        if (!remoteId) {
           return { messages: [] };
         }
 
-        const response = await fetch(`/api/threads/${resolvedRemoteId}`);
+        const response = await fetch(`/api/threads/${remoteId}`);
 
         if (!response.ok) {
           throw new Error("Failed to load thread history");
@@ -141,7 +139,7 @@ export function PersistedHistoryProvider({
 
         return {
           messages: data.thread.messages.map((storedMessage, index) =>
-            toExportedMessage(resolvedRemoteId, storedMessage, index),
+            toExportedMessage(remoteId, storedMessage, index),
           ),
         };
       },
@@ -149,7 +147,7 @@ export function PersistedHistoryProvider({
         // Chat persistence is server-owned through /api/chat and the chat runner.
       },
     }),
-    [aui],
+    [threadListItem],
   );
 
   return (

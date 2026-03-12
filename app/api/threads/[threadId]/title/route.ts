@@ -9,7 +9,14 @@ type RouteContext = {
   params: Promise<{ threadId: string }>;
 };
 
-const waitForTaskCompletion = async (taskId: string, timeoutMs = 20000) => {
+class TitleGenerationTimeoutError extends Error {
+  constructor() {
+    super("Timed out waiting for title generation.");
+    this.name = "TitleGenerationTimeoutError";
+  }
+}
+
+const waitForTaskCompletion = async (taskId: string, timeoutMs = 45000) => {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -25,7 +32,7 @@ const waitForTaskCompletion = async (taskId: string, timeoutMs = 20000) => {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
 
-  throw new Error("Timed out waiting for title generation.");
+  throw new TitleGenerationTimeoutError();
 };
 
 export async function POST(_req: Request, context: RouteContext) {
@@ -44,19 +51,36 @@ export async function POST(_req: Request, context: RouteContext) {
 
     void processTaskQueues();
     const completedTask = await waitForTaskCompletion(task.id);
+    const latestThread = getThread(threadId) ?? thread;
 
     if (completedTask.status !== "completed") {
       return NextResponse.json({
-        title: thread.title,
+        title: latestThread.title,
+        pending: false,
+        error: completedTask.error,
       });
     }
 
     return NextResponse.json({
-      title: completedTask.result?.title ?? thread.title,
+      title: completedTask.result?.title ?? latestThread.title,
+      pending: false,
     });
-  } catch {
+  } catch (error) {
+    const latestThread = getThread(threadId) ?? thread;
+    if (error instanceof TitleGenerationTimeoutError) {
+      return NextResponse.json(
+        {
+          title: latestThread.title,
+          pending: true,
+        },
+        { status: 202 },
+      );
+    }
+
     return NextResponse.json({
-      title: thread.title,
+      title: latestThread.title,
+      pending: false,
+      error: error instanceof Error ? error.message : "Title generation failed.",
     });
   }
 }
