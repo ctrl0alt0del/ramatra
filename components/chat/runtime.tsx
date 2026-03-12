@@ -67,7 +67,16 @@ export const resolvePersistedThreadId = (threadId: string | undefined) => {
 };
 
 const resolveChatThreadId = (threadId: string | undefined) => {
-  return resolveRemoteThreadId(threadId) ?? undefined;
+  if (!threadId) {
+    return undefined;
+  }
+
+  const mappedRemoteId = resolveRemoteThreadId(threadId);
+  if (mappedRemoteId) {
+    return mappedRemoteId;
+  }
+
+  return threadId.startsWith("__LOCALID_") ? undefined : threadId;
 };
 
 function usePersistedChatRuntime(promptMode: PromptMode) {

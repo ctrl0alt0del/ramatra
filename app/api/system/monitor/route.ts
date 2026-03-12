@@ -10,6 +10,11 @@ const execFileAsync = promisify(execFile);
 type ServiceMonitor = {
   ok: boolean;
   detail: string;
+  activeModel: {
+    key: string;
+    instanceId: string;
+    contextLength: number;
+  } | null;
 };
 
 type GpuMonitor = {
@@ -75,22 +80,42 @@ const checkLmStudio = async (): Promise<ServiceMonitor> => {
     }
 
     const data = (await response.json()) as {
-      models?: Array<{ key: string; loaded_instances?: unknown[] }>;
+      models?: Array<{
+        key: string;
+        loaded_instances?: Array<{
+          id?: string;
+          config?: {
+            context_length?: number;
+          };
+        }>;
+      }>;
     };
     const loadedCount =
       data.models?.reduce(
         (total, model) => total + (model.loaded_instances?.length ?? 0),
         0,
       ) ?? 0;
+    const activeModel =
+      data.models
+        ?.flatMap((model) =>
+          (model.loaded_instances ?? []).map((instance) => ({
+            key: model.key,
+            instanceId: instance.id ?? model.key,
+            contextLength: instance.config?.context_length ?? 0,
+          })),
+        )
+        .sort((left, right) => right.contextLength - left.contextLength)[0] ?? null;
 
     return {
       ok: true,
       detail: loadedCount > 0 ? `${loadedCount} model(s) loaded` : "Reachable",
+      activeModel,
     };
   } catch (error) {
     return {
       ok: false,
       detail: error instanceof Error ? error.message : "Unknown error",
+      activeModel: null,
     };
   }
 };

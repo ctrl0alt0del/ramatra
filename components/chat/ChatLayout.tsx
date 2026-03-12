@@ -28,6 +28,11 @@ type MonitorState = {
     lmStudio: {
       ok: boolean;
       detail: string;
+      activeModel: {
+        key: string;
+        instanceId: string;
+        contextLength: number;
+      } | null;
     };
     comfy: {
       ok: boolean;
@@ -96,8 +101,7 @@ function ChatWorkspace() {
       icon: HeartPulse,
       label: "LM Studio",
       value: monitor.data?.services.lmStudio.ok ? "Healthy" : "Offline",
-      detail:
-        monitor.data?.services.lmStudio.detail ?? "Checking LM Studio...",
+      detail: formatLmStudioModelDetail(monitor.data?.services.lmStudio),
       tone: monitor.data?.services.lmStudio.ok ? "good" : "warn",
     },
     {
@@ -323,6 +327,34 @@ function formatGpuTemperature(temperatureC: number | null) {
   }
 
   return `${temperatureC}°C`;
+}
+
+function formatLmStudioModelDetail(
+  lmStudio:
+    | {
+        ok: boolean;
+        detail: string;
+        activeModel: {
+          key: string;
+          instanceId: string;
+          contextLength: number;
+        } | null;
+      }
+    | undefined,
+) {
+  if (!lmStudio) {
+    return "Checking LM Studio...";
+  }
+
+  if (!lmStudio.ok) {
+    return lmStudio.detail;
+  }
+
+  if (!lmStudio.activeModel) {
+    return lmStudio.detail;
+  }
+
+  return `${Math.round(lmStudio.activeModel.contextLength / 1024)}k ctx`;
 }
 
 function SidebarPanel({

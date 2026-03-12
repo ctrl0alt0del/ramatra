@@ -3,6 +3,7 @@
 import * as Select from "@radix-ui/react-select";
 import { Check, ChevronDown, Image, Pencil, Sparkles, Zap } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { useThread } from "@assistant-ui/react";
 
 import {
   defaultPromptMode,
@@ -61,11 +62,17 @@ export const usePromptMode = () => useContext(PromptModeContext);
 
 export function PromptModeSelect() {
   const { mode, setMode } = usePromptMode();
+  const hasAssistantResponse = useThread((state) =>
+    state.messages.some((message) => message.role === "assistant"),
+  );
+  const isThreadRunning = useThread((state) => state.isRunning);
+  const isLocked = hasAssistantResponse || isThreadRunning;
   const SelectedIcon = promptModeIcons[mode];
 
   return (
     <div className="flex items-stretch">
       <Select.Root
+        disabled={isLocked}
         value={mode}
         onValueChange={(nextMode) => {
           if (isPromptMode(nextMode)) {
@@ -74,7 +81,7 @@ export function PromptModeSelect() {
         }}
       >
         <Select.Trigger
-          className="inline-flex h-12 w-full items-center justify-between gap-3 rounded-[18px] border border-white/70 bg-white/84 text-sm font-medium text-[hsl(var(--aui-foreground))] shadow-[0_12px_28px_rgba(73,56,145,0.08)] outline-none transition hover:bg-white focus:border-[hsl(var(--aui-ring))] sm:h-14 sm:min-w-56 sm:rounded-[20px]"
+          className="inline-flex h-12 w-full items-center justify-between gap-3 rounded-[18px] border border-white/70 bg-white/84 text-sm font-medium text-[hsl(var(--aui-foreground))] shadow-[0_12px_28px_rgba(73,56,145,0.08)] outline-none transition hover:bg-white focus:border-[hsl(var(--aui-ring))] disabled:cursor-not-allowed disabled:opacity-65 sm:h-14 sm:min-w-56 sm:rounded-[20px]"
           style={{ paddingLeft: "1.25rem", paddingRight: "1.25rem" }}
         >
           <div className="flex min-w-0 items-center gap-3">
