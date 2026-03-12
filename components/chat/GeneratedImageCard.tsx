@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 
 import { SkeletonBlock } from "./SkeletonBlock";
 
@@ -210,15 +211,36 @@ export function GeneratedImageCard({
           </div>
           <div className="grid gap-3">
             {result.images.map((image, index) => (
-              <Image
-                key={`${taskId}-${index}`}
-                src={`data:${image.mimeType};base64,${image.data}`}
-                alt="Generated result"
-                width={1024}
-                height={1024}
-                unoptimized
-                className="aspect-square w-full rounded-xl border border-[hsl(var(--aui-border))] object-cover"
-              />
+              <Dialog.Root key={`${taskId}-${index}`}>
+                <Dialog.Trigger asChild>
+                  <button
+                    type="button"
+                    className="overflow-hidden rounded-xl border border-[hsl(var(--aui-border))] text-left transition-opacity hover:opacity-95"
+                  >
+                    <Image
+                      src={`data:${image.mimeType};base64,${image.data}`}
+                      alt="Generated result"
+                      width={1024}
+                      height={1024}
+                      unoptimized
+                      className="h-auto w-full object-contain"
+                    />
+                  </button>
+                </Dialog.Trigger>
+                <Dialog.Portal>
+                  <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm" />
+                  <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[92vh] w-[min(92vw,1400px)] -translate-x-1/2 -translate-y-1/2 outline-none">
+                    <Image
+                      src={`data:${image.mimeType};base64,${image.data}`}
+                      alt="Generated result enlarged"
+                      width={1600}
+                      height={1600}
+                      unoptimized
+                      className="max-h-[92vh] h-auto w-full rounded-2xl object-contain"
+                    />
+                  </Dialog.Content>
+                </Dialog.Portal>
+              </Dialog.Root>
             ))}
           </div>
         </div>
