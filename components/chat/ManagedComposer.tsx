@@ -83,7 +83,7 @@ export function ManagedComposer() {
           type="button"
           onClick={() => void handleCollapseContext()}
           disabled={isCollapsingContext}
-          className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))] px-3 py-2 text-xs font-medium text-[hsl(var(--aui-muted-foreground))] shadow-sm transition hover:bg-[hsl(var(--aui-muted))] disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/84 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[hsl(var(--aui-muted-foreground))] shadow-[0_10px_24px_rgba(73,56,145,0.08)] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Archive className="h-3.5 w-3.5" />
           {isCollapsingContext ? "Collapsing context..." : "Collapse Context"}
@@ -91,13 +91,13 @@ export function ManagedComposer() {
       </div>
 
       {!systemState.canChat ? (
-        <div className="rounded-2xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-muted))] px-4 py-3 text-sm text-[hsl(var(--aui-muted-foreground))]">
-          <p className="font-medium text-[hsl(var(--aui-foreground))]">
+        <div className="rounded-[24px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.92)_0%,rgba(249,241,247,0.94)_100%)] px-4 py-4 text-sm text-[hsl(var(--aui-muted-foreground))] shadow-[0_14px_32px_rgba(73,56,145,0.08)]">
+          <p className="font-semibold text-[hsl(var(--aui-foreground))]">
             Chat paused
           </p>
-          <p>{systemState.message}</p>
+          <p className="mt-1 leading-6">{systemState.message}</p>
           {systemState.lastError ? (
-            <p className="mt-1 text-xs">Last error: {systemState.lastError}</p>
+            <p className="mt-2 text-xs">Last error: {systemState.lastError}</p>
           ) : null}
           {recoverError ? (
             <p className="mt-1 text-xs text-red-500">{recoverError}</p>
@@ -110,7 +110,7 @@ export function ManagedComposer() {
               type="button"
               onClick={() => void handleForceResume()}
               disabled={isRecovering}
-              className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))] px-4 py-2 text-sm font-medium text-[hsl(var(--aui-foreground))] shadow-sm transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/88 px-4 py-2 text-sm font-medium text-[hsl(var(--aui-foreground))] shadow-[0_10px_24px_rgba(73,56,145,0.08)] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isRecovering ? (
                 <Sparkles className="h-4 w-4 animate-pulse" />
@@ -136,7 +136,7 @@ export function ManagedComposer() {
           <button
             type="button"
             disabled
-            className="mb-2 mr-2 inline-flex h-8 min-w-20 items-center justify-center rounded-full border border-[hsl(var(--aui-border))] px-3 text-sm text-[hsl(var(--aui-muted-foreground))] opacity-70"
+            className="mb-2 mr-2 inline-flex h-9 min-w-24 items-center justify-center rounded-full border border-white/70 bg-white/80 px-3 text-sm text-[hsl(var(--aui-muted-foreground))] opacity-70"
           >
             Paused
           </button>

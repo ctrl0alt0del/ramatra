@@ -4,8 +4,39 @@
 @import "../node_modules/@assistant-ui/react-ui/dist/styles/themes/default.css";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f3ecff;
+  --foreground: #1f1838;
+
+  --aui-background: 260 100% 99%;
+  --aui-foreground: 255 28% 16%;
+
+  --aui-card: 0 0% 100%;
+  --aui-card-foreground: 255 28% 16%;
+
+  --aui-popover: 0 0% 100%;
+  --aui-popover-foreground: 255 28% 16%;
+
+  --aui-primary: 247 83% 67%;
+  --aui-primary-foreground: 0 0% 100%;
+
+  --aui-secondary: 264 60% 96%;
+  --aui-secondary-foreground: 255 28% 16%;
+
+  --aui-muted: 264 54% 95%;
+  --aui-muted-foreground: 255 12% 42%;
+
+  --aui-accent: 258 72% 95%;
+  --aui-accent-foreground: 255 28% 16%;
+
+  --aui-destructive: 0 72% 58%;
+  --aui-destructive-foreground: 0 0% 100%;
+
+  --aui-border: 258 45% 88%;
+  --aui-input: 258 45% 88%;
+  --aui-ring: 247 83% 67%;
+
+  --aui-radius: 1rem;
+  --aui-thread-max-width: 46rem;
 }
 
 html,
@@ -18,22 +49,220 @@ body {
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-manrope);
+  --font-mono: var(--font-jetbrains-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   min-height: 100dvh;
+  position: relative;
+  background-image:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.76), transparent 30%),
+    radial-gradient(circle at 85% 18%, rgba(245, 227, 255, 0.9), transparent 28%),
+    linear-gradient(135deg, #8e84ff 0%, #a79efc 30%, #cabdff 56%, #efe4ff 100%);
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  z-index: 0;
+  border-radius: 9999px;
+  filter: blur(70px);
+  pointer-events: none;
+}
+
+body::before {
+  top: 8%;
+  left: -6rem;
+  width: 15rem;
+  height: 15rem;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+body::after {
+  right: -4rem;
+  bottom: 10%;
+  width: 14rem;
+  height: 14rem;
+  background: rgba(216, 191, 255, 0.4);
+}
+
+main,
+.aui-root {
+  position: relative;
+  z-index: 1;
+}
+
+main {
+  min-height: 100dvh;
+}
+
+.aui-thread-root {
+  min-height: 0;
+  background: transparent;
+}
+
+.aui-thread-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0.35rem;
+  overflow-y: auto;
+  padding-inline: clamp(0.9rem, 1.8vw, 1.4rem);
+  padding-top: 1rem;
+}
+
+.aui-thread-viewport-footer {
+  z-index: 2;
+  margin-top: auto;
+  max-width: min(calc(var(--aui-thread-max-width) + 2rem), 100%);
+  padding-inline: clamp(0.1rem, 0.8vw, 0.6rem);
+  padding-bottom: calc(0.9rem + env(safe-area-inset-bottom, 0px));
+  background:
+    linear-gradient(180deg, rgba(250, 247, 255, 0) 0%, rgba(250, 247, 255, 0.78) 20%, rgba(250, 247, 255, 0.94) 100%);
+  backdrop-filter: blur(16px);
+}
+
+.aui-thread-welcome-root {
+  flex-grow: 0;
+}
+
+.aui-thread-welcome-center {
+  justify-content: flex-start;
+  align-items: stretch;
+}
+
+.aui-thread-welcome-message {
+  max-width: 28rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 1.5rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(246, 240, 255, 0.92));
+  box-shadow: 0 14px 32px rgba(73, 56, 145, 0.08);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.aui-composer-root,
+.aui-edit-composer-root {
+  border-radius: 1.7rem;
+}
+
+.aui-composer-root {
+  border-color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow:
+    0 18px 45px rgba(73, 56, 145, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.aui-composer-root:focus-within {
+  border-color: rgba(126, 113, 255, 0.42);
+  box-shadow:
+    0 18px 45px rgba(73, 56, 145, 0.12),
+    0 0 0 4px rgba(126, 113, 255, 0.08);
+}
+
+.aui-composer-input,
+.aui-edit-composer-input {
+  color: #1f1838;
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+.aui-composer-input::placeholder,
+.aui-edit-composer-input::placeholder {
+  color: rgba(76, 66, 112, 0.72);
+}
+
+.aui-composer-send,
+.aui-composer-cancel,
+.aui-composer-attach {
+  margin-top: 0.9rem;
+  margin-bottom: 0.9rem;
+  border-radius: 9999px;
+}
+
+.aui-composer-send {
+  background: linear-gradient(135deg, #7f74ff 0%, #9f95ff 100%);
+  color: white;
+  box-shadow: 0 10px 24px rgba(98, 87, 210, 0.28);
+}
+
+.aui-composer-send:hover {
+  background: linear-gradient(135deg, #7367f5 0%, #948aff 100%);
+}
+
+.aui-composer-attach,
+.aui-composer-cancel {
+  background: rgba(240, 234, 255, 0.82);
+}
+
+.aui-assistant-message-root,
+.aui-user-message-root {
+  padding-top: 0.65rem;
+  padding-bottom: 0.65rem;
+}
+
+.aui-assistant-message-content {
+  max-width: min(calc(var(--aui-thread-max-width) * 0.88), 100%);
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 1.65rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(246, 240, 255, 0.9));
+  box-shadow: 0 14px 32px rgba(73, 56, 145, 0.08);
+}
+
+.aui-user-message-content {
+  border: 1px solid rgba(158, 146, 255, 0.18);
+  border-radius: 1.65rem;
+  background: linear-gradient(135deg, rgba(143, 131, 255, 0.18), rgba(212, 200, 255, 0.46));
+  box-shadow: 0 14px 32px rgba(73, 56, 145, 0.08);
+}
+
+.aui-avatar-root {
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: linear-gradient(135deg, rgba(127, 116, 255, 0.18), rgba(214, 201, 255, 0.58));
+  box-shadow: 0 12px 26px rgba(73, 56, 145, 0.1);
+}
+
+.aui-avatar-fallback {
+  background: transparent;
+  color: #5a50d6;
+  font-weight: 700;
+}
+
+.aui-assistant-action-bar-root,
+.aui-branch-picker-root,
+.aui-user-action-bar-root {
+  color: rgba(76, 66, 112, 0.76);
+}
+
+.aui-thread-list-root {
+  gap: 0.55rem;
+}
+
+.aui-thread-list-new {
+  border: 1px solid rgba(255, 255, 255, 0.74);
+  border-radius: 1.25rem;
+  background: linear-gradient(135deg, rgba(127, 116, 255, 0.12), rgba(255, 255, 255, 0.84));
+  padding: 0.9rem 1rem;
+  font-weight: 600;
+  color: #2a2146;
+  box-shadow: 0 10px 24px rgba(73, 56, 145, 0.06);
+}
+
+.aui-thread-list-new:hover,
+.aui-thread-list-new[data-active] {
+  background: linear-gradient(135deg, rgba(127, 116, 255, 0.18), rgba(255, 255, 255, 0.96));
+}
+
+.aui-text pre,
+.aui-text code {
+  font-family: var(--font-jetbrains-mono), monospace;
 }
 
 @media (max-width: 767px) {
@@ -48,7 +277,7 @@ body {
   .aui-thread-viewport {
     padding-inline: 0.75rem;
     padding-top: 0.75rem;
-    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
   }
 
   .aui-thread-viewport-footer {
@@ -68,7 +297,7 @@ body {
 
   .aui-composer-root,
   .aui-edit-composer-root {
-    border-radius: 1rem;
+    border-radius: 1.35rem;
   }
 
   .aui-composer-input,
@@ -81,5 +310,11 @@ body {
   .aui-composer-input::placeholder,
   .aui-edit-composer-input::placeholder {
     font-size: 16px;
+  }
+
+  .aui-assistant-message-content,
+  .aui-user-message-content,
+  .aui-thread-welcome-message {
+    border-radius: 1.35rem;
   }
 }

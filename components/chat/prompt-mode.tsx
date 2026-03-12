@@ -1,15 +1,7 @@
 "use client";
 
 import * as Select from "@radix-ui/react-select";
-import {
-  Check,
-  ChevronDown,
-  Compass,
-  Image,
-  Pencil,
-  Sparkles,
-  Zap,
-} from "lucide-react";
+import { Check, ChevronDown, Image, Pencil, Sparkles, Zap } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import {
@@ -72,10 +64,7 @@ export function PromptModeSelect() {
   const SelectedIcon = promptModeIcons[mode];
 
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs font-medium uppercase tracking-[0.14em] text-[hsl(var(--aui-muted-foreground))]">
-        Mode
-      </span>
+    <div className="flex items-stretch">
       <Select.Root
         value={mode}
         onValueChange={(nextMode) => {
@@ -84,19 +73,19 @@ export function PromptModeSelect() {
           }
         }}
       >
-        <Select.Trigger className="inline-flex h-11 min-w-48 items-center justify-between gap-3 rounded-full border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))] pl-3 pr-4 text-sm font-medium text-[hsl(var(--aui-foreground))] shadow-sm outline-none transition hover:bg-[hsl(var(--aui-muted))] focus:border-[hsl(var(--aui-ring))]">
+        <Select.Trigger
+          className="inline-flex h-12 w-full items-center justify-between gap-3 rounded-[18px] border border-white/70 bg-white/84 text-sm font-medium text-[hsl(var(--aui-foreground))] shadow-[0_12px_28px_rgba(73,56,145,0.08)] outline-none transition hover:bg-white focus:border-[hsl(var(--aui-ring))] sm:h-14 sm:min-w-56 sm:rounded-[20px]"
+          style={{ paddingLeft: "1.25rem", paddingRight: "1.25rem" }}
+        >
           <div className="flex min-w-0 items-center gap-3">
-            <div className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--aui-muted))] text-[hsl(var(--aui-foreground))]">
+            <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-2xl bg-[#f1ecff] text-[#7267f3] sm:h-9 sm:w-9">
               <SelectedIcon className="h-4 w-4" />
             </div>
             <div className="min-w-0 text-left">
-              <p className="truncate text-[11px] uppercase tracking-[0.14em] text-[hsl(var(--aui-muted-foreground))]">
-                Assistant
-              </p>
               <Select.Value />
             </div>
           </div>
-          <Select.Icon className="text-[hsl(var(--aui-muted-foreground))]">
+          <Select.Icon className="translate-x-0 text-[hsl(var(--aui-muted-foreground))]">
             <ChevronDown className="h-4 w-4" />
           </Select.Icon>
         </Select.Trigger>
@@ -105,9 +94,9 @@ export function PromptModeSelect() {
           <Select.Content
             position="popper"
             sideOffset={8}
-            className="z-50 min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-2xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))] p-1 shadow-2xl"
+            className="z-50 min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[24px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(245,240,255,0.96)_100%)] p-1.5 shadow-[0_24px_60px_rgba(37,28,86,0.2)]"
           >
-            <Select.Viewport className="p-1">
+            <Select.Viewport className="p-0.5">
               {promptModes.map((promptMode) => (
                 <PromptModeOption key={promptMode} promptMode={promptMode} />
               ))}
@@ -129,9 +118,9 @@ function PromptModeOption({
   return (
     <Select.Item
       value={promptMode}
-      className="relative flex cursor-pointer select-none items-center gap-3 rounded-2xl px-3 py-3 text-sm font-medium text-[hsl(var(--aui-foreground))] outline-none transition data-[highlighted]:bg-[hsl(var(--aui-muted))]"
+      className="relative flex cursor-pointer select-none items-center gap-3 rounded-[20px] px-3 py-3 text-sm font-medium text-[hsl(var(--aui-foreground))] outline-none transition data-[highlighted]:bg-white/80"
     >
-      <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--aui-muted))] text-[hsl(var(--aui-foreground))]">
+      <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#f1ecff] text-[#7267f3]">
         <Icon className="h-4 w-4" />
       </div>
 
