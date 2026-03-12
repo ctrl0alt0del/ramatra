@@ -6,13 +6,16 @@ import {
   useMessagePartText,
 } from "@assistant-ui/react";
 import { makeMarkdownText } from "@assistant-ui/react-ui";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 
 import { extractComfyJobMarker } from "./comfy-marker";
 import { GeneratedImageCard } from "./GeneratedImageCard";
 
 const MarkdownText = makeMarkdownText({
-  remarkPlugins: [remarkGfm],
+  remarkPlugins: [remarkGfm, remarkMath],
+  rehypePlugins: [rehypeKatex],
   preprocess(text) {
     return text
       .replace(/\\r\\n/g, "\n")
