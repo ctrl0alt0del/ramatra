@@ -1,6 +1,8 @@
+import type { MessagePart } from "@/lib/chat/message-content";
+
 export type StoredThreadMessage = {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: MessagePart[];
 };
 
 export type ThreadApiSummary = {

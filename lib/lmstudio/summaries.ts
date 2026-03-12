@@ -1,5 +1,6 @@
 import "server-only";
 
+import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
 import { type ThreadDetail, type ThreadMessage } from "@/lib/lmstudio/threads";
 
 import { type PromptMode } from "./prompt-modes";
@@ -120,7 +121,10 @@ const getLmStudioHeaders = () => {
 
 const formatMessagesForSummary = (messages: ThreadMessage[]) => {
   return messages
-    .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
+    .map(
+      (message) =>
+        `${message.role.toUpperCase()}: ${formatMessageContentForPrompt(message.content)}`,
+    )
     .join("\n\n");
 };
 
@@ -144,7 +148,8 @@ export const shouldRefreshConversationSummary = (
 
   const config = summaryConfigByMode[mode];
   const unsummarizedCharacterCount = unsummarizedMessages.reduce(
-    (total, message) => total + message.content.length,
+    (total, message) =>
+      total + formatMessageContentForPrompt(message.content).length,
     0,
   );
 

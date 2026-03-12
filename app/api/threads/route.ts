@@ -1,11 +1,24 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { normalizeMessageContent } from "@/lib/chat/message-content";
+const textPartSchema = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+});
+
+const imagePartSchema = z.object({
+  type: z.literal("image"),
+  dataUrl: z.string(),
+  mimeType: z.string().optional(),
+  name: z.string().optional(),
+});
+
 import { createThread, listThreads } from "@/lib/lmstudio/threads";
 
 const messageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
-  content: z.string(),
+  content: z.union([z.string(), z.array(z.union([textPartSchema, imagePartSchema]))]),
 });
 
 const createThreadSchema = z.object({
@@ -30,6 +43,12 @@ export async function POST(req: Request) {
     );
   }
 
-  const thread = createThread(parsed.data);
+  const thread = createThread({
+    ...parsed.data,
+    messages: parsed.data.messages?.map((message) => ({
+      role: message.role,
+      content: normalizeMessageContent(message.content),
+    })),
+  });
   return NextResponse.json({ thread }, { status: 201 });
 }

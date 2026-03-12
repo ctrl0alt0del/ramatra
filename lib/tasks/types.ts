@@ -1,3 +1,5 @@
+import type { MessagePart } from "@/lib/chat/message-content";
+
 export const taskTypes = ["chat", "comfy"] as const;
 
 export type TaskType = (typeof taskTypes)[number];
@@ -16,7 +18,7 @@ export type TaskPayloadMap = {
   chat: {
     threadId: string | null;
     promptMode: string;
-    userMessage: string;
+    userMessage: MessagePart[];
   };
   comfy: {
     workflowName: string;

@@ -1,6 +1,19 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+import { normalizeMessageContent } from "@/lib/chat/message-content";
+const textPartSchema = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+});
+
+const imagePartSchema = z.object({
+  type: z.literal("image"),
+  dataUrl: z.string(),
+  mimeType: z.string().optional(),
+  name: z.string().optional(),
+});
+
 import {
   deleteThread,
   getThread,
@@ -9,7 +22,7 @@ import {
 
 const messageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
-  content: z.string(),
+  content: z.union([z.string(), z.array(z.union([textPartSchema, imagePartSchema]))]),
 });
 
 const updateThreadSchema = z.object({
@@ -51,7 +64,17 @@ export async function PATCH(req: Request, context: RouteContext) {
     );
   }
 
-  const thread = updateThread(threadId, parsed.data);
+  const thread = updateThread(threadId, {
+    ...parsed.data,
+    appendMessages: parsed.data.appendMessages?.map((message) => ({
+      role: message.role,
+      content: normalizeMessageContent(message.content),
+    })),
+    replaceMessages: parsed.data.replaceMessages?.map((message) => ({
+      role: message.role,
+      content: normalizeMessageContent(message.content),
+    })),
+  });
 
   if (!thread) {
     return NextResponse.json({ error: "Thread not found" }, { status: 404 });

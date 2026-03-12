@@ -1,3 +1,8 @@
+import {
+  formatMessageContentForPrompt,
+  getTextFromMessageContent,
+  type MessagePart,
+} from "@/lib/chat/message-content";
 import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
 import {
   getThread,
@@ -78,6 +83,16 @@ const getLmStudioChatUrl = () => {
   url.pathname = "/api/v1/chat";
   return url.toString();
 };
+
+type LmStudioInputItem =
+  | {
+      type: "text";
+      content: string;
+    }
+  | {
+      type: "image";
+      data_url: string;
+    };
 
 const getComfyMcpUrl = () => {
   const explicitUrl = process.env.COMFY_MCP_URL;
@@ -262,6 +277,12 @@ export const executeQueuedChatTask = async (taskId: string) => {
       }
     }
 
+    const userInput = buildLmStudioInput({
+      summary: thread?.conversationSummary ?? null,
+      previousResponseId: thread?.lmstudioResponseId ?? null,
+      userMessage: task.payload.userMessage,
+    });
+
     const response = await fetch(getLmStudioChatUrl(), {
       method: "POST",
       headers: {
@@ -273,14 +294,7 @@ export const executeQueuedChatTask = async (taskId: string) => {
       body: JSON.stringify({
         model: process.env.LM_STUDIO_MODEL,
         context_length: getConfiguredContextLengthForMode(promptMode, process.env),
-        input:
-          thread?.lmstudioResponseId !== null &&
-          thread?.lmstudioResponseId !== undefined
-            ? task.payload.userMessage
-            : buildFreshChainInput({
-                summary: thread?.conversationSummary ?? null,
-                userInput: task.payload.userMessage,
-              }),
+        input: userInput,
         previous_response_id: thread?.lmstudioResponseId ?? undefined,
         system_prompt: getSystemPromptForMode(promptMode),
         integrations: buildIntegrations(),
@@ -356,11 +370,11 @@ export const executeQueuedChatTask = async (taskId: string) => {
         appendMessages:
           !lastMessage ||
           lastMessage.role !== "assistant" ||
-          lastMessage.content !== text
+          getTextFromMessageContent(lastMessage.content) !== text
             ? [
                 {
                   role: "assistant",
-                  content: text,
+                  content: [{ type: "text", text }],
                 },
               ]
             : undefined,
@@ -380,4 +394,79 @@ export const executeQueuedChatTask = async (taskId: string) => {
   } finally {
     void processTaskQueues();
   }
+};
+
+const buildLmStudioInput = ({
+  summary,
+  previousResponseId,
+  userMessage,
+}: {
+  summary: string | null;
+  previousResponseId: string | null;
+  userMessage: MessagePart[];
+}): string | LmStudioInputItem[] => {
+  if (previousResponseId) {
+    return toLmStudioInputItems(userMessage);
+  }
+
+  const text = buildFreshChainInput({
+    summary,
+    userInput: getTextFromMessageContent(userMessage),
+  });
+
+  const imageParts = userMessage.filter(
+    (part): part is Extract<MessagePart, { type: "image" }> => part.type === "image",
+  );
+
+  if (!imageParts.length) {
+    return text;
+  }
+
+  return [
+    {
+      type: "text",
+      content: [
+        text,
+        "Use the attached image(s) together with the user request.",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    },
+    ...imageParts.map((part) => ({
+      type: "image" as const,
+      data_url: part.dataUrl,
+    })),
+  ];
+};
+
+const toLmStudioInputItems = (parts: MessagePart[]): LmStudioInputItem[] => {
+  const text = getTextFromMessageContent(parts).trim();
+  const imageParts = parts.filter(
+    (part): part is Extract<MessagePart, { type: "image" }> => part.type === "image",
+  );
+
+  const items: LmStudioInputItem[] = [];
+
+  if (text) {
+    items.push({
+      type: "text",
+      content: text,
+    });
+  }
+
+  items.push(
+    ...imageParts.map((part) => ({
+      type: "image" as const,
+      data_url: part.dataUrl,
+    })),
+  );
+
+  if (!items.length) {
+    items.push({
+      type: "text",
+      content: formatMessageContentForPrompt(parts),
+    });
+  }
+
+  return items;
 };

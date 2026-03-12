@@ -4,6 +4,8 @@ import { useMemo } from "react";
 
 import { RuntimeAdapterProvider, useAui } from "@assistant-ui/react";
 
+import type { MessagePart } from "@/lib/chat/message-content";
+
 import { resolveRemoteThreadId } from "./runtime";
 import type {
   ThreadApiDetail,
@@ -17,12 +19,20 @@ const toExportedMessage = (
 ) => {
   const id = `${remoteId}-${index}`;
   const parentId = index === 0 ? null : `${remoteId}-${index - 1}`;
-  const textParts = [
-    {
-      type: "text" as const,
-      text: storedMessage.content,
-    },
-  ] as const;
+  const textParts = storedMessage.content.flatMap((part) =>
+    part.type === "text"
+      ? [
+          {
+            type: "text" as const,
+            text: part.text,
+          },
+        ]
+      : [],
+  );
+
+  const imageAttachments = storedMessage.content.flatMap((part, partIndex) =>
+    toImageAttachment(remoteId, index, part, partIndex),
+  );
 
   if (storedMessage.role === "assistant") {
     return {
@@ -54,7 +64,7 @@ const toExportedMessage = (
         role: "user" as const,
         content: textParts,
         createdAt: new Date(),
-        attachments: [],
+        attachments: imageAttachments,
         metadata: {
           custom: {},
         },
@@ -75,6 +85,36 @@ const toExportedMessage = (
     },
     parentId,
   };
+};
+
+const toImageAttachment = (
+  remoteId: string,
+  messageIndex: number,
+  part: MessagePart,
+  partIndex: number,
+) => {
+  if (part.type !== "image") {
+    return [];
+  }
+
+  return [
+    {
+      id: `${remoteId}-${messageIndex}-image-${partIndex}`,
+      type: "image" as const,
+      name: part.name ?? `image-${partIndex + 1}`,
+      contentType: part.mimeType ?? "image/*",
+      content: [
+        {
+          type: "image" as const,
+          image: part.dataUrl,
+        },
+      ],
+      status: {
+        type: "complete" as const,
+      },
+      source: "message" as const,
+    },
+  ];
 };
 
 export function PersistedHistoryProvider({

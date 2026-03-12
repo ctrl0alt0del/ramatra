@@ -1,11 +1,17 @@
 import { type ChatMessageRoleData } from "@lmstudio/sdk";
 
+import {
+  getTextFromMessageContent,
+  parseStoredMessageContent,
+  serializeMessageContent,
+  type MessagePart,
+} from "@/lib/chat/message-content";
 import { getDb } from "@/lib/db";
 import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
 
 export type ThreadMessage = {
   role: Exclude<ChatMessageRoleData, "tool">;
-  content: string;
+  content: MessagePart[];
 };
 
 export type ThreadSummary = {
@@ -49,8 +55,10 @@ const db = getDb();
 
 const deriveTitle = (messages: ThreadMessage[]) => {
   const firstUserMessage = messages.find((message) => message.role === "user");
-  const source = firstUserMessage?.content.trim() || "New Chat";
-  return source.slice(0, 60);
+  const source = firstUserMessage
+    ? getTextFromMessageContent(firstUserMessage.content).trim()
+    : "";
+  return (source || "New Chat").slice(0, 60);
 };
 
 export const listThreads = (): ThreadSummary[] => {
@@ -155,7 +163,7 @@ export const createThread = (input?: {
         crypto.randomUUID(),
         threadId,
         message.role,
-        message.content,
+        serializeMessageContent(message.content),
         timestamp,
         index,
       );
@@ -215,7 +223,10 @@ export const getThread = (threadId: string) => {
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
     messageCount: thread.message_count,
-    messages,
+    messages: messages.map((message) => ({
+      role: message.role,
+      content: parseStoredMessageContent(message.content),
+    })),
   } satisfies ThreadDetail;
 };
 
@@ -314,7 +325,7 @@ export const updateThread = (
           crypto.randomUUID(),
           threadId,
           message.role,
-          message.content,
+          serializeMessageContent(message.content),
           timestamp,
           index,
         );
@@ -341,7 +352,7 @@ export const updateThread = (
           crypto.randomUUID(),
           threadId,
           message.role,
-          message.content,
+          serializeMessageContent(message.content),
           timestamp,
           currentPosition.max_position + index + 1,
         );

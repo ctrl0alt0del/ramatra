@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
 import { getThread, updateThread } from "@/lib/lmstudio/threads";
 
 type RouteContext = {
@@ -20,7 +21,10 @@ const getLmStudioChatUrl = () => {
 const buildTitleInput = (thread: NonNullable<ReturnType<typeof getThread>>) => {
   const excerpt = thread.messages
     .slice(0, 8)
-    .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
+    .map(
+      (message) =>
+        `${message.role.toUpperCase()}: ${formatMessageContentForPrompt(message.content)}`,
+    )
     .join("\n\n");
 
   return [

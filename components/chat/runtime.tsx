@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 
 import {
+  SimpleImageAttachmentAdapter,
   useLocalRuntime,
   type ChatModelAdapter,
   unstable_useRemoteThreadListRuntime as useRemoteThreadListRuntime,
@@ -92,17 +93,21 @@ const writePendingThreadId = (threadId: string | null) => {
 };
 
 function usePersistedChatRuntime(promptMode: PromptMode) {
+  const attachmentAdapter = useMemo(
+    () => new SimpleImageAttachmentAdapter(),
+    [],
+  );
+
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
       async *run({ messages, abortSignal, unstable_threadId }) {
         const remoteThreadId = resolveChatThreadId(unstable_threadId);
-        const serializedMessages = messages.map((message) => ({
-          role: message.role,
-          content: message.content
-            .flatMap((part) =>
-              part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
-            ),
-        }));
+        const serializedMessages = await Promise.all(
+          messages.map(async (message) => ({
+            role: message.role,
+            content: await serializeMessageContent(message),
+          })),
+        );
 
         const response = await fetch("/api/chat", {
           method: "POST",
@@ -264,8 +269,87 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
     [promptMode],
   );
 
-  return useLocalRuntime(modelAdapter);
+  return useLocalRuntime(modelAdapter, {
+    adapters: {
+      attachments: attachmentAdapter,
+    },
+  });
 }
+
+const serializeMessageContent = async (message: {
+  content: readonly { type: string; text?: string }[];
+  attachments?: readonly {
+    type?: string;
+    contentType?: string;
+    file?: File;
+    content?: readonly { type?: string; image?: string }[];
+    name?: string;
+  }[];
+}) => {
+  const textParts = message.content.flatMap((part) =>
+    part.type === "text" && typeof part.text === "string"
+      ? [{ type: "text" as const, text: part.text }]
+      : [],
+  );
+
+  const imageParts = (
+    await Promise.all(
+      (message.attachments ?? []).map(async (attachment) => {
+        const mimeType = attachment.contentType ?? attachment.file?.type;
+
+        if (
+          attachment.type !== "image" &&
+          !mimeType?.startsWith("image/") &&
+          !attachment.content?.some((item) => item.type === "image")
+        ) {
+          return null;
+        }
+
+        const existingImage = attachment.content?.find(
+          (item) => item.type === "image" && typeof item.image === "string",
+        )?.image;
+
+        const dataUrl =
+          existingImage ??
+          (attachment.file ? await fileToDataUrl(attachment.file) : null);
+
+        if (!dataUrl) {
+          return null;
+        }
+
+        return {
+          type: "image" as const,
+          dataUrl,
+          mimeType,
+          name: attachment.name,
+        };
+      }),
+    )
+  ).filter((part): part is NonNullable<typeof part> => part !== null);
+
+  return [...textParts, ...imageParts];
+};
+
+const fileToDataUrl = async (file: File) => {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Failed to read attachment."));
+    };
+
+    reader.onerror = () => {
+      reject(reader.error ?? new Error("Failed to read attachment."));
+    };
+
+    reader.readAsDataURL(file);
+  });
+};
 
 export function usePersistedRuntime(promptMode: PromptMode) {
   const adapter = useMemo<RemoteThreadListAdapter>(

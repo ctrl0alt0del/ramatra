@@ -1,20 +1,30 @@
 import { z } from "zod";
 
+import {
+  hasUsableMessageContent,
+  serializeMessageContent,
+  type MessagePart,
+} from "@/lib/chat/message-content";
 import { createThread, getThread, updateThread } from "@/lib/lmstudio/threads";
 import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { processTaskQueues } from "@/lib/tasks/processor";
 import { enqueueChatTask } from "@/lib/tasks/scheduler";
 
+const textPartSchema = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+});
+
+const imagePartSchema = z.object({
+  type: z.literal("image"),
+  dataUrl: z.string(),
+  mimeType: z.string().optional(),
+  name: z.string().optional(),
+});
+
 const messageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
-  content: z
-    .array(
-      z.object({
-        type: z.string(),
-        text: z.string().optional(),
-      }),
-    )
-    .optional(),
+  content: z.array(z.union([textPartSchema, imagePartSchema])).optional(),
 });
 
 const requestSchema = z.object({
@@ -26,20 +36,12 @@ const requestSchema = z.object({
 const toChatMessages = (messages: Array<z.infer<typeof messageSchema>>) => {
   return messages
     .map((message) => {
-      const text = (message.content ?? [])
-        .flatMap((part) =>
-          part.type === "text" && typeof part.text === "string"
-            ? [part.text]
-            : [],
-        )
-        .join("\n\n")
-        .trim();
-
-      if (!text) return null;
+      const content = (message.content ?? []) as MessagePart[];
+      if (!hasUsableMessageContent(content)) return null;
 
       return {
         role: message.role,
-        content: text,
+        content,
       };
     })
     .filter(
@@ -47,7 +49,7 @@ const toChatMessages = (messages: Array<z.infer<typeof messageSchema>>) => {
         message,
       ): message is {
         role: "system" | "user" | "assistant";
-        content: string;
+        content: MessagePart[];
       } => {
         return message !== null;
       },
@@ -104,7 +106,8 @@ export async function POST(req: Request) {
     if (
       !lastMessage ||
       lastMessage.role !== "user" ||
-      lastMessage.content !== latestUserMessage.content
+      serializeMessageContent(lastMessage.content) !==
+        serializeMessageContent(latestUserMessage.content)
     ) {
       updateThread(existingThread.id, {
         appendMessages: [
