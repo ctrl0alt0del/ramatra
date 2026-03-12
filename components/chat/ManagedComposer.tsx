@@ -7,6 +7,7 @@ import { useThreadRuntime } from "@assistant-ui/react";
 import { Composer } from "@assistant-ui/react-ui";
 
 import { usePromptMode } from "./prompt-mode";
+import { resolvePersistedThreadId } from "./runtime";
 import { useSystemState } from "./system-state";
 
 export function ManagedComposer() {
@@ -23,7 +24,7 @@ export function ManagedComposer() {
       setIsCollapsingContext(true);
       setCollapseError(null);
 
-      const remoteId = threadRuntime.getState().remoteId;
+      const remoteId = resolvePersistedThreadId(threadRuntime.getState().remoteId);
       if (!remoteId) {
         throw new Error("No thread selected.");
       }

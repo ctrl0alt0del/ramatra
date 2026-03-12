@@ -271,7 +271,9 @@ export function usePersistedRuntime(promptMode: PromptMode) {
   const adapter = useMemo<RemoteThreadListAdapter>(
     () => ({
       async list() {
-        const response = await fetch("/api/threads");
+        const response = await fetch("/api/threads", {
+          cache: "no-store",
+        });
         if (!response.ok) {
           throw new Error("Failed to load threads");
         }
@@ -314,7 +316,9 @@ export function usePersistedRuntime(promptMode: PromptMode) {
       },
       async fetch(remoteId) {
         const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
-        const response = await fetch(`/api/threads/${resolvedRemoteId}`);
+        const response = await fetch(`/api/threads/${resolvedRemoteId}`, {
+          cache: "no-store",
+        });
         if (!response.ok) {
           throw new Error("Failed to fetch thread");
         }

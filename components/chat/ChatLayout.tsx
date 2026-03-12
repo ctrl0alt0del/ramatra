@@ -7,6 +7,7 @@ import { PanelLeft, X } from "lucide-react";
 import { Thread, ThreadList } from "@assistant-ui/react-ui";
 
 import { CustomAssistantMessage } from "./CustomAssistantMessage";
+import { CustomThreadListItem } from "./CustomThreadListItem";
 import { CustomUserMessage } from "./CustomUserMessage";
 import { ManagedComposer } from "./ManagedComposer";
 import { PromptModeSelect } from "./prompt-mode";
@@ -48,7 +49,14 @@ export function ChatLayout() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
-              <ThreadList />
+              <ThreadList.Root>
+                <ThreadList.New />
+                <ThreadList.Items
+                  components={{
+                    ThreadListItem: CustomThreadListItem,
+                  }}
+                />
+              </ThreadList.Root>
             </div>
           </div>
         </aside>
@@ -102,7 +110,14 @@ export function ChatLayout() {
                       </Dialog.Close>
                     </div>
                     <div className="min-h-0 flex-1 overflow-hidden">
-                      <ThreadList />
+                      <ThreadList.Root>
+                        <ThreadList.New />
+                        <ThreadList.Items
+                          components={{
+                            ThreadListItem: CustomThreadListItem,
+                          }}
+                        />
+                      </ThreadList.Root>
                     </div>
                   </Dialog.Content>
                 </Dialog.Portal>
