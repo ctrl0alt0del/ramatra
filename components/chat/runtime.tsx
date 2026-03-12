@@ -62,6 +62,10 @@ export const resolveRemoteThreadId = (threadId: string | undefined) => {
   return mapping[threadId];
 };
 
+export const resolvePersistedThreadId = (threadId: string | undefined) => {
+  return resolveRemoteThreadId(threadId) ?? readPendingThreadId() ?? threadId;
+};
+
 const resolveChatThreadId = (threadId: string | undefined) => {
   return resolveRemoteThreadId(threadId) ?? readPendingThreadId() ?? undefined;
 };
@@ -367,22 +371,25 @@ export function usePersistedRuntime(promptMode: PromptMode) {
       },
       async generateTitle(remoteId, messages) {
         return createAssistantStream(async (controller) => {
-          const resolvedRemoteId = resolveRemoteThreadId(remoteId) ?? remoteId;
-          const firstUserMessage = messages.find(
-            (message) => message.role === "user",
-          );
-          const firstTextPart = firstUserMessage?.content.find(
-            (part) => part.type === "text",
-          );
-          const title = firstTextPart?.text?.trim().slice(0, 60) || "New Chat";
-
-          await fetch(`/api/threads/${resolvedRemoteId}`, {
-            method: "PATCH",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ title }),
+          const resolvedRemoteId = resolvePersistedThreadId(remoteId);
+          const response = await fetch(`/api/threads/${resolvedRemoteId}/title`, {
+            method: "POST",
           });
+
+          let title = "New Chat";
+
+          if (response.ok) {
+            const data = (await response.json()) as { title?: string };
+            title = data.title?.trim() || title;
+          } else {
+            const firstUserMessage = messages.find(
+              (message) => message.role === "user",
+            );
+            const firstTextPart = firstUserMessage?.content.find(
+              (part) => part.type === "text",
+            );
+            title = firstTextPart?.text?.trim().slice(0, 60) || title;
+          }
 
           controller.appendText(title);
           controller.close();

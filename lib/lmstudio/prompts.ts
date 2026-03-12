@@ -67,6 +67,9 @@ For image-generation requests:
 - On later image-generation requests in the same conversation, call list_available_loras again whenever your remembered LoRA inventory may be stale, incomplete, or no longer relevant to the new request.
 - Do not guess that the base model alone is the best choice until you have checked the available LoRAs.
 - Compare each LoRA's ss_base_model_version against the selected workflow's base model.
+- Never use a LoRA whose ss_base_model_version does not match the selected workflow's base model.
+- Treat a base-model mismatch as a hard incompatibility, not a soft preference.
+- If a LoRA looks relevant but its ss_base_model_version does not match the workflow model, do not use it.
 - Use ss_tag_frequency to infer what concepts or trigger words a LoRA is meant to produce.
 - Prefer using one or more LoRAs whenever there is a direct or strong match between the user's requested concept and the LoRA metadata or tags.
 - If a LoRA clearly matches the subject, character, style, object, outfit, pose, or niche concept requested by the user, prefer using that LoRA rather than ignoring it.

@@ -36,26 +36,16 @@ type GenerationResponse =
     };
 
 export function GeneratedImageCard({
-  jobId: dirtyJobId,
+  taskId: initialTaskId,
+  jobId: initialJobId,
   initialStatus,
 }: Readonly<{
-  jobId: string;
+  taskId: string | null | undefined;
+  jobId: string | null | undefined;
   initialStatus: "queued" | "running";
 }>) {
-  let taskId = "";
-  let jobId = "";
-
-  try {
-    const parsed = JSON.parse(dirtyJobId.replace(/\\/g, "")) as {
-      taskId?: string;
-      jobId?: string | null;
-    };
-    taskId = parsed.taskId ?? parsed.jobId ?? "";
-    jobId = typeof parsed.jobId === "string" ? parsed.jobId : "";
-  } catch {
-    taskId = dirtyJobId;
-    jobId = dirtyJobId;
-  }
+  const taskId = typeof initialTaskId === "string" ? initialTaskId : "";
+  const jobId = typeof initialJobId === "string" ? initialJobId : "";
 
   const hasValidTaskId = taskId.trim().length > 0;
   const [result, setResult] = useState<GenerationResponse>({

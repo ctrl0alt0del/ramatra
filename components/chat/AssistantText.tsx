@@ -35,7 +35,8 @@ export function AssistantText() {
       ) : null}
       {marker ? (
         <GeneratedImageCard
-          jobId={marker.jobId}
+          taskId={marker.taskId}
+          jobId={marker.jobId ?? null}
           initialStatus={marker.status}
         />
       ) : null}
