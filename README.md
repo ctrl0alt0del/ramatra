@@ -117,6 +117,22 @@ Optional auto-summary:
 LM_STUDIO_AUTO_SUMMARY=false
 ```
 
+Optional redundant-model cleanup after each chat task:
+
+```env
+LM_STUDIO_REDUNDANT_MODELS=
+LM_STUDIO_KEEP_MODELS=
+```
+
+Notes:
+
+- cleanup runs automatically after every chat task
+- `LM_STUDIO_REDUNDANT_MODELS` is a comma-separated list of model keys or instance ids to unload.
+- `*` wildcards are supported, for example `qwen2.5-vl-*`.
+- `LM_STUDIO_KEEP_MODELS` is a comma-separated allowlist checked before unload.
+- `LM_STUDIO_MODEL` is always protected automatically, so the active chat model stays loaded.
+- for future speculative decoding, keep the draft model out of `LM_STUDIO_REDUNDANT_MODELS` or add it to `LM_STUDIO_KEEP_MODELS`.
+
 Optional web search MCP:
 
 ```env

@@ -15,11 +15,22 @@ export const taskStatuses = [
 export type TaskStatus = (typeof taskStatuses)[number];
 
 export type TaskPayloadMap = {
-  chat: {
-    threadId: string | null;
-    promptMode: string;
-    userMessage: MessagePart[];
-  };
+  chat:
+    | {
+        kind: "conversation";
+        threadId: string | null;
+        promptMode: string;
+        userMessage: MessagePart[];
+      }
+    | {
+        kind: "generate_title";
+        threadId: string;
+      }
+    | {
+        kind: "collapse_context";
+        threadId: string;
+        promptMode: string;
+      };
   comfy: {
     workflowName: string;
     prompt: string;
@@ -44,6 +55,8 @@ export type TaskResultMap = {
     text?: string;
     reasoning?: string;
     responseId?: string | null;
+    title?: string;
+    summaryCollapsed?: boolean;
   };
   comfy: {
     taskId?: string;

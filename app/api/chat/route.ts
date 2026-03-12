@@ -121,6 +121,7 @@ export async function POST(req: Request) {
   }
 
   const task = enqueueChatTask({
+    kind: "conversation",
     threadId: thread.id,
     promptMode,
     userMessage: latestUserMessage.content,

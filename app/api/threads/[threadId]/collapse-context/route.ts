@@ -1,11 +1,36 @@
 import { NextResponse } from "next/server";
 
 import { isPromptMode } from "@/lib/lmstudio/prompt-modes";
-import { getThread, updateThread } from "@/lib/lmstudio/threads";
-import { generateConversationSummary } from "@/lib/lmstudio/summaries";
+import { getThread } from "@/lib/lmstudio/threads";
+import { processTaskQueues } from "@/lib/tasks/processor";
+import { enqueueChatTask } from "@/lib/tasks/scheduler";
+import { getTask } from "@/lib/tasks/store";
 
 type RouteContext = {
   params: Promise<{ threadId: string }>;
+};
+
+const waitForTaskCompletion = async (taskId: string, timeoutMs = 30000) => {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const task = getTask(taskId);
+    if (!task) {
+      throw new Error("Task not found.");
+    }
+
+    if (
+      task.status === "completed" ||
+      task.status === "failed" ||
+      task.status === "cancelled"
+    ) {
+      return task;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  throw new Error("Timed out waiting for context collapse.");
 };
 
 export async function POST(req: Request, context: RouteContext) {
@@ -38,22 +63,27 @@ export async function POST(req: Request, context: RouteContext) {
   }
 
   try {
-    const conversationSummary = await generateConversationSummary({
-      mode: json.promptMode,
-      previousSummary: thread.conversationSummary,
-      messages: unsummarizedMessages,
+    const task = enqueueChatTask({
+      kind: "collapse_context",
+      threadId,
+      promptMode: json.promptMode,
     });
 
-    const updatedThread = updateThread(thread.id, {
-      conversationSummary,
-      summaryUpdatedAt: new Date().toISOString(),
-      summaryMessageCount: thread.messageCount,
-      lmstudioResponseId: null,
-    });
+    void processTaskQueues();
+    const completedTask = await waitForTaskCompletion(task.id);
+
+    if (completedTask.status !== "completed") {
+      return NextResponse.json(
+        {
+          error: completedTask.error ?? "Failed to collapse thread context.",
+        },
+        { status: 500 },
+      );
+    }
 
     return NextResponse.json({
-      thread: updatedThread,
-      summaryCollapsed: true,
+      thread: getThread(threadId),
+      summaryCollapsed: completedTask.result?.summaryCollapsed ?? false,
     });
   } catch (error) {
     return NextResponse.json(

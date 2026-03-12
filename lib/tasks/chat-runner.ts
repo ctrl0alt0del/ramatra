@@ -4,6 +4,8 @@ import {
   type MessagePart,
 } from "@/lib/chat/message-content";
 import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
+import { cleanupRedundantLmStudioModels } from "@/lib/lmstudio/models";
+import { generateThreadTitle } from "@/lib/lmstudio/title";
 import {
   getThread,
   updateThread,
@@ -102,6 +104,15 @@ const getComfyMcpUrl = () => {
 
   const port = process.env.COMFY_MCP_PORT ?? "4000";
   return `http://127.0.0.1:${port}/mcp`;
+};
+
+const getChatModelKey = () => {
+  const modelKey = process.env.LM_STUDIO_MODEL;
+  if (!modelKey) {
+    throw new Error("LM_STUDIO_MODEL is not configured.");
+  }
+
+  return modelKey;
 };
 
 const getAssistantText = (output: LmStudioOutput[] | undefined) => {
@@ -220,6 +231,20 @@ export const executeQueuedChatTask = async (taskId: string) => {
   }
 
   try {
+    if (task.payload.kind === "generate_title") {
+      await executeQueuedTitleTask(task.id, task.payload.threadId);
+      return;
+    }
+
+    if (task.payload.kind === "collapse_context") {
+      await executeQueuedCollapseContextTask(
+        task.id,
+        task.payload.threadId,
+        task.payload.promptMode,
+      );
+      return;
+    }
+
     let thread = task.payload.threadId ? getThread(task.payload.threadId) : null;
     const promptMode =
       task.payload.promptMode && isPromptMode(task.payload.promptMode)
@@ -392,8 +417,80 @@ export const executeQueuedChatTask = async (taskId: string) => {
       error instanceof Error ? error.message : "Chat task failed.",
     );
   } finally {
+    try {
+      const unloaded = await cleanupRedundantLmStudioModels({
+        activeModelKey: getChatModelKey(),
+      });
+
+      if (unloaded.length > 0) {
+        console.info(
+          `[chat-runner] unloaded redundant LM Studio models: ${unloaded
+            .map((model) => `${model.modelKey} (${model.instanceId})`)
+            .join(", ")}`,
+        );
+      }
+    } catch (error) {
+      console.warn("[chat-runner] failed to cleanup redundant LM Studio models", error);
+    }
+
     void processTaskQueues();
   }
+};
+
+const executeQueuedTitleTask = async (taskId: string, threadId: string) => {
+  const thread = getThread(threadId);
+  if (!thread) {
+    throw new Error("Thread not found.");
+  }
+
+  const inferredTitle = await generateThreadTitle(thread);
+  const nextTitle = inferredTitle || thread.title || "New Chat";
+  const updatedThread = updateThread(threadId, { title: nextTitle });
+
+  markTaskCompleted(taskId, {
+    title: updatedThread?.title ?? nextTitle,
+  });
+};
+
+const executeQueuedCollapseContextTask = async (
+  taskId: string,
+  threadId: string,
+  promptMode: string,
+) => {
+  const thread = getThread(threadId);
+  if (!thread) {
+    throw new Error("Thread not found.");
+  }
+
+  if (!isPromptMode(promptMode)) {
+    throw new Error("A valid promptMode is required.");
+  }
+
+  const unsummarizedMessages = thread.messages.slice(thread.summaryMessageCount);
+
+  if (!unsummarizedMessages.length) {
+    markTaskCompleted(taskId, {
+      summaryCollapsed: false,
+    });
+    return;
+  }
+
+  const conversationSummary = await generateConversationSummary({
+    mode: promptMode,
+    previousSummary: thread.conversationSummary,
+    messages: unsummarizedMessages,
+  });
+
+  updateThread(thread.id, {
+    conversationSummary,
+    summaryUpdatedAt: new Date().toISOString(),
+    summaryMessageCount: thread.messageCount,
+    lmstudioResponseId: null,
+  });
+
+  markTaskCompleted(taskId, {
+    summaryCollapsed: true,
+  });
 };
 
 const buildLmStudioInput = ({

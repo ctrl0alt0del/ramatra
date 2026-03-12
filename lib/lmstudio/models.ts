@@ -5,13 +5,19 @@ type LoadedInstance = {
   };
 };
 
-type ModelEntry = {
+export type ModelEntry = {
   key: string;
   loaded_instances: LoadedInstance[];
 };
 
-type ListModelsResponse = {
+export type ListModelsResponse = {
   models: ModelEntry[];
+};
+
+export type LoadedLmStudioModelInstance = {
+  instanceId: string;
+  modelKey: string;
+  contextLength: number;
 };
 
 const getLmStudioApiUrl = (pathname: string) => {
@@ -46,6 +52,20 @@ export const listLmStudioModels = async () => {
   return (await response.json()) as ListModelsResponse;
 };
 
+export const listLoadedLmStudioModels = async (): Promise<
+  LoadedLmStudioModelInstance[]
+> => {
+  const data = await listLmStudioModels();
+
+  return data.models.flatMap((model) =>
+    model.loaded_instances.map((instance) => ({
+      instanceId: instance.id,
+      modelKey: model.key,
+      contextLength: instance.config.context_length,
+    })),
+  );
+};
+
 export const getLoadedChatInstanceId = async (modelKey: string) => {
   const data = await listLmStudioModels();
   const directMatch = data.models.find((model) => model.key === modelKey);
@@ -60,10 +80,8 @@ export const getLoadedChatInstanceId = async (modelKey: string) => {
 };
 
 export const listLoadedLmStudioInstanceIds = async () => {
-  const data = await listLmStudioModels();
-  return data.models.flatMap((model) =>
-    model.loaded_instances.map((instance) => instance.id),
-  );
+  const models = await listLoadedLmStudioModels();
+  return models.map((model) => model.instanceId);
 };
 
 export const unloadLmStudioModel = async (instanceId: string) => {
@@ -99,4 +117,71 @@ export const loadLmStudioModel = async (modelKey: string) => {
   if (!response.ok) {
     throw new Error(`Failed to load LM Studio model: HTTP ${response.status}`);
   }
+};
+
+const parseModelSelectorList = (rawValue: string | undefined) => {
+  return (rawValue ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+};
+
+const escapeRegExp = (value: string) => {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+const matchesModelSelector = (value: string, selector: string) => {
+  if (selector === "*") {
+    return true;
+  }
+
+  if (!selector.includes("*")) {
+    return value === selector;
+  }
+
+  const pattern = `^${selector.split("*").map(escapeRegExp).join(".*")}$`;
+  return new RegExp(pattern, "i").test(value);
+};
+
+export const cleanupRedundantLmStudioModels = async ({
+  activeModelKey,
+  redundantSelectors = parseModelSelectorList(
+    process.env.LM_STUDIO_REDUNDANT_MODELS,
+  ),
+  keepSelectors = parseModelSelectorList(process.env.LM_STUDIO_KEEP_MODELS),
+}: {
+  activeModelKey: string;
+  redundantSelectors?: string[];
+  keepSelectors?: string[];
+}) => {
+  if (!redundantSelectors.length) {
+    return [];
+  }
+
+  const keepSet = new Set([activeModelKey, ...keepSelectors]);
+  const loadedModels = await listLoadedLmStudioModels();
+  const toUnload = loadedModels.filter((model) => {
+    const isRedundant = redundantSelectors.some(
+      (selector) =>
+        matchesModelSelector(model.modelKey, selector) ||
+        matchesModelSelector(model.instanceId, selector),
+    );
+    if (!isRedundant) {
+      return false;
+    }
+
+    const isProtected = [...keepSet].some(
+      (selector) =>
+        matchesModelSelector(model.modelKey, selector) ||
+        matchesModelSelector(model.instanceId, selector),
+    );
+
+    return !isProtected;
+  });
+
+  for (const model of toUnload) {
+    await unloadLmStudioModel(model.instanceId);
+  }
+
+  return toUnload;
 };
