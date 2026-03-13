@@ -19,14 +19,14 @@ const summaryConfigByMode: Record<PromptMode, SummaryConfig> = {
   fast: {
     messageThreshold: 8,
     characterThreshold: 5_000,
-    maxSummaryCharacters: 1_500,
-    maxTranscriptCharacters: 8_000,
+    maxSummaryCharacters: 3_000,
+    maxTranscriptCharacters: 28_000,
   },
   regular: {
     messageThreshold: 10,
     characterThreshold: 7_500,
-    maxSummaryCharacters: 2_400,
-    maxTranscriptCharacters: 12_000,
+    maxSummaryCharacters: 5_000,
+    maxTranscriptCharacters: 40_000,
   },
   writer: {
     messageThreshold: 8,
@@ -48,43 +48,20 @@ const summaryPromptByMode: Record<PromptMode, string> = {
 Goal:
 - Produce the smallest useful summary possible.
 
-Keep only:
-- current user goal
-- constraints
-- critical established facts
-- unresolved question or next step
-
 Rules:
 - Use short bullet points.
 - Omit fluff, examples, repeated wording, and long explanations.
 - Do not include reasoning traces.
 - Do not mention tools unless the result matters to the next reply.
-- For list/table/enumeration tasks, include minimal continuation checkpoint:
-  - format contract
-  - current section
-  - last completed item
-  - do-not-repeat item keys
-  - next expected item
+- If there was an incomplete enumeration, provide enough information to continue it till the end.
 - Output only the summary.`,
   regular: `You compress chat history into practical working memory for a general assistant.
-
-Keep:
-- user goals
-- important facts
-- preferences
-- relevant tool findings in compressed form
-- open tasks or unresolved questions
 
 Rules:
 - Prefer concise bullets with short section headers.
 - Remove repetition and low-value conversational filler.
 - Do not include chain-of-thought or internal reasoning.
-- For list/table/enumeration tasks, include strict continuation checkpoint:
-  - format contract
-  - current section
-  - completed items (deduplicated)
-  - forbidden repeats
-  - next expected item
+- If there was an incomplete enumeration, provide enough information to continue it till the end.
 - Output only the summary.`,
   writer: `You are a continuity archivist for a writing assistant.
 
@@ -142,8 +119,7 @@ const getLmStudioHeaders = () => {
 const formatMessagesForSummary = (messages: ThreadMessage[]) => {
   return messages
     .filter(
-      (message) =>
-        !messagePartsContainContextCompactionMarker(message.content),
+      (message) => !messagePartsContainContextCompactionMarker(message.content),
     )
     .map(
       (message) =>
@@ -224,7 +200,9 @@ export const shouldRefreshConversationSummary = (
   thread: ThreadDetail,
   mode: PromptMode,
 ) => {
-  const unsummarizedMessages = thread.messages.slice(thread.summaryMessageCount);
+  const unsummarizedMessages = thread.messages.slice(
+    thread.summaryMessageCount,
+  );
   if (unsummarizedMessages.length < 2) {
     return false;
   }
@@ -273,27 +251,41 @@ export const generateConversationSummary = async ({
   });
 
   const requestSummary = async (transcript: string) => {
-    const interruptionBlock =
-      interruption?.interrupted
-        ? [
-            "Interruption metadata:",
-            interruption.interruptionContext?.trim() ||
-              "The previous assistant response was interrupted by context overflow.",
-            ...(strictCheckpointMode
-              ? [
-                  "When summarizing this interruption, include a strict continuation checkpoint:",
-                  "- current section/subsection currently in progress",
-                  "- completed items already emitted (exact names; deduplicated)",
-                  "- first next item that should be emitted after resume",
-                  "- forbidden repeats: items that must not appear again",
-                  "- short continuation contract: continue forward only, never restart from the beginning",
-                ]
-              : []),
-            interruption.interruptedAssistantTailChars?.trim()
-              ? `Interrupted assistant output tail:\n${interruption.interruptedAssistantTailChars.trim()}`
-              : "Interrupted assistant output tail:\n(none)",
-          ].join("\n")
-        : null;
+    const interruptionBlock = interruption?.interrupted
+      ? [
+          "Interruption metadata:",
+          interruption.interruptionContext?.trim() ||
+            "The previous assistant response was interrupted by context overflow.",
+          ...(strictCheckpointMode
+            ? [
+                "When summarizing this interruption, include a strict continuation checkpoint:",
+                "- current section/subsection currently in progress",
+                "- completed items already emitted (exact names; deduplicated)",
+                "- first next item that should be emitted after resume",
+                "- forbidden repeats: items that must not appear again",
+                "- short continuation contract: continue forward only, never restart from the beginning",
+                "",
+                "REQUIRED OUTPUT SHAPE for interruption summaries (must follow exactly):",
+                "Goal: <one line>",
+                "Format contract: <one line>",
+                "Current section: <one line>",
+                "Last completed item: <one line>",
+                "Next expected item: <one line>",
+                "Forbidden repeats: <comma-separated short keys>",
+                "Compact enumerated list: <comma-separated keys or compact ranges>",
+                "",
+                "Rules for Compact enumerated list:",
+                "- Base it on interrupted assistant output tail/full text as canonical source.",
+                "- Include already emitted item keys (first-column identifiers).",
+                "- If list is long, use compact ranges plus the most recent emitted keys.",
+                "- Do not leave it empty when enumeration is detected.",
+              ]
+            : []),
+          interruption.interruptedAssistantTailChars?.trim()
+            ? `Interrupted assistant output tail:\n${interruption.interruptedAssistantTailChars.trim()}`
+            : "Interrupted assistant output tail:\n(none)",
+        ].join("\n")
+      : null;
 
     const parts = [
       "Update the conversation summary using the new transcript.",
@@ -331,6 +323,7 @@ export const generateConversationSummary = async ({
     }
 
     const summary = extractSummaryText(data.output);
+    console.log("Generated summary:", { summary, mode, interruption });
     const overflow = isContextOverflowSignal({
       stopReason: data.stop_reason,
       finishReason: data.finish_reason,

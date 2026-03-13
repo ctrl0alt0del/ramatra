@@ -70,7 +70,7 @@ type ChatResponse = {
 
 const CONTEXT_COMPACT_THRESHOLD_RATIO = 0.9;
 const MAX_OVERFLOW_CONTINUATIONS_PER_TASK = 8;
-const MAX_CONTINUATION_PARTIAL_CHARS = 3_500;
+const MAX_CONTINUATION_PARTIAL_CHARS = 500;
 
 type ChatStreamEvent =
   | {
@@ -351,6 +351,7 @@ const collapseThreadContext = async ({
   interruption?: {
     interrupted: boolean;
     interruptedAssistantTailChars?: string;
+    interruptedAssistantFullText?: string;
     interruptionContext?: string;
   };
 }) => {
@@ -359,16 +360,32 @@ const collapseThreadContext = async ({
     return { collapsed: false as const, thread: null };
   }
 
-  const unsummarizedMessages = thread.messages.slice(thread.summaryMessageCount);
+  const unsummarizedMessages = thread.messages.slice(
+    thread.summaryMessageCount,
+  );
   if (!unsummarizedMessages.length) {
     return { collapsed: false as const, thread };
   }
+
+  const interruptedAssistantFullText =
+    interruption?.interruptedAssistantFullText?.trim() ?? "";
+  const messagesForSummary = interruptedAssistantFullText
+    ? [
+        ...unsummarizedMessages,
+        {
+          role: "assistant" as const,
+          content: [
+            { type: "text" as const, text: interruptedAssistantFullText },
+          ],
+        },
+      ]
+    : unsummarizedMessages;
 
   const conversationSummary = await generateConversationSummary({
     mode: promptMode,
     modelInstanceId: thread.lmstudioModelInstanceId,
     previousSummary: thread.conversationSummary,
-    messages: unsummarizedMessages,
+    messages: messagesForSummary,
     interruption,
   });
 
@@ -408,6 +425,7 @@ const maybeAutoCompactThreadContext = async ({
   interruption?: {
     interrupted: boolean;
     interruptedAssistantTailChars?: string;
+    interruptedAssistantFullText?: string;
     interruptionContext?: string;
   };
   force?: boolean;
@@ -568,7 +586,9 @@ export const executeQueuedChatTask = async (taskId: string) => {
       return;
     }
 
-    let thread = task.payload.threadId ? getThread(task.payload.threadId) : null;
+    let thread = task.payload.threadId
+      ? getThread(task.payload.threadId)
+      : null;
     const promptMode =
       task.payload.promptMode && isPromptMode(task.payload.promptMode)
         ? task.payload.promptMode
@@ -650,9 +670,15 @@ export const executeQueuedChatTask = async (taskId: string) => {
       }
     };
 
-    if (task.payload.threadId && task.payload.kind === "conversation" && thread) {
+    if (
+      task.payload.threadId &&
+      task.payload.kind === "conversation" &&
+      thread
+    ) {
       setSummaryCallsInCurrentRequest(0);
-      const estimatedUpcomingTokens = estimateMessageTokens(task.payload.userMessage);
+      const estimatedUpcomingTokens = estimateMessageTokens(
+        task.payload.userMessage,
+      );
       const projectedUsedTokens =
         thread.contextWindowUsedTokens === null
           ? null
@@ -773,7 +799,9 @@ export const executeQueuedChatTask = async (taskId: string) => {
           status: response.status,
           data,
         });
-        throw new Error(data.error?.message ?? "LM Studio chat request failed.");
+        throw new Error(
+          data.error?.message ?? "LM Studio chat request failed.",
+        );
       }
       if (!response.body) {
         throw new Error("LM Studio did not return a stream body.");
@@ -786,14 +814,20 @@ export const executeQueuedChatTask = async (taskId: string) => {
 
       try {
         await parseSseEvents(response.body, (event) => {
-          if (event.type === "reasoning.delta" && typeof event.content === "string") {
+          if (
+            event.type === "reasoning.delta" &&
+            typeof event.content === "string"
+          ) {
             localStreamedReasoning += event.content;
             streamedReasoning += event.content;
             publishRunningResult(localFinalResponse?.response_id ?? null);
             return;
           }
 
-          if (event.type === "message.delta" && typeof event.content === "string") {
+          if (
+            event.type === "message.delta" &&
+            typeof event.content === "string"
+          ) {
             localStreamedText += event.content;
             streamedText += event.content;
             publishRunningResult(localFinalResponse?.response_id ?? null);
@@ -807,7 +841,9 @@ export const executeQueuedChatTask = async (taskId: string) => {
               selectedModelTarget: modelTarget,
               event,
             });
-            throw new Error(event.error?.message ?? "LM Studio streaming error.");
+            throw new Error(
+              event.error?.message ?? "LM Studio streaming error.",
+            );
           }
 
           if (event.type === "chat.end") {
@@ -834,15 +870,17 @@ export const executeQueuedChatTask = async (taskId: string) => {
       const localResponseOutput = resolvedFinalResponse?.output;
       const localResponseId = resolvedFinalResponse?.response_id ?? null;
       const localText =
-        (localResponseOutput?.length ? getAssistantText(localResponseOutput) : "") ||
-        localStreamedText;
+        (localResponseOutput?.length
+          ? getAssistantText(localResponseOutput)
+          : "") || localStreamedText;
       const localReasoning =
         (localResponseOutput?.length
           ? getAssistantReasoning(localResponseOutput)
           : "") || localStreamedReasoning;
       const interruptedWithoutEnd =
         !resolvedFinalResponse &&
-        (localStreamedText.trim().length > 0 || localStreamedReasoning.trim().length > 0);
+        (localStreamedText.trim().length > 0 ||
+          localStreamedReasoning.trim().length > 0);
       const signals = getChatStopSignals(resolvedFinalResponse);
       const overflowDetected =
         interruptedWithoutEnd ||
@@ -916,14 +954,13 @@ export const executeQueuedChatTask = async (taskId: string) => {
         totalTokens: requestedContextLength,
         phase: "after",
         continuationIndex: continuationCount,
-        interruption: overflowDetected
-          ? {
-              interrupted: true,
-              interruptedAssistantTailChars,
-              interruptionContext:
-                "The assistant response was interrupted by context overflow. Resume from this checkpoint, restart markdown/table formatting cleanly (new header/section), and avoid repeating already listed items.",
-            }
-          : undefined,
+        interruption: {
+          interrupted: true,
+          interruptedAssistantTailChars,
+          interruptedAssistantFullText: streamedText,
+          interruptionContext:
+            "The assistant response was interrupted during generation near context limit. Resume from this checkpoint, continue forward only, and avoid repeating already emitted items.",
+        },
         force: true,
       });
 
@@ -955,10 +992,12 @@ export const executeQueuedChatTask = async (taskId: string) => {
         currentUsedTokens !== null &&
         currentUsedTokens >= requestedContextLength - 2;
       shouldForceContinue = overflowDetected || nearLimitDetected;
-
     }
 
-    if (continuationCount >= MAX_OVERFLOW_CONTINUATIONS_PER_TASK && shouldForceContinue) {
+    if (
+      continuationCount >= MAX_OVERFLOW_CONTINUATIONS_PER_TASK &&
+      shouldForceContinue
+    ) {
       console.error("[chat-runner] reached continuation safety cap", {
         taskId: task.id,
         threadId: task.payload.threadId ?? null,
@@ -992,16 +1031,18 @@ export const executeQueuedChatTask = async (taskId: string) => {
       const shouldAppendAssistantMessage =
         !lastMessage ||
         lastMessage.role !== "assistant" ||
-        getTextFromMessageContent(lastMessage.content) !== textWithCompactionMarkers;
-      const appendMessages =
-        shouldAppendAssistantMessage
-          ? [
-              {
-                role: "assistant" as const,
-                content: [{ type: "text" as const, text: textWithCompactionMarkers }],
-              },
-            ]
-          : undefined;
+        getTextFromMessageContent(lastMessage.content) !==
+          textWithCompactionMarkers;
+      const appendMessages = shouldAppendAssistantMessage
+        ? [
+            {
+              role: "assistant" as const,
+              content: [
+                { type: "text" as const, text: textWithCompactionMarkers },
+              ],
+            },
+          ]
+        : undefined;
 
       const updatedThread = updateThread(task.payload.threadId, {
         lmstudioResponseId: finalResponse?.response_id ?? null,
@@ -1018,9 +1059,7 @@ export const executeQueuedChatTask = async (taskId: string) => {
           taskId: task.id,
           promptMode,
           usedTokens:
-            usedContextTokens ??
-            updatedThread?.contextWindowUsedTokens ??
-            null,
+            usedContextTokens ?? updatedThread?.contextWindowUsedTokens ?? null,
           totalTokens: requestedContextLength,
           phase: "after",
           continuationIndex: continuationCount + 1,
@@ -1069,7 +1108,10 @@ export const executeQueuedChatTask = async (taskId: string) => {
         unloaded: formatLoadedLmStudioModelsForDebug(unloaded),
       });
     } catch (error) {
-      console.error("[chat-runner] failed to cleanup redundant LM Studio models", error);
+      console.error(
+        "[chat-runner] failed to cleanup redundant LM Studio models",
+        error,
+      );
     }
 
     void processTaskQueues();
@@ -1137,10 +1179,12 @@ const buildLmStudioInput = ({
 }): string | LmStudioInputItem[] => {
   const imageParts = [
     ...generatedImages.filter(
-      (part): part is Extract<MessagePart, { type: "image" }> => part.type === "image",
+      (part): part is Extract<MessagePart, { type: "image" }> =>
+        part.type === "image",
     ),
     ...userMessage.filter(
-      (part): part is Extract<MessagePart, { type: "image" }> => part.type === "image",
+      (part): part is Extract<MessagePart, { type: "image" }> =>
+        part.type === "image",
     ),
   ];
 
@@ -1230,12 +1274,11 @@ const buildOverflowContinuationInput = ({
   const continuationPrompt = [
     `Continuation step: ${continuationIndex}.`,
     "Task: continue exactly where the interrupted answer stopped.",
-    "Minimum rule (always): never repeat items that were already output.",
     "Hard rules (must follow):",
     "1) Never restart from the beginning.",
     "2) Continue directly from the checkpoint tail below.",
-    "3) Do not rewrite already emitted content except finishing a cut sentence.",
-    "4) If you detect repetition, stop and output only: DONE (repetition guard).",
+    "3) Never repeat items that were already output.",
+    "4) If table was interrupted, restart table cleanly with a header row and separator row and repeat last listed item.",
     "",
     `User message:\n${userText}`,
     "",
@@ -1253,10 +1296,7 @@ const buildOverflowContinuationInput = ({
   });
 };
 
-const applyCompactionMarkersToText = (
-  text: string,
-  breakOffsets: number[],
-) => {
+const applyCompactionMarkersToText = (text: string, breakOffsets: number[]) => {
   if (!text || breakOffsets.length === 0) {
     return text;
   }
