@@ -25,6 +25,8 @@ const ensureSchema = (db: Database.Database) => {
       conversation_summary TEXT,
       summary_updated_at TEXT,
       summary_message_count INTEGER NOT NULL DEFAULT 0,
+      context_window_used_tokens INTEGER,
+      context_window_total_tokens INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -182,6 +184,20 @@ const ensureSchema = (db: Database.Database) => {
     db.exec(`
       ALTER TABLE threads
       ADD COLUMN summary_message_count INTEGER NOT NULL DEFAULT 0
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "context_window_used_tokens")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN context_window_used_tokens INTEGER
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "context_window_total_tokens")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN context_window_total_tokens INTEGER
     `);
   }
 };

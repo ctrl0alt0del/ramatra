@@ -26,6 +26,8 @@ const createThreadSchema = z.object({
   titleGenerated: z.boolean().optional(),
   status: z.enum(["regular", "archived"]).optional(),
   lmstudioResponseId: z.string().nullable().optional(),
+  contextWindowUsedTokens: z.number().int().nonnegative().nullable().optional(),
+  contextWindowTotalTokens: z.number().int().positive().nullable().optional(),
   messages: z.array(messageSchema).optional(),
 });
 

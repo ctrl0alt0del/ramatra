@@ -20,7 +20,10 @@ const getJobIdForMarker = (taskId: string, jobId: string | null | undefined) => 
   return task.result?.jobId ?? null;
 };
 
-export const getGeneratedImagesForThread = (messages: ThreadMessage[]) => {
+export const getGeneratedImagesForThread = (
+  messages: ThreadMessage[],
+  maxImages = GENERATED_IMAGE_LIMIT,
+) => {
   const recentAssistantMessages = messages
     .filter((message) => message.role === "assistant")
     .slice(-GENERATED_IMAGE_LOOKBACK_MESSAGES);
@@ -62,7 +65,7 @@ export const getGeneratedImagesForThread = (messages: ThreadMessage[]) => {
         name: `comfy-${resolvedJobId}-${index + 1}`,
       });
 
-      if (images.length >= GENERATED_IMAGE_LIMIT) {
+      if (images.length >= maxImages) {
         return images;
       }
     }

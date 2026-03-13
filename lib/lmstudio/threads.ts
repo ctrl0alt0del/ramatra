@@ -26,6 +26,8 @@ export type ThreadSummary = {
   conversationSummary: string | null;
   summaryUpdatedAt: string | null;
   summaryMessageCount: number;
+  contextWindowUsedTokens: number | null;
+  contextWindowTotalTokens: number | null;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -46,6 +48,8 @@ type ThreadRow = {
   conversation_summary: string | null;
   summary_updated_at: string | null;
   summary_message_count: number;
+  context_window_used_tokens: number | null;
+  context_window_total_tokens: number | null;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -75,6 +79,8 @@ const toThreadSummary = (thread: ThreadDetail): ThreadSummary => {
     conversationSummary: thread.conversationSummary,
     summaryUpdatedAt: thread.summaryUpdatedAt,
     summaryMessageCount: thread.summaryMessageCount,
+    contextWindowUsedTokens: thread.contextWindowUsedTokens,
+    contextWindowTotalTokens: thread.contextWindowTotalTokens,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     messageCount: thread.messageCount,
@@ -104,6 +110,8 @@ export const listThreads = (): ThreadSummary[] => {
           t.conversation_summary,
           t.summary_updated_at,
           t.summary_message_count,
+          t.context_window_used_tokens,
+          t.context_window_total_tokens,
           t.created_at,
           t.updated_at,
           COUNT(m.id) AS message_count
@@ -126,6 +134,8 @@ export const listThreads = (): ThreadSummary[] => {
     conversationSummary: row.conversation_summary,
     summaryUpdatedAt: row.summary_updated_at,
     summaryMessageCount: row.summary_message_count,
+    contextWindowUsedTokens: row.context_window_used_tokens,
+    contextWindowTotalTokens: row.context_window_total_tokens,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     messageCount: row.message_count,
@@ -142,6 +152,8 @@ export const createThread = (input?: {
   conversationSummary?: string | null;
   summaryUpdatedAt?: string | null;
   summaryMessageCount?: number;
+  contextWindowUsedTokens?: number | null;
+  contextWindowTotalTokens?: number | null;
   messages?: ThreadMessage[];
 }) => {
   const messages = input?.messages ?? [];
@@ -157,6 +169,8 @@ export const createThread = (input?: {
   const conversationSummary = input?.conversationSummary ?? null;
   const summaryUpdatedAt = input?.summaryUpdatedAt ?? null;
   const summaryMessageCount = input?.summaryMessageCount ?? 0;
+  const contextWindowUsedTokens = input?.contextWindowUsedTokens ?? null;
+  const contextWindowTotalTokens = input?.contextWindowTotalTokens ?? null;
 
   const insert = db.transaction(() => {
     db.prepare(
@@ -172,10 +186,12 @@ export const createThread = (input?: {
           conversation_summary,
           summary_updated_at,
           summary_message_count,
+          context_window_used_tokens,
+          context_window_total_tokens,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       threadId,
@@ -188,6 +204,8 @@ export const createThread = (input?: {
       conversationSummary,
       summaryUpdatedAt,
       summaryMessageCount,
+      contextWindowUsedTokens,
+      contextWindowTotalTokens,
       timestamp,
       timestamp,
     );
@@ -236,6 +254,8 @@ export const getThread = (threadId: string) => {
           t.conversation_summary,
           t.summary_updated_at,
           t.summary_message_count,
+          t.context_window_used_tokens,
+          t.context_window_total_tokens,
           t.created_at,
           t.updated_at,
           COUNT(m.id) AS message_count
@@ -271,6 +291,8 @@ export const getThread = (threadId: string) => {
     conversationSummary: thread.conversation_summary,
     summaryUpdatedAt: thread.summary_updated_at,
     summaryMessageCount: thread.summary_message_count,
+    contextWindowUsedTokens: thread.context_window_used_tokens,
+    contextWindowTotalTokens: thread.context_window_total_tokens,
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
     messageCount: thread.message_count,
@@ -293,6 +315,8 @@ export const updateThread = (
     conversationSummary?: string | null;
     summaryUpdatedAt?: string | null;
     summaryMessageCount?: number;
+    contextWindowUsedTokens?: number | null;
+    contextWindowTotalTokens?: number | null;
     appendMessages?: ThreadMessage[];
     replaceMessages?: ThreadMessage[];
   },
@@ -339,6 +363,14 @@ export const updateThread = (
     input.summaryMessageCount !== undefined
       ? input.summaryMessageCount
       : existing.summaryMessageCount;
+  const nextContextWindowUsedTokens =
+    input.contextWindowUsedTokens !== undefined
+      ? input.contextWindowUsedTokens
+      : existing.contextWindowUsedTokens;
+  const nextContextWindowTotalTokens =
+    input.contextWindowTotalTokens !== undefined
+      ? input.contextWindowTotalTokens
+      : existing.contextWindowTotalTokens;
 
   const timestamp = new Date().toISOString();
 
@@ -356,6 +388,8 @@ export const updateThread = (
           conversation_summary = ?,
           summary_updated_at = ?,
           summary_message_count = ?,
+          context_window_used_tokens = ?,
+          context_window_total_tokens = ?,
           updated_at = ?
         WHERE id = ?
       `,
@@ -369,6 +403,8 @@ export const updateThread = (
       nextConversationSummary,
       nextSummaryUpdatedAt,
       nextSummaryMessageCount,
+      nextContextWindowUsedTokens,
+      nextContextWindowTotalTokens,
       timestamp,
       threadId,
     );

@@ -34,6 +34,8 @@ const updateThreadSchema = z.object({
   conversationSummary: z.string().nullable().optional(),
   summaryUpdatedAt: z.string().nullable().optional(),
   summaryMessageCount: z.number().int().nonnegative().optional(),
+  contextWindowUsedTokens: z.number().int().nonnegative().nullable().optional(),
+  contextWindowTotalTokens: z.number().int().positive().nullable().optional(),
   appendMessages: z.array(messageSchema).optional(),
   replaceMessages: z.array(messageSchema).optional(),
 });

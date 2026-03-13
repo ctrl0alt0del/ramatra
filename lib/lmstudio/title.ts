@@ -40,7 +40,16 @@ const buildTitleInput = (thread: ThreadDetail) => {
   return excerpt;
 };
 
-const titleSystemPrompt = "caption this conversation";
+const titleSystemPrompt = [
+  "You generate short conversation titles.",
+  "Return only the final title.",
+  "Do not show reasoning.",
+  "Do not use long reasoning, use first draft immediately.",
+  "Answer immediately with a short title.",
+  "Use 2 to 6 words.",
+  "No quotes.",
+  "No markdown.",
+].join("\n");
 
 const getAssistantText = (
   output: Array<{ type: string; content?: string }> | undefined,
@@ -81,7 +90,6 @@ export const generateThreadTitle = async (thread: ThreadDetail) => {
       }),
       system_prompt: titleSystemPrompt,
       input: buildTitleInput(thread),
-      temperature: 0,
     }),
   });
 

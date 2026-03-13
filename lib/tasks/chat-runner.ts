@@ -18,7 +18,11 @@ import {
   isPlaceholderThreadTitle,
   updateThread,
 } from "@/lib/lmstudio/threads";
-import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
+import {
+  defaultPromptMode,
+  isPromptMode,
+  type PromptMode,
+} from "@/lib/lmstudio/prompt-modes";
 import { getSystemPromptForMode } from "@/lib/lmstudio/prompts";
 import {
   buildFreshChainInput,
@@ -56,11 +60,14 @@ type ChatResponse = {
   finish_reason?: string;
   stop_reason?: string;
   usage?: Record<string, unknown>;
+  stats?: Record<string, unknown>;
   model?: string;
   error?: {
     message?: string;
   };
 };
+
+const CONTEXT_COMPACT_THRESHOLD_RATIO = 0.9;
 
 type ChatStreamEvent =
   | {
@@ -164,6 +171,144 @@ const getAssistantReasoning = (output: LmStudioOutput[] | undefined) => {
     .flatMap((item) => (item.type === "reasoning" ? [item.content.trim()] : []))
     .filter(Boolean)
     .join("\n\n");
+};
+
+const readTokenCount = (input: unknown) => {
+  if (typeof input === "number" && Number.isFinite(input)) {
+    return Math.max(0, Math.floor(input));
+  }
+
+  if (typeof input === "string") {
+    const parsed = Number.parseInt(input, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+};
+
+const getUsedContextTokens = (response: ChatResponse | null) => {
+  if (!response) {
+    return null;
+  }
+
+  const usage = response.usage ?? {};
+  const stats = response.stats ?? {};
+
+  return (
+    readTokenCount(usage.total_tokens) ??
+    readTokenCount(usage.totalTokens) ??
+    readTokenCount(usage.input_tokens) ??
+    readTokenCount(usage.prompt_tokens) ??
+    readTokenCount(stats.total_tokens) ??
+    readTokenCount(stats.totalTokens) ??
+    readTokenCount(stats.input_tokens) ??
+    readTokenCount(stats.prompt_tokens) ??
+    null
+  );
+};
+
+const estimateMessageTokens = (message: MessagePart[]) => {
+  const textLength = getTextFromMessageContent(message).length;
+  return Math.ceil(textLength / 3.5);
+};
+
+const shouldCompactForRatio = ({
+  usedTokens,
+  totalTokens,
+}: {
+  usedTokens: number | null;
+  totalTokens: number;
+}) => {
+  if (usedTokens === null || totalTokens <= 0) {
+    return false;
+  }
+
+  return usedTokens / totalTokens >= CONTEXT_COMPACT_THRESHOLD_RATIO;
+};
+
+const collapseThreadContext = async ({
+  threadId,
+  promptMode,
+}: {
+  threadId: string;
+  promptMode: PromptMode;
+}) => {
+  const thread = getThread(threadId);
+  if (!thread) {
+    return { collapsed: false as const, thread: null };
+  }
+
+  const unsummarizedMessages = thread.messages.slice(thread.summaryMessageCount);
+  if (!unsummarizedMessages.length) {
+    return { collapsed: false as const, thread };
+  }
+
+  const conversationSummary = await generateConversationSummary({
+    mode: promptMode,
+    modelInstanceId: thread.lmstudioModelInstanceId,
+    previousSummary: thread.conversationSummary,
+    messages: unsummarizedMessages,
+  });
+
+  const updatedThread = updateThread(thread.id, {
+    conversationSummary,
+    summaryUpdatedAt: new Date().toISOString(),
+    summaryMessageCount: thread.messageCount,
+    lmstudioResponseId: null,
+    contextWindowUsedTokens: null,
+  });
+
+  return {
+    collapsed: true as const,
+    thread: updatedThread ?? getThread(thread.id),
+  };
+};
+
+const maybeAutoCompactThreadContext = async ({
+  threadId,
+  promptMode,
+  usedTokens,
+  totalTokens,
+  phase,
+}: {
+  threadId: string;
+  promptMode: PromptMode;
+  usedTokens: number | null;
+  totalTokens: number;
+  phase: "before" | "after";
+}) => {
+  if (!shouldCompactForRatio({ usedTokens, totalTokens })) {
+    return getThread(threadId);
+  }
+
+  try {
+    const result = await collapseThreadContext({
+      threadId,
+      promptMode,
+    });
+
+    if (result.collapsed) {
+      console.info("[chat-runner] auto-collapsed context", {
+        threadId,
+        phase,
+        usedTokens,
+        totalTokens,
+      });
+    }
+
+    return result.thread;
+  } catch (error) {
+    console.warn("[chat-runner] failed auto context collapse", {
+      threadId,
+      phase,
+      usedTokens,
+      totalTokens,
+      error,
+    });
+    return getThread(threadId);
+  }
 };
 
 const buildIntegrations = () => {
@@ -325,20 +470,45 @@ export const executeQueuedChatTask = async (taskId: string) => {
       }
     }
 
+    const requestedContextLength = getConfiguredContextLengthForMode(
+      promptMode,
+      process.env,
+    );
+
+    if (task.payload.threadId && task.payload.kind === "conversation" && thread) {
+      const estimatedUpcomingTokens = estimateMessageTokens(task.payload.userMessage);
+      const projectedUsedTokens =
+        thread.contextWindowUsedTokens === null
+          ? null
+          : thread.contextWindowUsedTokens + estimatedUpcomingTokens;
+
+      const maybeCompacted = await maybeAutoCompactThreadContext({
+        threadId: task.payload.threadId,
+        promptMode,
+        usedTokens: projectedUsedTokens,
+        totalTokens: requestedContextLength,
+        phase: "before",
+      });
+
+      if (maybeCompacted) {
+        thread = maybeCompacted;
+      }
+    }
+
+    const generatedImageLimit = getAdaptiveGeneratedImageLimit({
+      contextLength: requestedContextLength,
+      userMessage: task.payload.userMessage,
+    });
     const userInput = buildLmStudioInput({
       summary: thread?.conversationSummary ?? null,
       previousResponseId: thread?.lmstudioResponseId ?? null,
       generatedImages:
         thread && task.payload.kind === "conversation"
-          ? getGeneratedImagesForThread(thread.messages)
+          ? getGeneratedImagesForThread(thread.messages, generatedImageLimit)
           : [],
       userMessage: task.payload.userMessage,
     });
 
-    const requestedContextLength = getConfiguredContextLengthForMode(
-      promptMode,
-      process.env,
-    );
     const exactLoadedModel = await ensureLmStudioModelLoaded({
       modelKey: getChatModelKey(),
       contextLength: requestedContextLength,
@@ -360,6 +530,7 @@ export const executeQueuedChatTask = async (taskId: string) => {
       preferredInstanceId: thread?.lmstudioModelInstanceId ?? null,
       selectedModelTarget: modelTarget,
       requestedContextLength,
+      generatedImageLimit,
       previousResponseId: thread?.lmstudioResponseId ?? null,
       loadedModels: formatLoadedLmStudioModelsForDebug(loadedBeforeRequest),
     });
@@ -451,11 +622,14 @@ export const executeQueuedChatTask = async (taskId: string) => {
     if (task.payload.threadId) {
       const latestThread = getThread(task.payload.threadId);
       const lastMessage = latestThread?.messages.at(-1);
+      const usedContextTokens = getUsedContextTokens(finalResponse);
 
-      updateThread(task.payload.threadId, {
+      const updatedThread = updateThread(task.payload.threadId, {
         lmstudioResponseId: finalResponse?.response_id ?? null,
         lmstudioModelInstanceId: finalResponse?.model_instance_id ?? null,
         lastPromptMode: promptMode,
+        contextWindowUsedTokens: usedContextTokens,
+        contextWindowTotalTokens: requestedContextLength,
         appendMessages:
           !lastMessage ||
           lastMessage.role !== "assistant" ||
@@ -468,6 +642,19 @@ export const executeQueuedChatTask = async (taskId: string) => {
               ]
             : undefined,
       });
+
+      if (task.payload.kind === "conversation") {
+        await maybeAutoCompactThreadContext({
+          threadId: task.payload.threadId,
+          promptMode,
+          usedTokens:
+            usedContextTokens ??
+            updatedThread?.contextWindowUsedTokens ??
+            null,
+          totalTokens: requestedContextLength,
+          phase: "after",
+        });
+      }
     }
 
     markTaskCompleted(task.id, {
@@ -550,32 +737,13 @@ const executeQueuedCollapseContextTask = async (
   if (!isPromptMode(promptMode)) {
     throw new Error("A valid promptMode is required.");
   }
-
-  const unsummarizedMessages = thread.messages.slice(thread.summaryMessageCount);
-
-  if (!unsummarizedMessages.length) {
-    markTaskCompleted(taskId, {
-      summaryCollapsed: false,
-    });
-    return;
-  }
-
-  const conversationSummary = await generateConversationSummary({
-    mode: promptMode,
-    modelInstanceId: thread.lmstudioModelInstanceId,
-    previousSummary: thread.conversationSummary,
-    messages: unsummarizedMessages,
-  });
-
-  updateThread(thread.id, {
-    conversationSummary,
-    summaryUpdatedAt: new Date().toISOString(),
-    summaryMessageCount: thread.messageCount,
-    lmstudioResponseId: null,
+  const result = await collapseThreadContext({
+    threadId,
+    promptMode,
   });
 
   markTaskCompleted(taskId, {
-    summaryCollapsed: true,
+    summaryCollapsed: result.collapsed,
   });
 };
 
@@ -661,6 +829,43 @@ const toLmStudioInputItems = (
   }
 
   return items;
+};
+
+const estimateRemainingContextRatio = ({
+  contextLength,
+  userMessage,
+}: {
+  contextLength: number;
+  userMessage: MessagePart[];
+}) => {
+  const messageTextLength = getTextFromMessageContent(userMessage).length;
+  const estimatedUsedTokens = Math.ceil(messageTextLength / 3.5);
+  const remaining = Math.max(0, contextLength - estimatedUsedTokens);
+
+  return remaining / Math.max(contextLength, 1);
+};
+
+const getAdaptiveGeneratedImageLimit = ({
+  contextLength,
+  userMessage,
+}: {
+  contextLength: number;
+  userMessage: MessagePart[];
+}) => {
+  const remainingRatio = estimateRemainingContextRatio({
+    contextLength,
+    userMessage,
+  });
+
+  if (remainingRatio < 0.25) {
+    return 1;
+  }
+
+  if (remainingRatio < 0.5) {
+    return 2;
+  }
+
+  return 3;
 };
 
 const maybeEnqueueTitleGenerationTask = (threadId: string) => {
