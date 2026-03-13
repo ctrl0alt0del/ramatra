@@ -4,14 +4,6 @@ import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
 import { resolvePreferredLmStudioModelTarget } from "@/lib/lmstudio/models";
 import { type ThreadDetail } from "@/lib/lmstudio/threads";
 
-const parsedTitleTokenBudget = Number.parseInt(
-  process.env.LM_STUDIO_TITLE_MAX_OUTPUT_TOKENS ?? "48",
-  10,
-);
-const TITLE_OUTPUT_TOKEN_BUDGET =
-  Number.isFinite(parsedTitleTokenBudget) && parsedTitleTokenBudget > 0
-    ? parsedTitleTokenBudget
-    : 48;
 const TITLE_MESSAGE_CHAR_LIMIT = 220;
 
 const getLmStudioChatUrl = () => {
@@ -48,8 +40,7 @@ const buildTitleInput = (thread: ThreadDetail) => {
   return excerpt;
 };
 
-const titleSystemPrompt =
-  "Caption this conversation (2-5 words, pick first random option):";
+const titleSystemPrompt = "caption this conversation";
 
 const getAssistantText = (
   output: Array<{ type: string; content?: string }> | undefined,
@@ -90,7 +81,7 @@ export const generateThreadTitle = async (thread: ThreadDetail) => {
       }),
       system_prompt: titleSystemPrompt,
       input: buildTitleInput(thread),
-      temperature: 0.2,
+      temperature: 0,
     }),
   });
 

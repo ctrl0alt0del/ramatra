@@ -95,6 +95,12 @@ const ensureSchema = (db: Database.Database) => {
       task_id TEXT NOT NULL UNIQUE,
       FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS prompt_mode_settings (
+      mode TEXT PRIMARY KEY CHECK (mode IN ('fast', 'regular', 'writer', 'artist')),
+      prompt TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   db.prepare(

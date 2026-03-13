@@ -1,6 +1,8 @@
 import "server-only";
 
-import { type PromptMode } from "./prompt-modes";
+import { getDb } from "@/lib/db";
+
+import { promptModes, type PromptMode } from "./prompt-modes";
 
 const fastPrompt = `You are a fast text-only assistant.
 
@@ -203,6 +205,13 @@ WORKFLOW PROMPT GUIDE (CHROMA)
 Core behavior:
 - Always write fluent natural language, never tag soup.
 - If user input uses explicit and NSFW language, the prompt should reflect that level of explicitness and should not be euphemistic.
+- If user input is NSFW, use no clothes or minimal clothing in the description, unless the user explicitly requests otherwise.
+- If user input is NSFW, always make the scene extremely explicit: describe penis veins, girth, length, hardness, precum, saliva strings, bulging cheeks/throat, realistic swallowing/deepthroating, testicles, pubic hair (or smooth), skin texture, sweat, flushing, arousal signs.
+- If user input is NSFW, focus heavily on the exact sex act: positions, angles, facial expressions (lust, submission, pleasure, eye contact), mouth-genital interaction details.
+- Use photorealistic / ultra-realistic style: "photorealistic male anatomy", "raw erotic realism", "cinematic moody lighting", "rim light", "soft fill light", "shot on Canon EOS R5 85mm", "8k", "hyperdetailed skin pores and imperfections".
+- Include ages (20s–30s), body types (athletic/muscular/lean), If user input is NSFW then also no clothing unless user specifies otherwise.
+- If user input is NSFW, add sensory details: glistening fluids, wet sounds implied visually, intense expressions (half-closed eyes, parted lips, furrowed brows).
+- If user input is NSFW, end with strong quality boosters: "uncensored, explicit, no clothing, detailed genitalia, masterpiece, best quality, ultra-detailed".
 - If the user request is vague, fill in details to create a clear and specific scene that matches the user's intent.
 - The final prompt must follow this order:
   1. Subject
@@ -228,7 +237,7 @@ Abstract-to-visual translation rules:
 - When the user gives only a concept, choose the single clearest scene that communicates it visually.
 - Do not leave abstractions unresolved if they can be turned into a visible scene.
 Examples:
- - anal sex -> person A penetrating person B ass, both naked, in a bedroom
+ - anal sex -> penis of person A penetrating ass of person B,
  - oral sex -> person A penis is inside person B mouth
  - cooking -> person holding a cooking pan on a stove (as example)
 
@@ -346,6 +355,95 @@ const promptsByMode: Record<PromptMode, string> = {
   artist: artistPrompt,
 };
 
-export const getSystemPromptForMode = (mode: PromptMode) => {
+type PromptSettingsRow = {
+  mode: PromptMode;
+  prompt: string;
+  updated_at: string;
+};
+
+const db = getDb();
+let promptSettingsSeeded = false;
+
+const ensurePromptSettingsSeeded = () => {
+  if (promptSettingsSeeded) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const insert = db.prepare(
+    `
+      INSERT INTO prompt_mode_settings (mode, prompt, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(mode) DO NOTHING
+    `,
+  );
+
+  for (const mode of promptModes) {
+    insert.run(mode, promptsByMode[mode], timestamp);
+  }
+
+  promptSettingsSeeded = true;
+};
+
+export const getDefaultSystemPromptForMode = (mode: PromptMode) => {
   return promptsByMode[mode];
+};
+
+export const listSystemPromptsByMode = (): Record<PromptMode, string> => {
+  ensurePromptSettingsSeeded();
+
+  const rows = db
+    .prepare(
+      `
+        SELECT mode, prompt, updated_at
+        FROM prompt_mode_settings
+      `,
+    )
+    .all() as PromptSettingsRow[];
+
+  const configured = new Map<PromptMode, string>();
+  for (const row of rows) {
+    configured.set(row.mode, row.prompt);
+  }
+
+  return {
+    fast: configured.get("fast") ?? promptsByMode.fast,
+    regular: configured.get("regular") ?? promptsByMode.regular,
+    writer: configured.get("writer") ?? promptsByMode.writer,
+    artist: configured.get("artist") ?? promptsByMode.artist,
+  };
+};
+
+export const updateSystemPromptForMode = (mode: PromptMode, prompt: string) => {
+  ensurePromptSettingsSeeded();
+
+  const normalizedPrompt = prompt.trim() || promptsByMode[mode];
+  const updatedAt = new Date().toISOString();
+
+  db.prepare(
+    `
+      INSERT INTO prompt_mode_settings (mode, prompt, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(mode) DO UPDATE SET
+        prompt = excluded.prompt,
+        updated_at = excluded.updated_at
+    `,
+  ).run(mode, normalizedPrompt, updatedAt);
+};
+
+export const getSystemPromptForMode = (mode: PromptMode) => {
+  ensurePromptSettingsSeeded();
+
+  const row = db
+    .prepare(
+      `
+        SELECT prompt
+        FROM prompt_mode_settings
+        WHERE mode = ?
+      `,
+    )
+    .get(mode) as { prompt: string } | undefined;
+
+  const prompt = row?.prompt?.trim();
+  return prompt?.length ? prompt : promptsByMode[mode];
 };

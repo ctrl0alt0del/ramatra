@@ -20,6 +20,7 @@ import { CustomThreadListItem } from "./CustomThreadListItem";
 import { CustomUserMessage } from "./CustomUserMessage";
 import { ManagedComposer } from "./ManagedComposer";
 import { PromptModeSelect } from "./prompt-mode";
+import { PromptSettingsButton } from "./PromptSettingsButton";
 import { SystemStateProvider } from "./system-state";
 
 type MonitorState = {
@@ -396,14 +397,17 @@ function SidebarPanel({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onCollapse}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/70 bg-white/78 text-[hsl(var(--aui-foreground))] shadow-[0_10px_20px_rgba(73,56,145,0.08)] transition hover:bg-white"
-          aria-label={isMobile ? "Close threads" : "Collapse sidebar"}
-        >
-          {isMobile ? <X className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
-        </button>
+        <div className="flex items-center gap-2">
+          <PromptSettingsButton />
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/70 bg-white/78 text-[hsl(var(--aui-foreground))] shadow-[0_10px_20px_rgba(73,56,145,0.08)] transition hover:bg-white"
+            aria-label={isMobile ? "Close threads" : "Collapse sidebar"}
+          >
+            {isMobile ? <X className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 rounded-[22px] border border-white/70 bg-white/76 px-3 py-3 text-sm text-[hsl(var(--aui-muted-foreground))] shadow-[0_12px_28px_rgba(73,56,145,0.08)]">
