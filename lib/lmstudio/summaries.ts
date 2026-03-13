@@ -1,15 +1,18 @@
 import "server-only";
 
 import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
+import { messagePartsContainContextCompactionMarker } from "@/lib/chat/context-compaction-marker";
 import { resolvePreferredLmStudioModelTarget } from "@/lib/lmstudio/models";
 import { type ThreadDetail, type ThreadMessage } from "@/lib/lmstudio/threads";
 
 import { type PromptMode } from "./prompt-modes";
+import { getConfiguredContextLengthForMode } from "./context-length";
 
 type SummaryConfig = {
   messageThreshold: number;
   characterThreshold: number;
   maxSummaryCharacters: number;
+  maxTranscriptCharacters: number;
 };
 
 const summaryConfigByMode: Record<PromptMode, SummaryConfig> = {
@@ -17,21 +20,25 @@ const summaryConfigByMode: Record<PromptMode, SummaryConfig> = {
     messageThreshold: 8,
     characterThreshold: 5_000,
     maxSummaryCharacters: 1_500,
+    maxTranscriptCharacters: 8_000,
   },
   regular: {
     messageThreshold: 10,
     characterThreshold: 7_500,
     maxSummaryCharacters: 2_400,
+    maxTranscriptCharacters: 12_000,
   },
   writer: {
     messageThreshold: 8,
     characterThreshold: 9_000,
     maxSummaryCharacters: 4_500,
+    maxTranscriptCharacters: 18_000,
   },
   artist: {
     messageThreshold: 8,
     characterThreshold: 6_000,
     maxSummaryCharacters: 2_800,
+    maxTranscriptCharacters: 10_000,
   },
 };
 
@@ -52,6 +59,12 @@ Rules:
 - Omit fluff, examples, repeated wording, and long explanations.
 - Do not include reasoning traces.
 - Do not mention tools unless the result matters to the next reply.
+- For list/table/enumeration tasks, include minimal continuation checkpoint:
+  - format contract
+  - current section
+  - last completed item
+  - do-not-repeat item keys
+  - next expected item
 - Output only the summary.`,
   regular: `You compress chat history into practical working memory for a general assistant.
 
@@ -66,6 +79,12 @@ Rules:
 - Prefer concise bullets with short section headers.
 - Remove repetition and low-value conversational filler.
 - Do not include chain-of-thought or internal reasoning.
+- For list/table/enumeration tasks, include strict continuation checkpoint:
+  - format contract
+  - current section
+  - completed items (deduplicated)
+  - forbidden repeats
+  - next expected item
 - Output only the summary.`,
   writer: `You are a continuity archivist for a writing assistant.
 
@@ -122,6 +141,10 @@ const getLmStudioHeaders = () => {
 
 const formatMessagesForSummary = (messages: ThreadMessage[]) => {
   return messages
+    .filter(
+      (message) =>
+        !messagePartsContainContextCompactionMarker(message.content),
+    )
     .map(
       (message) =>
         `${message.role.toUpperCase()}: ${formatMessageContentForPrompt(message.content)}`,
@@ -136,6 +159,65 @@ const trimSummary = (summary: string, maxCharacters: number) => {
   }
 
   return `${trimmed.slice(0, maxCharacters - 1).trimEnd()}...`;
+};
+
+const clipTranscript = (transcript: string, maxCharacters: number) => {
+  const normalized = transcript.trim();
+  if (normalized.length <= maxCharacters) {
+    return normalized;
+  }
+
+  const clipped = normalized.slice(-maxCharacters).trimStart();
+  return `[Older transcript omitted due length]\n\n${clipped}`;
+};
+
+const isContextOverflowText = (value: string | null | undefined) => {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.toLowerCase();
+
+  return (
+    normalized.includes("context") &&
+    (normalized.includes("overflow") ||
+      normalized.includes("reached") ||
+      normalized.includes("limit") ||
+      normalized.includes("length"))
+  );
+};
+
+const isContextOverflowSignal = ({
+  stopReason,
+  finishReason,
+  errorMessage,
+}: {
+  stopReason?: string | null;
+  finishReason?: string | null;
+  errorMessage?: string | null;
+}) => {
+  return (
+    stopReason === "context_length_reached" ||
+    stopReason === "contextLengthReached" ||
+    finishReason === "length" ||
+    isContextOverflowText(stopReason) ||
+    isContextOverflowText(finishReason) ||
+    isContextOverflowText(errorMessage)
+  );
+};
+
+const extractSummaryText = (
+  output: Array<{ type: string; content?: string }> | undefined,
+) => {
+  return (output ?? [])
+    .flatMap((item) =>
+      item.type === "message" && typeof item.content === "string"
+        ? [item.content.trim()]
+        : [],
+    )
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 };
 
 export const shouldRefreshConversationSummary = (
@@ -165,61 +247,124 @@ export const generateConversationSummary = async ({
   modelInstanceId,
   previousSummary,
   messages,
+  interruption,
 }: {
   mode: PromptMode;
   modelInstanceId?: string | null;
   previousSummary: string | null;
   messages: ThreadMessage[];
+  interruption?: {
+    interrupted: boolean;
+    interruptedAssistantTailChars?: string;
+    interruptionContext?: string;
+  };
 }) => {
   if (!messages.length) {
     return previousSummary?.trim() ?? "";
   }
 
   const config = summaryConfigByMode[mode];
-  const parts = [
-    "Update the conversation summary using the new transcript.",
-    "",
-    previousSummary?.trim()
-      ? `Existing summary:\n${previousSummary.trim()}`
-      : "Existing summary:\n(none)",
-    "",
-    `New transcript:\n${formatMessagesForSummary(messages)}`,
-  ];
-
-  const response = await fetch(getLmStudioChatUrl(), {
-    method: "POST",
-    headers: getLmStudioHeaders(),
-    body: JSON.stringify({
-      model: await resolvePreferredLmStudioModelTarget({
-        preferredInstanceId: modelInstanceId,
-        modelKey: process.env.LM_STUDIO_MODEL!,
-      }),
-      input: parts.join("\n"),
-      system_prompt: summaryPromptByMode[mode],
-    }),
+  const summaryContextLength =
+    getConfiguredContextLengthForMode(mode, process.env) * 2;
+  const strictCheckpointMode = mode === "fast" || mode === "regular";
+  const model = await resolvePreferredLmStudioModelTarget({
+    preferredInstanceId: modelInstanceId,
+    modelKey: process.env.LM_STUDIO_MODEL!,
   });
 
-  const data = (await response.json()) as {
-    output?: Array<{ type: string; content?: string }>;
-    error?: { message?: string };
+  const requestSummary = async (transcript: string) => {
+    const interruptionBlock =
+      interruption?.interrupted
+        ? [
+            "Interruption metadata:",
+            interruption.interruptionContext?.trim() ||
+              "The previous assistant response was interrupted by context overflow.",
+            ...(strictCheckpointMode
+              ? [
+                  "When summarizing this interruption, include a strict continuation checkpoint:",
+                  "- current section/subsection currently in progress",
+                  "- completed items already emitted (exact names; deduplicated)",
+                  "- first next item that should be emitted after resume",
+                  "- forbidden repeats: items that must not appear again",
+                  "- short continuation contract: continue forward only, never restart from the beginning",
+                ]
+              : []),
+            interruption.interruptedAssistantTailChars?.trim()
+              ? `Interrupted assistant output tail:\n${interruption.interruptedAssistantTailChars.trim()}`
+              : "Interrupted assistant output tail:\n(none)",
+          ].join("\n")
+        : null;
+
+    const parts = [
+      "Update the conversation summary using the new transcript.",
+      "",
+      previousSummary?.trim()
+        ? `Existing summary:\n${previousSummary.trim()}`
+        : "Existing summary:\n(none)",
+      interruptionBlock ? `\n${interruptionBlock}` : "",
+      "",
+      `New transcript:\n${transcript}`,
+    ].filter(Boolean);
+
+    const response = await fetch(getLmStudioChatUrl(), {
+      method: "POST",
+      headers: getLmStudioHeaders(),
+      body: JSON.stringify({
+        model,
+        context_length: summaryContextLength,
+        input: parts.join("\n"),
+        system_prompt: summaryPromptByMode[mode],
+      }),
+    });
+
+    const data = (await response.json()) as {
+      output?: Array<{ type: string; content?: string }>;
+      stop_reason?: string;
+      finish_reason?: string;
+      error?: { message?: string };
+    };
+
+    if (!response.ok) {
+      throw new Error(
+        data.error?.message ?? "LM Studio summary request failed.",
+      );
+    }
+
+    const summary = extractSummaryText(data.output);
+    const overflow = isContextOverflowSignal({
+      stopReason: data.stop_reason,
+      finishReason: data.finish_reason,
+      errorMessage: data.error?.message,
+    });
+
+    return {
+      summary,
+      overflow,
+    };
   };
 
-  if (!response.ok) {
-    throw new Error(
-      data.error?.message ?? "LM Studio summary request failed.",
-    );
+  const fullTranscript = formatMessagesForSummary(messages);
+  const primaryTranscript = clipTranscript(
+    fullTranscript,
+    config.maxTranscriptCharacters,
+  );
+  const primary = await requestSummary(primaryTranscript);
+
+  if (primary.summary && !primary.overflow) {
+    return trimSummary(primary.summary, config.maxSummaryCharacters);
   }
 
-  const summary = (data.output ?? [])
-    .flatMap((item) =>
-      item.type === "message" && typeof item.content === "string"
-        ? [item.content.trim()]
-        : [],
-    )
-    .filter(Boolean)
-    .join("\n\n");
+  const fallbackTranscript = clipTranscript(
+    fullTranscript,
+    Math.max(Math.floor(config.maxTranscriptCharacters / 2), 2_000),
+  );
+  const fallback = await requestSummary(fallbackTranscript);
 
-  return trimSummary(summary || previousSummary || "", config.maxSummaryCharacters);
+  if (!fallback.summary) {
+    throw new Error("LM Studio returned an empty conversation summary.");
+  }
+
+  return trimSummary(fallback.summary, config.maxSummaryCharacters);
 };
 
 export const buildFreshChainInput = ({

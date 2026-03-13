@@ -3,6 +3,7 @@ import {
   getTextFromMessageContent,
   type MessagePart,
 } from "@/lib/chat/message-content";
+import { formatContextCompactionDuringRequestMarker } from "@/lib/chat/context-compaction-marker";
 import { getGeneratedImagesForThread } from "@/lib/comfy/thread-generated-images";
 import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
 import {
@@ -68,6 +69,8 @@ type ChatResponse = {
 };
 
 const CONTEXT_COMPACT_THRESHOLD_RATIO = 0.9;
+const MAX_OVERFLOW_CONTINUATIONS_PER_TASK = 8;
+const MAX_CONTINUATION_PARTIAL_CHARS = 3_500;
 
 type ChatStreamEvent =
   | {
@@ -87,10 +90,6 @@ type ChatStreamEvent =
   | {
       type: "chat.end";
       result: ChatResponse;
-    }
-  | {
-      type: string;
-      content?: string;
     };
 
 const getLmStudioChatUrl = () => {
@@ -193,20 +192,49 @@ const getUsedContextTokens = (response: ChatResponse | null) => {
     return null;
   }
 
-  const usage = response.usage ?? {};
-  const stats = response.stats ?? {};
+  const usage = (response.usage ?? {}) as Record<string, unknown>;
+  const stats = (response.stats ?? {}) as Record<string, unknown>;
 
-  return (
-    readTokenCount(usage.total_tokens) ??
-    readTokenCount(usage.totalTokens) ??
+  const inputTokens =
+    readTokenCount(stats.input_tokens) ??
     readTokenCount(usage.input_tokens) ??
     readTokenCount(usage.prompt_tokens) ??
+    readTokenCount(stats.prompt_tokens) ??
+    readTokenCount(usage.promptTokensCount) ??
+    readTokenCount(stats.promptTokensCount) ??
+    null;
+  const totalOutputTokens =
+    readTokenCount(stats.total_output_tokens) ??
+    readTokenCount(usage.total_output_tokens) ??
+    readTokenCount(usage.output_tokens) ??
+    readTokenCount(usage.completion_tokens) ??
+    readTokenCount(stats.output_tokens) ??
+    readTokenCount(stats.completion_tokens) ??
+    readTokenCount(usage.predicted_tokens) ??
+    readTokenCount(stats.predicted_tokens) ??
+    readTokenCount(usage.generated_tokens) ??
+    readTokenCount(stats.generated_tokens) ??
+    readTokenCount(usage.predictedTokensCount) ??
+    readTokenCount(stats.predictedTokensCount) ??
+    null;
+
+  if (inputTokens !== null && totalOutputTokens !== null) {
+    return inputTokens + totalOutputTokens;
+  }
+
+  const totalTokens =
+    readTokenCount(usage.total_tokens) ??
+    readTokenCount(usage.totalTokens) ??
+    readTokenCount(usage.totalTokensCount) ??
     readTokenCount(stats.total_tokens) ??
     readTokenCount(stats.totalTokens) ??
-    readTokenCount(stats.input_tokens) ??
-    readTokenCount(stats.prompt_tokens) ??
-    null
-  );
+    readTokenCount(stats.totalTokensCount) ??
+    null;
+  if (totalTokens !== null) {
+    return totalTokens;
+  }
+
+  return inputTokens;
 };
 
 const estimateMessageTokens = (message: MessagePart[]) => {
@@ -228,12 +256,103 @@ const shouldCompactForRatio = ({
   return usedTokens / totalTokens >= CONTEXT_COMPACT_THRESHOLD_RATIO;
 };
 
+const isContextOverflowText = (value: string | null | undefined) => {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.toLowerCase();
+
+  return (
+    normalized.includes("context") &&
+    (normalized.includes("overflow") ||
+      normalized.includes("reached") ||
+      normalized.includes("limit") ||
+      normalized.includes("length"))
+  );
+};
+
+const isLengthStopText = (value: string | null | undefined) => {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.toLowerCase();
+  return (
+    normalized === "length" ||
+    normalized === "max_predicted_tokens_reached" ||
+    normalized === "maxpredictedtokensreached" ||
+    (normalized.includes("max") && normalized.includes("token")) ||
+    (normalized.includes("length") && normalized.includes("reached"))
+  );
+};
+
+const isContextOverflowSignal = ({
+  stopReason,
+  finishReason,
+  errorMessage,
+}: {
+  stopReason?: string | null;
+  finishReason?: string | null;
+  errorMessage?: string | null;
+}) => {
+  return (
+    stopReason === "context_length_reached" ||
+    stopReason === "contextLengthReached" ||
+    finishReason === "length" ||
+    isLengthStopText(stopReason) ||
+    isLengthStopText(finishReason) ||
+    isContextOverflowText(stopReason) ||
+    isContextOverflowText(finishReason) ||
+    isContextOverflowText(errorMessage)
+  );
+};
+
+const readStringField = (value: unknown) => {
+  return typeof value === "string" ? value : null;
+};
+
+const getChatStopSignals = (response: ChatResponse | null) => {
+  if (!response) {
+    return {
+      stopReason: null as string | null,
+      finishReason: null as string | null,
+    };
+  }
+
+  const stats = response.stats ?? {};
+  const responseRecord = response as unknown as Record<string, unknown>;
+  const stopReason =
+    readStringField(response.stop_reason) ??
+    readStringField(responseRecord.stopReason) ??
+    readStringField((stats as Record<string, unknown>).stop_reason) ??
+    readStringField((stats as Record<string, unknown>).stopReason) ??
+    null;
+  const finishReason =
+    readStringField(response.finish_reason) ??
+    readStringField(responseRecord.finishReason) ??
+    readStringField((stats as Record<string, unknown>).finish_reason) ??
+    readStringField((stats as Record<string, unknown>).finishReason) ??
+    null;
+
+  return {
+    stopReason,
+    finishReason,
+  };
+};
+
 const collapseThreadContext = async ({
   threadId,
   promptMode,
+  interruption,
 }: {
   threadId: string;
   promptMode: PromptMode;
+  interruption?: {
+    interrupted: boolean;
+    interruptedAssistantTailChars?: string;
+    interruptionContext?: string;
+  };
 }) => {
   const thread = getThread(threadId);
   if (!thread) {
@@ -250,12 +369,14 @@ const collapseThreadContext = async ({
     modelInstanceId: thread.lmstudioModelInstanceId,
     previousSummary: thread.conversationSummary,
     messages: unsummarizedMessages,
+    interruption,
   });
 
   const updatedThread = updateThread(thread.id, {
     conversationSummary,
     summaryUpdatedAt: new Date().toISOString(),
     summaryMessageCount: thread.messageCount,
+    summaryCallCountTotal: thread.summaryCallCountTotal + 1,
     lmstudioResponseId: null,
     contextWindowUsedTokens: null,
   });
@@ -268,59 +389,77 @@ const collapseThreadContext = async ({
 
 const maybeAutoCompactThreadContext = async ({
   threadId,
+  taskId,
   promptMode,
   usedTokens,
   totalTokens,
   phase,
+  continuationIndex,
+  interruption,
+  force = false,
 }: {
   threadId: string;
+  taskId: string;
   promptMode: PromptMode;
   usedTokens: number | null;
   totalTokens: number;
   phase: "before" | "after";
+  continuationIndex: number;
+  interruption?: {
+    interrupted: boolean;
+    interruptedAssistantTailChars?: string;
+    interruptionContext?: string;
+  };
+  force?: boolean;
 }) => {
-  if (!shouldCompactForRatio({ usedTokens, totalTokens })) {
-    return getThread(threadId);
+  if (!force && !shouldCompactForRatio({ usedTokens, totalTokens })) {
+    return {
+      collapsed: false as const,
+      thread: getThread(threadId),
+    };
   }
 
   try {
     const result = await collapseThreadContext({
       threadId,
       promptMode,
+      interruption,
     });
 
     if (result.collapsed) {
-      console.info("[chat-runner] auto-collapsed context", {
+      console.info("[chat-runner] summary:triggered", {
+        taskId,
         threadId,
         phase,
-        usedTokens,
-        totalTokens,
+        continuationIndex,
       });
     }
 
-    return result.thread;
+    return result;
   } catch (error) {
-    console.warn("[chat-runner] failed auto context collapse", {
+    console.error("[chat-runner] summary:failed", {
+      taskId,
       threadId,
       phase,
-      usedTokens,
-      totalTokens,
+      continuationIndex,
       error,
     });
-    return getThread(threadId);
+    return {
+      collapsed: false as const,
+      thread: getThread(threadId),
+    };
   }
 };
 
-const buildIntegrations = () => {
-  const integrations = [
-    {
-      type: "ephemeral_mcp",
-      server_label: "comfy",
-      server_url: getComfyMcpUrl(),
-    },
-  ];
+const buildIntegrations = (promptMode: PromptMode) => {
+  const integrations: Array<{
+    type: "ephemeral_mcp";
+    server_label: "comfy" | "web_search" | "civitai";
+    server_url: string;
+  }> = [];
 
   if (
+    (promptMode === "regular" || promptMode === "writer") &&
     process.env.WEB_SEARCH_MCP_ENABLED === "true" &&
     process.env.WEB_SEARCH_MCP_URL
   ) {
@@ -331,15 +470,23 @@ const buildIntegrations = () => {
     });
   }
 
-  if (
-    process.env.CIVITAI_MCP_ENABLED === "true" &&
-    process.env.CIVITAI_MCP_URL
-  ) {
+  if (promptMode === "artist") {
     integrations.push({
       type: "ephemeral_mcp",
-      server_label: "civitai",
-      server_url: process.env.CIVITAI_MCP_URL,
+      server_label: "comfy",
+      server_url: getComfyMcpUrl(),
     });
+
+    if (
+      process.env.CIVITAI_MCP_ENABLED === "true" &&
+      process.env.CIVITAI_MCP_URL
+    ) {
+      integrations.push({
+        type: "ephemeral_mcp",
+        server_label: "civitai",
+        server_url: process.env.CIVITAI_MCP_URL,
+      });
+    }
   }
 
   return integrations;
@@ -352,10 +499,35 @@ const parseSseEvents = async (
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const processEventBlock = (rawEventBlock: string) => {
+    const lines = rawEventBlock.split(/\r?\n/);
+    let eventType = "";
+    const dataLines: string[] = [];
+
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        eventType = line.slice("event:".length).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).trim());
+      }
+    }
+
+    if (!eventType || dataLines.length === 0) {
+      return;
+    }
+
+    const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+    onEvent({
+      type: eventType,
+      ...(data as object),
+    } as ChatStreamEvent);
+  };
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      break;
+    }
 
     buffer += decoder.decode(value, { stream: true });
 
@@ -365,29 +537,13 @@ const parseSseEvents = async (
 
       const rawEventBlock = buffer.slice(0, separatorIndex);
       buffer = buffer.slice(separatorIndex + 2);
-
-      const lines = rawEventBlock.split(/\r?\n/);
-      let eventType = "";
-      const dataLines: string[] = [];
-
-      for (const line of lines) {
-        if (line.startsWith("event:")) {
-          eventType = line.slice("event:".length).trim();
-        } else if (line.startsWith("data:")) {
-          dataLines.push(line.slice("data:".length).trim());
-        }
-      }
-
-      if (!eventType || dataLines.length === 0) {
-        continue;
-      }
-
-      const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
-      onEvent({
-        type: eventType,
-        ...(data as object),
-      } as ChatStreamEvent);
+      processEventBlock(rawEventBlock);
     }
+  }
+
+  const trailing = buffer.trim();
+  if (trailing.length > 0) {
+    processEventBlock(trailing);
   }
 };
 
@@ -466,7 +622,13 @@ export const executeQueuedChatTask = async (taskId: string) => {
           thread = updatedThread;
         }
       } catch (error) {
-        console.warn("[chat-runner] failed to refresh conversation summary", error);
+        console.error("[chat-runner] summary:failed", {
+          taskId: task.id,
+          threadId: task.payload.threadId ?? null,
+          phase: "refresh",
+          continuationIndex: 0,
+          error,
+        });
       }
     }
 
@@ -475,7 +637,21 @@ export const executeQueuedChatTask = async (taskId: string) => {
       process.env,
     );
 
+    let summaryCallsInCurrentRequest = 0;
+    const setSummaryCallsInCurrentRequest = (value: number) => {
+      summaryCallsInCurrentRequest = value;
+      if (task.payload.kind === "conversation" && task.payload.threadId) {
+        const updated = updateThread(task.payload.threadId, {
+          summaryCallsInCurrentRequest,
+        });
+        if (updated) {
+          thread = updated;
+        }
+      }
+    };
+
     if (task.payload.threadId && task.payload.kind === "conversation" && thread) {
+      setSummaryCallsInCurrentRequest(0);
       const estimatedUpcomingTokens = estimateMessageTokens(task.payload.userMessage);
       const projectedUsedTokens =
         thread.contextWindowUsedTokens === null
@@ -484,14 +660,19 @@ export const executeQueuedChatTask = async (taskId: string) => {
 
       const maybeCompacted = await maybeAutoCompactThreadContext({
         threadId: task.payload.threadId,
+        taskId: task.id,
         promptMode,
         usedTokens: projectedUsedTokens,
         totalTokens: requestedContextLength,
         phase: "before",
+        continuationIndex: 0,
       });
 
-      if (maybeCompacted) {
-        thread = maybeCompacted;
+      if (maybeCompacted.thread) {
+        thread = maybeCompacted.thread;
+      }
+      if (maybeCompacted.collapsed) {
+        setSummaryCallsInCurrentRequest(summaryCallsInCurrentRequest + 1);
       }
     }
 
@@ -535,87 +716,267 @@ export const executeQueuedChatTask = async (taskId: string) => {
       loadedModels: formatLoadedLmStudioModelsForDebug(loadedBeforeRequest),
     });
 
-    const response = await fetch(getLmStudioChatUrl(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(process.env.LM_STUDIO_TOKEN
-          ? { Authorization: `Bearer ${process.env.LM_STUDIO_TOKEN}` }
-          : {}),
-      },
-      body: JSON.stringify({
-        model: modelTarget,
-        context_length: requestedContextLength,
-        input: userInput,
-        previous_response_id: thread?.lmstudioResponseId ?? undefined,
-        system_prompt: getSystemPromptForMode(promptMode),
-        integrations: buildIntegrations(),
-        stream: true,
-      }),
-    });
-    if (!response.ok) {
-      const data = (await response.json()) as ChatResponse;
-      throw new Error(data.error?.message ?? "LM Studio chat request failed.");
-    }
-    if (!response.body) {
-      throw new Error("LM Studio did not return a stream body.");
-    }
-
     let streamedText = "";
     let streamedReasoning = "";
-    let finalResponse: ChatResponse | null = null;
+    const inRequestCompactionBreakOffsets: number[] = [];
+    const publishRunningResult = (responseId: string | null) => {
+      const displayText = applyCompactionMarkersToText(
+        streamedText,
+        inRequestCompactionBreakOffsets,
+      );
+      updateRunningTask(task.id, {
+        result: {
+          text: displayText,
+          reasoning: streamedReasoning,
+          responseId,
+          summaryCallsInCurrentRequest,
+        },
+      });
+    };
+    publishRunningResult(null);
 
-    await parseSseEvents(response.body, (event) => {
-      if (event.type === "reasoning.delta" && typeof event.content === "string") {
-        streamedReasoning += event.content;
-        updateRunningTask(task.id, {
-          result: {
-            text: streamedText,
-            reasoning: streamedReasoning,
-            responseId: finalResponse?.response_id ?? null,
-          },
-        });
-        return;
-      }
+    const runChatAttempt = async ({
+      input,
+      previousResponseId,
+    }: {
+      input: string | LmStudioInputItem[];
+      previousResponseId?: string;
+    }): Promise<{
+      overflowDetected: boolean;
+      usedTokens: number | null;
+      finalResponse: ChatResponse | null;
+    }> => {
+      const response = await fetch(getLmStudioChatUrl(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(process.env.LM_STUDIO_TOKEN
+            ? { Authorization: `Bearer ${process.env.LM_STUDIO_TOKEN}` }
+            : {}),
+        },
+        body: JSON.stringify({
+          model: modelTarget,
+          context_length: requestedContextLength,
+          input,
+          previous_response_id: previousResponseId,
+          system_prompt: getSystemPromptForMode(promptMode),
+          integrations: buildIntegrations(promptMode),
+          stream: true,
+        }),
+      });
 
-      if (event.type === "message.delta" && typeof event.content === "string") {
-        streamedText += event.content;
-        updateRunningTask(task.id, {
-          result: {
-            text: streamedText,
-            reasoning: streamedReasoning,
-            responseId: finalResponse?.response_id ?? null,
-          },
-        });
-        return;
-      }
-
-      if (event.type === "error") {
-        throw new Error(event.error?.message ?? "LM Studio streaming error.");
-      }
-
-      if (event.type === "chat.end") {
-        finalResponse = event.result;
-        logChatModelDebug("request:end", {
+      if (!response.ok) {
+        const data = (await response.json()) as ChatResponse;
+        console.error("[chat-runner] rest:error-response", {
           taskId: task.id,
-          threadId: thread?.id ?? null,
-          selectedModelTarget: modelTarget,
-          responseId: event.result.response_id ?? null,
-          responseModelInstanceId: event.result.model_instance_id ?? null,
+          threadId: task.payload.threadId ?? null,
+          status: response.status,
+          data,
         });
+        throw new Error(data.error?.message ?? "LM Studio chat request failed.");
       }
+      if (!response.body) {
+        throw new Error("LM Studio did not return a stream body.");
+      }
+
+      let localStreamedText = "";
+      let localStreamedReasoning = "";
+      let localFinalResponse: ChatResponse | null = null;
+      let localStreamErrorMessage: string | null = null;
+
+      try {
+        await parseSseEvents(response.body, (event) => {
+          if (event.type === "reasoning.delta" && typeof event.content === "string") {
+            localStreamedReasoning += event.content;
+            streamedReasoning += event.content;
+            publishRunningResult(localFinalResponse?.response_id ?? null);
+            return;
+          }
+
+          if (event.type === "message.delta" && typeof event.content === "string") {
+            localStreamedText += event.content;
+            streamedText += event.content;
+            publishRunningResult(localFinalResponse?.response_id ?? null);
+            return;
+          }
+
+          if (event.type === "error") {
+            console.error("[chat-runner] stream:error-event", {
+              taskId: task.id,
+              threadId: task.payload.threadId ?? null,
+              selectedModelTarget: modelTarget,
+              event,
+            });
+            throw new Error(event.error?.message ?? "LM Studio streaming error.");
+          }
+
+          if (event.type === "chat.end") {
+            localFinalResponse = event.result;
+            const signals = getChatStopSignals(event.result);
+            logChatModelDebug("request:end", {
+              taskId: task.id,
+              threadId: thread?.id ?? null,
+              selectedModelTarget: modelTarget,
+              responseId: event.result.response_id ?? null,
+              responseModelInstanceId: event.result.model_instance_id ?? null,
+              stopReason: signals.stopReason,
+              finishReason: signals.finishReason,
+              usage: event.result.usage ?? null,
+            });
+          }
+        });
+      } catch (error) {
+        localStreamErrorMessage =
+          error instanceof Error ? error.message : "LM Studio streaming error.";
+      }
+
+      const resolvedFinalResponse = localFinalResponse as ChatResponse | null;
+      const localResponseOutput = resolvedFinalResponse?.output;
+      const localResponseId = resolvedFinalResponse?.response_id ?? null;
+      const localText =
+        (localResponseOutput?.length ? getAssistantText(localResponseOutput) : "") ||
+        localStreamedText;
+      const localReasoning =
+        (localResponseOutput?.length
+          ? getAssistantReasoning(localResponseOutput)
+          : "") || localStreamedReasoning;
+      const interruptedWithoutEnd =
+        !resolvedFinalResponse &&
+        (localStreamedText.trim().length > 0 || localStreamedReasoning.trim().length > 0);
+      const signals = getChatStopSignals(resolvedFinalResponse);
+      const overflowDetected =
+        interruptedWithoutEnd ||
+        isContextOverflowSignal({
+          stopReason: signals.stopReason,
+          finishReason: signals.finishReason,
+          errorMessage: localStreamErrorMessage,
+        });
+
+      if (localStreamErrorMessage && !overflowDetected) {
+        throw new Error(localStreamErrorMessage);
+      }
+
+      if (!localStreamedText && localText) {
+        streamedText += localText;
+      }
+      if (!localStreamedReasoning && localReasoning) {
+        streamedReasoning += localReasoning;
+      }
+
+      publishRunningResult(localResponseId);
+
+      const usedTokens = getUsedContextTokens(resolvedFinalResponse);
+
+      return {
+        overflowDetected,
+        usedTokens,
+        finalResponse: resolvedFinalResponse,
+      };
+    };
+
+    const initialAttempt = await runChatAttempt({
+      input: userInput,
+      previousResponseId: thread?.lmstudioResponseId ?? undefined,
     });
 
-    const text =
-      (finalResponse?.output?.length
-        ? getAssistantText(finalResponse.output)
-        : "") || streamedText;
-    const reasoning =
-      (finalResponse?.output?.length
-        ? getAssistantReasoning(finalResponse.output)
-        : "") || streamedReasoning;
+    let finalResponse: ChatResponse | null = initialAttempt.finalResponse;
+    let overflowDetected = initialAttempt.overflowDetected;
+    let currentUsedTokens = initialAttempt.usedTokens;
+    let nearLimitDetected =
+      currentUsedTokens !== null &&
+      currentUsedTokens >= requestedContextLength - 2;
+    let shouldForceContinue = overflowDetected || nearLimitDetected;
+
+    let continuationCount = 0;
+    while (
+      shouldForceContinue &&
+      continuationCount < MAX_OVERFLOW_CONTINUATIONS_PER_TASK &&
+      task.payload.kind === "conversation" &&
+      task.payload.threadId
+    ) {
+      continuationCount += 1;
+      const breakOffset = streamedText.length;
+      if (
+        breakOffset > 0 &&
+        (inRequestCompactionBreakOffsets.length === 0 ||
+          inRequestCompactionBreakOffsets.at(-1) !== breakOffset)
+      ) {
+        inRequestCompactionBreakOffsets.push(breakOffset);
+      }
+      const interruptedAssistantTailChars =
+        streamedText.length > MAX_CONTINUATION_PARTIAL_CHARS
+          ? streamedText.slice(-MAX_CONTINUATION_PARTIAL_CHARS)
+          : streamedText;
+
+      const maybeCompacted = await maybeAutoCompactThreadContext({
+        threadId: task.payload.threadId,
+        taskId: task.id,
+        promptMode,
+        usedTokens: requestedContextLength,
+        totalTokens: requestedContextLength,
+        phase: "after",
+        continuationIndex: continuationCount,
+        interruption: overflowDetected
+          ? {
+              interrupted: true,
+              interruptedAssistantTailChars,
+              interruptionContext:
+                "The assistant response was interrupted by context overflow. Resume from this checkpoint, restart markdown/table formatting cleanly (new header/section), and avoid repeating already listed items.",
+            }
+          : undefined,
+        force: true,
+      });
+
+      if (maybeCompacted.thread) {
+        thread = maybeCompacted.thread;
+      }
+      if (maybeCompacted.collapsed) {
+        setSummaryCallsInCurrentRequest(summaryCallsInCurrentRequest + 1);
+        publishRunningResult(finalResponse?.response_id ?? null);
+      }
+
+      const continuationInput = buildOverflowContinuationInput({
+        summary: thread?.conversationSummary ?? null,
+        userMessage: task.payload.userMessage,
+        partialAssistantText: streamedText,
+        continuationIndex: continuationCount,
+      });
+
+      const continuationAttempt = await runChatAttempt({
+        input: continuationInput,
+      });
+
+      if (continuationAttempt.finalResponse) {
+        finalResponse = continuationAttempt.finalResponse;
+      }
+      overflowDetected = continuationAttempt.overflowDetected;
+      currentUsedTokens = continuationAttempt.usedTokens;
+      nearLimitDetected =
+        currentUsedTokens !== null &&
+        currentUsedTokens >= requestedContextLength - 2;
+      shouldForceContinue = overflowDetected || nearLimitDetected;
+
+    }
+
+    if (continuationCount >= MAX_OVERFLOW_CONTINUATIONS_PER_TASK && shouldForceContinue) {
+      console.error("[chat-runner] reached continuation safety cap", {
+        taskId: task.id,
+        threadId: task.payload.threadId ?? null,
+        continuationCount,
+        usedTokens: currentUsedTokens,
+        totalTokens: requestedContextLength,
+      });
+    }
+
+    const text = streamedText;
+    const reasoning = streamedReasoning;
 
     if (!text.trim() && !reasoning.trim()) {
+      if (overflowDetected) {
+        throw new Error(
+          "LM Studio reached the context limit before generating output. Context was compacted but continuation produced no output.",
+        );
+      }
       throw new Error("LM Studio did not return any output.");
     }
 
@@ -623,6 +984,24 @@ export const executeQueuedChatTask = async (taskId: string) => {
       const latestThread = getThread(task.payload.threadId);
       const lastMessage = latestThread?.messages.at(-1);
       const usedContextTokens = getUsedContextTokens(finalResponse);
+      const textWithCompactionMarkers = applyCompactionMarkersToText(
+        text,
+        inRequestCompactionBreakOffsets,
+      );
+
+      const shouldAppendAssistantMessage =
+        !lastMessage ||
+        lastMessage.role !== "assistant" ||
+        getTextFromMessageContent(lastMessage.content) !== textWithCompactionMarkers;
+      const appendMessages =
+        shouldAppendAssistantMessage
+          ? [
+              {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: textWithCompactionMarkers }],
+              },
+            ]
+          : undefined;
 
       const updatedThread = updateThread(task.payload.threadId, {
         lmstudioResponseId: finalResponse?.response_id ?? null,
@@ -630,22 +1009,13 @@ export const executeQueuedChatTask = async (taskId: string) => {
         lastPromptMode: promptMode,
         contextWindowUsedTokens: usedContextTokens,
         contextWindowTotalTokens: requestedContextLength,
-        appendMessages:
-          !lastMessage ||
-          lastMessage.role !== "assistant" ||
-          getTextFromMessageContent(lastMessage.content) !== text
-            ? [
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text }],
-                },
-              ]
-            : undefined,
+        appendMessages,
       });
 
       if (task.payload.kind === "conversation") {
-        await maybeAutoCompactThreadContext({
+        const maybeCompacted = await maybeAutoCompactThreadContext({
           threadId: task.payload.threadId,
+          taskId: task.id,
           promptMode,
           usedTokens:
             usedContextTokens ??
@@ -653,20 +1023,35 @@ export const executeQueuedChatTask = async (taskId: string) => {
             null,
           totalTokens: requestedContextLength,
           phase: "after",
+          continuationIndex: continuationCount + 1,
+          force: overflowDetected,
         });
+
+        if (maybeCompacted.collapsed) {
+          setSummaryCallsInCurrentRequest(summaryCallsInCurrentRequest + 1);
+        }
       }
     }
 
     markTaskCompleted(task.id, {
-      text,
+      text: applyCompactionMarkersToText(text, inRequestCompactionBreakOffsets),
       reasoning,
       responseId: finalResponse?.response_id ?? null,
+      summaryCallsInCurrentRequest,
     });
 
     if (task.payload.kind === "conversation" && task.payload.threadId) {
+      updateThread(task.payload.threadId, {
+        summaryCallsInCurrentRequest: 0,
+      });
       maybeEnqueueTitleGenerationTask(task.payload.threadId);
     }
   } catch (error) {
+    if (task.payload.kind === "conversation" && task.payload.threadId) {
+      updateThread(task.payload.threadId, {
+        summaryCallsInCurrentRequest: 0,
+      });
+    }
     markTaskFailed(
       taskId,
       error instanceof Error ? error.message : "Chat task failed.",
@@ -678,21 +1063,13 @@ export const executeQueuedChatTask = async (taskId: string) => {
       });
       const loadedAfterCleanup = await listLoadedLmStudioModels();
 
-      if (unloaded.length > 0) {
-        console.info(
-          `[chat-runner] unloaded redundant LM Studio models: ${unloaded
-            .map((model) => `${model.modelKey} (${model.instanceId})`)
-            .join(", ")}`,
-        );
-      }
-
       logChatModelDebug("cleanup:after", {
         taskId,
         loadedModels: formatLoadedLmStudioModelsForDebug(loadedAfterCleanup),
         unloaded: formatLoadedLmStudioModelsForDebug(unloaded),
       });
     } catch (error) {
-      console.warn("[chat-runner] failed to cleanup redundant LM Studio models", error);
+      console.error("[chat-runner] failed to cleanup redundant LM Studio models", error);
     }
 
     void processTaskQueues();
@@ -829,6 +1206,82 @@ const toLmStudioInputItems = (
   }
 
   return items;
+};
+
+const buildOverflowContinuationInput = ({
+  summary,
+  userMessage,
+  partialAssistantText,
+  continuationIndex,
+}: {
+  summary: string | null;
+  userMessage: MessagePart[];
+  partialAssistantText: string;
+  continuationIndex: number;
+}) => {
+  const userText =
+    getTextFromMessageContent(userMessage).trim() ||
+    formatMessageContentForPrompt(userMessage);
+  const partialTail =
+    partialAssistantText.length > MAX_CONTINUATION_PARTIAL_CHARS
+      ? partialAssistantText.slice(-MAX_CONTINUATION_PARTIAL_CHARS)
+      : partialAssistantText;
+
+  const continuationPrompt = [
+    `Continuation step: ${continuationIndex}.`,
+    "Task: continue exactly where the interrupted answer stopped.",
+    "Minimum rule (always): never repeat items that were already output.",
+    "Hard rules (must follow):",
+    "1) Never restart from the beginning.",
+    "2) Continue directly from the checkpoint tail below.",
+    "3) Do not rewrite already emitted content except finishing a cut sentence.",
+    "4) If you detect repetition, stop and output only: DONE (repetition guard).",
+    "",
+    `User message:\n${userText}`,
+    "",
+    "Interrupted output tail (authoritative checkpoint):",
+    partialTail.trim() || "(none)",
+    "",
+    "Output policy:",
+    "- Output only the continuation content.",
+    "- No meta commentary, no explanation about continuation.",
+  ].join("\n");
+
+  return buildFreshChainInput({
+    summary,
+    userInput: continuationPrompt,
+  });
+};
+
+const applyCompactionMarkersToText = (
+  text: string,
+  breakOffsets: number[],
+) => {
+  if (!text || breakOffsets.length === 0) {
+    return text;
+  }
+
+  const validBreakOffsets = Array.from(
+    new Set(
+      breakOffsets.filter((offset) => offset > 0 && offset < text.length),
+    ),
+  ).sort((left, right) => left - right);
+
+  if (!validBreakOffsets.length) {
+    return text;
+  }
+
+  let combinedText = text;
+  for (let index = validBreakOffsets.length - 1; index >= 0; index -= 1) {
+    const breakOffset = validBreakOffsets[index];
+    const marker = formatContextCompactionDuringRequestMarker(index + 1);
+    combinedText =
+      combinedText.slice(0, breakOffset) +
+      marker +
+      combinedText.slice(breakOffset);
+  }
+
+  return combinedText;
 };
 
 const estimateRemainingContextRatio = ({

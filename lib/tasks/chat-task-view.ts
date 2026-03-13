@@ -7,6 +7,7 @@ export type ChatTaskView =
       text: string;
       reasoning: string;
       responseId: string | null;
+      summaryCallsInCurrentRequest: number;
     }
   | {
       taskId: string;
@@ -14,6 +15,7 @@ export type ChatTaskView =
       text: string;
       reasoning: string;
       responseId: string | null;
+      summaryCallsInCurrentRequest: number;
     }
   | {
       taskId: string;
@@ -41,5 +43,6 @@ export const getChatTaskView = (taskId: string): ChatTaskView | null => {
     text: task.result?.text ?? "",
     reasoning: task.result?.reasoning ?? "",
     responseId: task.result?.responseId ?? null,
+    summaryCallsInCurrentRequest: task.result?.summaryCallsInCurrentRequest ?? 0,
   };
 };

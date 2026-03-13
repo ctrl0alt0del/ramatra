@@ -25,6 +25,8 @@ const ensureSchema = (db: Database.Database) => {
       conversation_summary TEXT,
       summary_updated_at TEXT,
       summary_message_count INTEGER NOT NULL DEFAULT 0,
+      summary_call_count_total INTEGER NOT NULL DEFAULT 0,
+      summary_calls_in_current_request INTEGER NOT NULL DEFAULT 0,
       context_window_used_tokens INTEGER,
       context_window_total_tokens INTEGER,
       created_at TEXT NOT NULL,
@@ -184,6 +186,24 @@ const ensureSchema = (db: Database.Database) => {
     db.exec(`
       ALTER TABLE threads
       ADD COLUMN summary_message_count INTEGER NOT NULL DEFAULT 0
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "summary_call_count_total")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN summary_call_count_total INTEGER NOT NULL DEFAULT 0
+    `);
+  }
+
+  if (
+    !columns.some(
+      (column) => column.name === "summary_calls_in_current_request",
+    )
+  ) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN summary_calls_in_current_request INTEGER NOT NULL DEFAULT 0
     `);
   }
 

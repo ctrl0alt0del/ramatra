@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { CustomAssistantMessage } from "./CustomAssistantMessage";
+import { ContextCompactionDivider } from "./ContextCompactionDivider";
 import { CustomThreadListItem } from "./CustomThreadListItem";
 import { CustomUserMessage } from "./CustomUserMessage";
 import { ManagedComposer } from "./ManagedComposer";
@@ -257,6 +258,7 @@ function ChatWorkspace() {
                 components={{
                   AssistantMessage: CustomAssistantMessage,
                   Composer: ManagedComposer,
+                  MessagesFooter: ContextCompactionDivider,
                   UserMessage: CustomUserMessage,
                 }}
               />

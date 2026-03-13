@@ -19,6 +19,9 @@ export function ManagedComposer() {
   const activeThread = remoteId ? byId[remoteId] : null;
   const contextUsed = activeThread?.contextWindowUsedTokens ?? null;
   const contextTotal = activeThread?.contextWindowTotalTokens ?? null;
+  const summaryCallCountTotal = activeThread?.summaryCallCountTotal ?? 0;
+  const summaryCallsInCurrentRequest =
+    activeThread?.summaryCallsInCurrentRequest ?? 0;
 
   const handleForceResume = async () => {
     try {
@@ -47,7 +50,12 @@ export function ManagedComposer() {
   return (
     <div className="w-full space-y-2">
       <div className="flex justify-end">
-        <ComposerContextIndicator used={contextUsed} total={contextTotal} />
+        <ComposerContextIndicator
+          used={contextUsed}
+          total={contextTotal}
+          summaryCallCountTotal={summaryCallCountTotal}
+          summaryCallsInCurrentRequest={summaryCallsInCurrentRequest}
+        />
       </div>
 
       {!systemState.canChat ? (
@@ -102,17 +110,20 @@ export function ManagedComposer() {
 function ComposerContextIndicator({
   used,
   total,
+  summaryCallCountTotal,
+  summaryCallsInCurrentRequest,
 }: Readonly<{
   used: number | null;
   total: number | null;
+  summaryCallCountTotal: number;
+  summaryCallsInCurrentRequest: number;
 }>) {
   const [isOpen, setIsOpen] = useState(false);
 
-  if (used === null || total === null || total <= 0) {
-    return null;
-  }
-
-  const ratio = Math.min(1, Math.max(0, used / total));
+  const hasContextValues = total !== null && total > 0;
+  const safeTotal = hasContextValues ? total : 1;
+  const safeUsed = hasContextValues ? (used ?? 0) : 0;
+  const ratio = Math.min(1, Math.max(0, safeUsed / safeTotal));
   const percentage = Math.round(ratio * 100);
   const size = 18;
   const strokeWidth = 2.5;
@@ -120,11 +131,16 @@ function ComposerContextIndicator({
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference * (1 - ratio);
   const tone =
-    percentage >= 95
-      ? "text-[#d66b50]"
-      : percentage >= 80
-        ? "text-[#d49a41]"
-        : "text-[#6e5bff]";
+    !hasContextValues
+      ? "text-[#8f88af]"
+      : percentage >= 95
+        ? "text-[#d66b50]"
+        : percentage >= 80
+          ? "text-[#d49a41]"
+          : "text-[#6e5bff]";
+  const title = hasContextValues
+    ? `Context ${safeUsed.toLocaleString()} / ${safeTotal.toLocaleString()} tokens (${percentage}%)`
+    : "Context usage is loading";
 
   return (
     <div className="relative inline-flex items-center">
@@ -136,7 +152,7 @@ function ComposerContextIndicator({
         onFocus={() => setIsOpen(true)}
         onBlur={() => setIsOpen(false)}
         onClick={() => setIsOpen((prev) => !prev)}
-        title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens (${percentage}%)`}
+        title={title}
         aria-label={`Context usage ${percentage}%`}
         aria-expanded={isOpen}
       >
@@ -170,7 +186,16 @@ function ComposerContextIndicator({
       </button>
       {isOpen ? (
         <div className="absolute bottom-full right-0 mb-2 whitespace-nowrap rounded-lg border border-white/70 bg-white/95 px-2 py-1 text-[11px] font-medium text-[#2d2351] shadow-[0_10px_24px_rgba(73,56,145,0.16)]">
-          {used.toLocaleString()} / {total.toLocaleString()} tokens ({percentage}%)
+          {hasContextValues ? (
+            <div>
+              Context: {safeUsed.toLocaleString()} / {safeTotal.toLocaleString()} tokens (
+              {percentage}%)
+            </div>
+          ) : (
+            <div>Context: loading...</div>
+          )}
+          <div>Summaries (thread): {summaryCallCountTotal}</div>
+          <div>Summaries (this request): {summaryCallsInCurrentRequest}</div>
         </div>
       ) : null}
     </div>

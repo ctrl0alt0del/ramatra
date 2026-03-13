@@ -17,7 +17,9 @@ import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
 import { PersistedHistoryProvider } from "./history";
 import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 
-type ThreadListItemRuntime = ReturnType<typeof useThreadListItemRuntime>;
+type ThreadListItemRuntime = NonNullable<
+  ReturnType<typeof useThreadListItemRuntime>
+>;
 
 const resolveThreadRemoteId = async (threadListItem: ThreadListItemRuntime) => {
   const { remoteId } = threadListItem.getState();
@@ -187,6 +189,7 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
                 status: "queued" | "running" | "completed";
                 text: string;
                 reasoning?: string;
+                summaryCallsInCurrentRequest?: number;
               }
             | {
                 status: "failed";

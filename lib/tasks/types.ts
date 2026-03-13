@@ -55,6 +55,7 @@ export type TaskResultMap = {
     text?: string;
     reasoning?: string;
     responseId?: string | null;
+    summaryCallsInCurrentRequest?: number;
     title?: string;
     summaryCollapsed?: boolean;
   };

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
+import { messagePartsContainContextCompactionMarker } from "@/lib/chat/context-compaction-marker";
 import { resolvePreferredLmStudioModelTarget } from "@/lib/lmstudio/models";
 import { type ThreadDetail } from "@/lib/lmstudio/threads";
 
@@ -28,6 +29,10 @@ const clipForTitle = (value: string) => {
 
 const buildTitleInput = (thread: ThreadDetail) => {
   const excerpt = thread.messages
+    .filter(
+      (message) =>
+        !messagePartsContainContextCompactionMarker(message.content),
+    )
     .slice(0, 8)
     .map(
       (message) =>

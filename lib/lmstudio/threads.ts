@@ -26,6 +26,8 @@ export type ThreadSummary = {
   conversationSummary: string | null;
   summaryUpdatedAt: string | null;
   summaryMessageCount: number;
+  summaryCallCountTotal: number;
+  summaryCallsInCurrentRequest: number;
   contextWindowUsedTokens: number | null;
   contextWindowTotalTokens: number | null;
   createdAt: string;
@@ -48,6 +50,8 @@ type ThreadRow = {
   conversation_summary: string | null;
   summary_updated_at: string | null;
   summary_message_count: number;
+  summary_call_count_total: number;
+  summary_calls_in_current_request: number;
   context_window_used_tokens: number | null;
   context_window_total_tokens: number | null;
   created_at: string;
@@ -79,6 +83,8 @@ const toThreadSummary = (thread: ThreadDetail): ThreadSummary => {
     conversationSummary: thread.conversationSummary,
     summaryUpdatedAt: thread.summaryUpdatedAt,
     summaryMessageCount: thread.summaryMessageCount,
+    summaryCallCountTotal: thread.summaryCallCountTotal,
+    summaryCallsInCurrentRequest: thread.summaryCallsInCurrentRequest,
     contextWindowUsedTokens: thread.contextWindowUsedTokens,
     contextWindowTotalTokens: thread.contextWindowTotalTokens,
     createdAt: thread.createdAt,
@@ -110,6 +116,8 @@ export const listThreads = (): ThreadSummary[] => {
           t.conversation_summary,
           t.summary_updated_at,
           t.summary_message_count,
+          t.summary_call_count_total,
+          t.summary_calls_in_current_request,
           t.context_window_used_tokens,
           t.context_window_total_tokens,
           t.created_at,
@@ -134,6 +142,8 @@ export const listThreads = (): ThreadSummary[] => {
     conversationSummary: row.conversation_summary,
     summaryUpdatedAt: row.summary_updated_at,
     summaryMessageCount: row.summary_message_count,
+    summaryCallCountTotal: row.summary_call_count_total,
+    summaryCallsInCurrentRequest: row.summary_calls_in_current_request,
     contextWindowUsedTokens: row.context_window_used_tokens,
     contextWindowTotalTokens: row.context_window_total_tokens,
     createdAt: row.created_at,
@@ -152,6 +162,8 @@ export const createThread = (input?: {
   conversationSummary?: string | null;
   summaryUpdatedAt?: string | null;
   summaryMessageCount?: number;
+  summaryCallCountTotal?: number;
+  summaryCallsInCurrentRequest?: number;
   contextWindowUsedTokens?: number | null;
   contextWindowTotalTokens?: number | null;
   messages?: ThreadMessage[];
@@ -169,6 +181,9 @@ export const createThread = (input?: {
   const conversationSummary = input?.conversationSummary ?? null;
   const summaryUpdatedAt = input?.summaryUpdatedAt ?? null;
   const summaryMessageCount = input?.summaryMessageCount ?? 0;
+  const summaryCallCountTotal = input?.summaryCallCountTotal ?? 0;
+  const summaryCallsInCurrentRequest =
+    input?.summaryCallsInCurrentRequest ?? 0;
   const contextWindowUsedTokens = input?.contextWindowUsedTokens ?? null;
   const contextWindowTotalTokens = input?.contextWindowTotalTokens ?? null;
 
@@ -186,12 +201,14 @@ export const createThread = (input?: {
           conversation_summary,
           summary_updated_at,
           summary_message_count,
+          summary_call_count_total,
+          summary_calls_in_current_request,
           context_window_used_tokens,
           context_window_total_tokens,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       threadId,
@@ -204,6 +221,8 @@ export const createThread = (input?: {
       conversationSummary,
       summaryUpdatedAt,
       summaryMessageCount,
+      summaryCallCountTotal,
+      summaryCallsInCurrentRequest,
       contextWindowUsedTokens,
       contextWindowTotalTokens,
       timestamp,
@@ -254,6 +273,8 @@ export const getThread = (threadId: string) => {
           t.conversation_summary,
           t.summary_updated_at,
           t.summary_message_count,
+          t.summary_call_count_total,
+          t.summary_calls_in_current_request,
           t.context_window_used_tokens,
           t.context_window_total_tokens,
           t.created_at,
@@ -291,6 +312,8 @@ export const getThread = (threadId: string) => {
     conversationSummary: thread.conversation_summary,
     summaryUpdatedAt: thread.summary_updated_at,
     summaryMessageCount: thread.summary_message_count,
+    summaryCallCountTotal: thread.summary_call_count_total,
+    summaryCallsInCurrentRequest: thread.summary_calls_in_current_request,
     contextWindowUsedTokens: thread.context_window_used_tokens,
     contextWindowTotalTokens: thread.context_window_total_tokens,
     createdAt: thread.created_at,
@@ -315,6 +338,8 @@ export const updateThread = (
     conversationSummary?: string | null;
     summaryUpdatedAt?: string | null;
     summaryMessageCount?: number;
+    summaryCallCountTotal?: number;
+    summaryCallsInCurrentRequest?: number;
     contextWindowUsedTokens?: number | null;
     contextWindowTotalTokens?: number | null;
     appendMessages?: ThreadMessage[];
@@ -363,6 +388,14 @@ export const updateThread = (
     input.summaryMessageCount !== undefined
       ? input.summaryMessageCount
       : existing.summaryMessageCount;
+  const nextSummaryCallCountTotal =
+    input.summaryCallCountTotal !== undefined
+      ? input.summaryCallCountTotal
+      : existing.summaryCallCountTotal;
+  const nextSummaryCallsInCurrentRequest =
+    input.summaryCallsInCurrentRequest !== undefined
+      ? input.summaryCallsInCurrentRequest
+      : existing.summaryCallsInCurrentRequest;
   const nextContextWindowUsedTokens =
     input.contextWindowUsedTokens !== undefined
       ? input.contextWindowUsedTokens
@@ -388,6 +421,8 @@ export const updateThread = (
           conversation_summary = ?,
           summary_updated_at = ?,
           summary_message_count = ?,
+          summary_call_count_total = ?,
+          summary_calls_in_current_request = ?,
           context_window_used_tokens = ?,
           context_window_total_tokens = ?,
           updated_at = ?
@@ -403,6 +438,8 @@ export const updateThread = (
       nextConversationSummary,
       nextSummaryUpdatedAt,
       nextSummaryMessageCount,
+      nextSummaryCallCountTotal,
+      nextSummaryCallsInCurrentRequest,
       nextContextWindowUsedTokens,
       nextContextWindowTotalTokens,
       timestamp,

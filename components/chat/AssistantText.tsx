@@ -10,7 +10,13 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
+import {
+  hasContextCompactionMarker,
+  splitTextByContextCompactionMarkers,
+} from "@/lib/chat/context-compaction-marker";
+
 import { extractComfyJobMarker } from "./comfy-marker";
+import { ContextCompactionInline } from "./ContextCompactionInline";
 import { GeneratedImageCard } from "./GeneratedImageCard";
 
 const MarkdownText = makeMarkdownText({
@@ -27,25 +33,64 @@ const MarkdownText = makeMarkdownText({
 export function AssistantText() {
   const part = useMessagePartText();
   const text = "text" in part ? part.text : "";
-  const { cleanText, marker } = extractComfyJobMarker(text);
+  const hasMarkers = hasContextCompactionMarker(text);
+  const chunks = hasMarkers ? splitTextByContextCompactionMarkers(text) : null;
 
   return (
     <>
-      {cleanText ? (
-        <TextMessagePartProvider text={cleanText} isRunning={part.status.type === "running"}>
-          <MarkdownText />
-        </TextMessagePartProvider>
-      ) : null}
-      {marker ? (
-        <GeneratedImageCard
-          taskId={marker.taskId}
-          jobId={marker.jobId ?? null}
-          initialStatus={marker.status}
-        />
-      ) : null}
-      {!cleanText && !marker ? (
-        <MessagePartPrimitive.Text className="aui-text" component="p" />
-      ) : null}
+      {chunks
+        ? chunks.map((chunk, index) => {
+            const { cleanText, marker } = extractComfyJobMarker(chunk.text);
+            return (
+              <div key={`ctx-chunk-${index}`}>
+                {cleanText ? (
+                  <TextMessagePartProvider
+                    text={cleanText}
+                    isRunning={part.status.type === "running"}
+                  >
+                    <MarkdownText />
+                  </TextMessagePartProvider>
+                ) : null}
+                {marker ? (
+                  <GeneratedImageCard
+                    taskId={marker.taskId}
+                    jobId={marker.jobId ?? null}
+                    initialStatus={marker.status}
+                  />
+                ) : null}
+                {chunk.markerCountAfter !== null ? (
+                  <ContextCompactionInline
+                    text="Context automatically compacted"
+                  />
+                ) : null}
+              </div>
+            );
+          })
+        : (() => {
+            const { cleanText, marker } = extractComfyJobMarker(text);
+            return (
+              <>
+                {cleanText ? (
+                  <TextMessagePartProvider
+                    text={cleanText}
+                    isRunning={part.status.type === "running"}
+                  >
+                    <MarkdownText />
+                  </TextMessagePartProvider>
+                ) : null}
+                {marker ? (
+                  <GeneratedImageCard
+                    taskId={marker.taskId}
+                    jobId={marker.jobId ?? null}
+                    initialStatus={marker.status}
+                  />
+                ) : null}
+                {!cleanText && !marker ? (
+                  <MessagePartPrimitive.Text className="aui-text" component="p" />
+                ) : null}
+              </>
+            );
+          })()}
     </>
   );
 }

@@ -16,6 +16,8 @@ export type ThreadApiSummary = {
   conversationSummary: string | null;
   summaryUpdatedAt: string | null;
   summaryMessageCount: number;
+  summaryCallCountTotal: number;
+  summaryCallsInCurrentRequest: number;
   contextWindowUsedTokens: number | null;
   contextWindowTotalTokens: number | null;
 };
