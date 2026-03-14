@@ -1,11 +1,31 @@
 import { getClient } from "@/lib/comfy/client";
 import { runWorkflow } from "@/lib/comfy/runner";
+import { workflowNames } from "@/lib/comfy/workflows/types";
 import { toHttpError } from "@/lib/errors/server-error";
 import z from "zod";
 
+const loraSchema = z.object({
+  name: z.string(),
+  strength_model: z.number(),
+  strength_clip: z.number(),
+});
+
+const workflowInputSchema = z.object({
+  positivePrompt: z.string(),
+  negativePrompt: z.string(),
+  width: z.number(),
+  height: z.number(),
+  steps: z.number(),
+  cfg: z.number(),
+  seed: z.number(),
+  samplerName: z.string(),
+  scheduler: z.string(),
+  loras: z.array(loraSchema),
+});
+
 const generateSchema = z.object({
-  workflowName: z.string(),
-  input: z.object({}).passthrough(),
+  workflowName: z.enum(workflowNames),
+  input: workflowInputSchema,
 });
 
 export async function POST(req: Request) {

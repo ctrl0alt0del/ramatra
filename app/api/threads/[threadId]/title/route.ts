@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
+import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { getThread, isPlaceholderThreadTitle } from "@/lib/lmstudio/threads";
 import { processTaskQueues } from "@/lib/tasks/processor";
 import {
@@ -67,6 +69,12 @@ export async function POST(_req: Request, context: RouteContext) {
     const task = enqueueChatTask({
       kind: "generate_title",
       threadId,
+      contextLength: getConfiguredContextLengthForMode(
+        thread.lastPromptMode && isPromptMode(thread.lastPromptMode)
+          ? thread.lastPromptMode
+          : defaultPromptMode,
+        process.env,
+      ),
     });
 
     void processTaskQueues();
@@ -78,6 +86,13 @@ export async function POST(_req: Request, context: RouteContext) {
         title: latestThread.title,
         pending: false,
         error: completedTask.error,
+      });
+    }
+    if (completedTask.type !== "chat") {
+      return NextResponse.json({
+        title: latestThread.title,
+        pending: false,
+        error: "Unexpected task type for title generation.",
       });
     }
 

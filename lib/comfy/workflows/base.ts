@@ -81,7 +81,7 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
     weight_dtype: "default",
   });
   /*Power Lora Loader (rgthree)*/
-  const [OUT_0_5, OUT_1_1] = cls["Power Lora Loader (rgthree)"]({
+  const powerLoraLoaderInput = {
     PowerLoraLoaderHeaderWidget: {
       type: "PowerLoraLoaderHeaderWidget",
     },
@@ -103,7 +103,10 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
     "\u2795 Add Lora": "",
     model: MODEL_1,
     clip: CLIP_2,
-  });
+  } as any;
+  const [OUT_0_5, OUT_1_1] = cls["Power Lora Loader (rgthree)"](
+    powerLoraLoaderInput,
+  );
   let currentModel = OUT_0_5;
   let currentClip = OUT_1_1;
 

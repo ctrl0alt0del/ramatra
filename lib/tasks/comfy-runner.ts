@@ -2,24 +2,55 @@ import { getClient } from "@/lib/comfy/client";
 import { runWorkflow } from "@/lib/comfy/runner";
 import { type WorkflowInput, type WorkflowName } from "@/lib/comfy/workflows/types";
 import {
+  getPendingComfyStreamSession,
+  setPendingComfyStreamSession,
+} from "@/lib/tasks/comfy-stream-session";
+import {
+  switchToChatGpuMode,
   switchToComfyGpuMode,
 } from "@/lib/tasks/gpu-manager";
 import {
   bindComfyJobToTask,
-  markTaskFailed,
-  markTaskStarted,
+  setGroupTaskStatusByKind,
   updateRunningTask,
 } from "@/lib/tasks/scheduler";
+import { getTask } from "@/lib/tasks/store";
+import type { Task } from "@/lib/tasks/types";
 
 declare global {
   var __comfyBridgeComfyQueueListenersReady: boolean | undefined;
 }
 
-export const executeQueuedComfyTask = async (taskId: string) => {
-  const task = markTaskStarted(taskId);
+export const executeQueuedComfyTask = async (
+  taskId: string,
+  taskKind: Task["kind"],
+) => {
+  const task = getTask(taskId);
   if (!task || task.type !== "comfy") {
     return;
   }
+
+  if (taskKind === "image.stream") {
+    const session = getPendingComfyStreamSession(task.id);
+    if (!session) {
+      throw new Error("image.stream task has no pending comfy stream session.");
+    }
+    setGroupTaskStatusByKind({
+      taskId: task.id,
+      kind: "image.stream",
+      status: "running",
+    });
+    return;
+  }
+  if (taskKind !== "image.generate") {
+    return;
+  }
+
+  setGroupTaskStatusByKind({
+    taskId: task.id,
+    kind: "image.generate",
+    status: "running",
+  });
 
   await switchToComfyGpuMode();
 
@@ -41,31 +72,67 @@ export const executeQueuedComfyTask = async (taskId: string) => {
       } satisfies WorkflowInput,
     });
 
-    if (!("jobId" in result)) {
-      markTaskFailed(task.id, "Image generation failed before queueing.");
+    const jobId =
+      "jobId" in result && typeof result.jobId === "string"
+        ? result.jobId
+        : null;
+    if (!jobId) {
+      const errorMessage = "Image generation failed before queueing.";
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "image.generate",
+        status: "failed",
+      });
+      updateRunningTask(task.id, {
+        error: errorMessage,
+      });
       await switchToChatGpuMode();
       return;
     }
 
-    bindComfyJobToTask(task.id, result.jobId);
+    setGroupTaskStatusByKind({
+      taskId: task.id,
+      kind: "image.generate",
+      status: "completed",
+    });
+    setGroupTaskStatusByKind({
+      taskId: task.id,
+      kind: "image.stream",
+      status: "running",
+    });
+    setPendingComfyStreamSession({
+      taskGroupId: task.id,
+      jobId,
+    });
+    bindComfyJobToTask(task.id, jobId);
+    const progress =
+      "progress" in result && result.progress
+        ? result.progress
+        : {
+            value: null,
+            max: null,
+            percentage: null,
+            node: null,
+          };
     updateRunningTask(task.id, {
       result: {
         taskId: task.id,
-        jobId: result.jobId,
+        jobId,
         status: result.status,
-        progress: result.progress ?? {
-          value: null,
-          max: null,
-          percentage: null,
-          node: null,
-        },
+        progress,
       },
     });
   } catch (error) {
-    markTaskFailed(
-      task.id,
-      error instanceof Error ? error.message : "Failed to start Comfy task.",
-    );
+    const errorMessage =
+      error instanceof Error ? error.message : "Failed to start Comfy task.";
+    setGroupTaskStatusByKind({
+      taskId: task.id,
+      kind: "image.generate",
+      status: "failed",
+    });
+    updateRunningTask(task.id, {
+      error: errorMessage,
+    });
     await switchToChatGpuMode();
   }
 };

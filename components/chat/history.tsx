@@ -151,7 +151,7 @@ export function PersistedHistoryProvider({
   );
 
   return (
-    <RuntimeAdapterProvider adapters={{ history }}>
+    <RuntimeAdapterProvider adapters={{ history: history as any }}>
       {children}
     </RuntimeAdapterProvider>
   );

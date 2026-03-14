@@ -2,18 +2,18 @@ import { getDb } from "@/lib/db";
 import {
   type GpuMode,
   type SchedulerSnapshot,
-  type Task,
-  type TaskPayloadMap,
+  type TaskGroup,
+  type TaskGroupPayloadMap,
   type TaskQueueSnapshot,
-  type TaskResultMap,
-  type TaskStatus,
-  type TaskType,
+  type TaskGroupResultMap,
+  type TaskGroupStatus,
+  type TaskGroupType,
 } from "@/lib/tasks/types";
 
 type TaskRow = {
   id: string;
-  type: TaskType;
-  status: TaskStatus;
+  type: TaskGroupType;
+  status: TaskGroupStatus;
   payload_json: string;
   result_json: string | null;
   error: string | null;
@@ -29,12 +29,20 @@ type RuntimeStateRow = {
 };
 
 const db = getDb();
+type TaskGroupOfType<TType extends TaskGroupType> = Extract<
+  TaskGroup,
+  { type: TType }
+>;
 
-const cloneTask = <TTask extends Task>(task: TTask): TTask => {
+const cloneJson = <TValue>(value: TValue): TValue => {
+  return JSON.parse(JSON.stringify(value)) as TValue;
+};
+
+const cloneTask = <TTask extends TaskGroup>(task: TTask): TTask => {
   return {
     ...task,
-    payload: { ...task.payload },
-    result: task.result ? { ...task.result } : null,
+    payload: cloneJson(task.payload),
+    result: task.result ? cloneJson(task.result) : null,
   } as TTask;
 };
 
@@ -50,7 +58,7 @@ const parseJson = <TValue>(value: string | null, fallback: TValue): TValue => {
   }
 };
 
-const rowToTask = (row: TaskRow): Task => {
+const rowToTask = (row: TaskRow): TaskGroup => {
   return {
     id: row.id,
     type: row.type,
@@ -59,9 +67,9 @@ const rowToTask = (row: TaskRow): Task => {
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     error: row.error,
-    payload: parseJson(row.payload_json, {}) as TaskPayloadMap[TaskType],
-    result: parseJson(row.result_json, null) as TaskResultMap[TaskType] | null,
-  } as Task;
+    payload: parseJson(row.payload_json, {}) as TaskGroupPayloadMap[TaskGroupType],
+    result: parseJson(row.result_json, null) as TaskGroupResultMap[TaskGroupType] | null,
+  } as TaskGroup;
 };
 
 const getRuntimeState = (): RuntimeStateRow => {
@@ -84,7 +92,10 @@ const getRuntimeState = (): RuntimeStateRow => {
   );
 };
 
-const listTasksByStatus = (type: TaskType, status: TaskStatus) => {
+const listTasksByStatus = <TType extends TaskGroupType>(
+  type: TType,
+  status: TaskGroupStatus,
+) => {
   const rows = db
     .prepare(
       `
@@ -105,14 +116,14 @@ const listTasksByStatus = (type: TaskType, status: TaskStatus) => {
     )
     .all(type, status) as TaskRow[];
 
-  return rows.map((row) => rowToTask(row));
+  return rows.map((row) => rowToTask(row) as TaskGroupOfType<TType>);
 };
 
-export const createTask = <TType extends TaskType>(
+export const createTask = <TType extends TaskGroupType>(
   type: TType,
-  payload: TaskPayloadMap[TType],
+  payload: TaskGroupPayloadMap[TType],
 ) => {
-  const task: Task = {
+  const task: TaskGroup = {
     id: crypto.randomUUID(),
     type,
     status: "queued",
@@ -122,7 +133,7 @@ export const createTask = <TType extends TaskType>(
     error: null,
     payload,
     result: null,
-  } as Task;
+  } as TaskGroup;
 
   db.prepare(
     `
@@ -177,7 +188,7 @@ export const getTask = (taskId: string) => {
   return row ? cloneTask(rowToTask(row)) : null;
 };
 
-export const listQueuedTasks = (type: TaskType) => {
+export const listQueuedTasks = <TType extends TaskGroupType>(type: TType) => {
   return listTasksByStatus(type, "queued").map((task) => cloneTask(task));
 };
 
@@ -207,9 +218,9 @@ export const listAllTasks = () => {
 export const updateTaskStatus = (
   taskId: string,
   input: {
-    status?: TaskStatus;
+    status?: TaskGroupStatus;
     error?: string | null;
-    result?: TaskResultMap[TaskType] | null;
+    result?: TaskGroupResultMap[TaskGroupType] | null;
     startedAt?: string | null;
     finishedAt?: string | null;
   },
@@ -217,14 +228,17 @@ export const updateTaskStatus = (
   const existing = getTask(taskId);
   if (!existing) return null;
 
-  const nextTask: Task = {
+  const nextTask: TaskGroup = {
     ...existing,
     status: input.status ?? existing.status,
     error: input.error !== undefined ? input.error : existing.error,
-    result: input.result !== undefined ? (input.result as Task["result"]) : existing.result,
+    result:
+      input.result !== undefined
+        ? (input.result as TaskGroup["result"])
+        : existing.result,
     startedAt: input.startedAt !== undefined ? input.startedAt : existing.startedAt,
     finishedAt: input.finishedAt !== undefined ? input.finishedAt : existing.finishedAt,
-  } as Task;
+  } as TaskGroup;
 
   db.prepare(
     `
@@ -249,7 +263,30 @@ export const updateTaskStatus = (
   return cloneTask(nextTask);
 };
 
-export const dequeueTask = () => {
+export const updateTaskPayload = (
+  taskId: string,
+  payload: TaskGroupPayloadMap[TaskGroupType],
+) => {
+  const existing = getTask(taskId);
+  if (!existing) return null;
+
+  const nextTask: TaskGroup = {
+    ...existing,
+    payload,
+  } as TaskGroup;
+
+  db.prepare(
+    `
+      UPDATE tasks
+      SET payload_json = ?
+      WHERE id = ?
+    `,
+  ).run(JSON.stringify(payload), taskId);
+
+  return cloneTask(nextTask);
+};
+
+export const dequeueTask = (_taskId?: string) => {
   // Queue membership is derived from persisted task status.
 };
 
