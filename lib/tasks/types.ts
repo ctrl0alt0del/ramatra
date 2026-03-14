@@ -74,6 +74,7 @@ export type TaskGroupPayloadMap = {
     workflowName: string;
     prompt: string;
     negativePrompt: string;
+    inputImage: string[];
     width: number;
     height: number;
     steps: number;

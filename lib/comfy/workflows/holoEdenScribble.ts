@@ -7,6 +7,7 @@ const withDefaults = (input: Partial<WorkflowInput>): WorkflowInput => {
     negativePrompt:
       input.negativePrompt ||
       "((text)), ((watermark)), ((cappedlimb:1.5)), breasts, censorship, clothed, mosaic, lowres, bad anatomy, poorly drawn, watermark, signature, extra limbs, text, embedding:ng_deepnegative_v1_75t, text, bubble speach",
+    inputImage: input.inputImage || [],
     width: input.width || 1024,
     height: input.height || 1024,
     steps: input.steps || 30,

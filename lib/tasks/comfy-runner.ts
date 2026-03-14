@@ -61,6 +61,7 @@ export const executeQueuedComfyTask = async (
       input: {
         positivePrompt: task.payload.prompt,
         negativePrompt: task.payload.negativePrompt,
+        inputImage: Array.isArray(task.payload.inputImage) ? task.payload.inputImage : [],
         width: task.payload.width,
         height: task.payload.height,
         steps: task.payload.steps,
@@ -144,3 +145,4 @@ export const ensureComfyQueueListeners = () => {
 
   globalThis.__comfyBridgeComfyQueueListenersReady = true;
 };
+

@@ -1,10 +1,11 @@
-export const workflowNames = ["base", "illustration"] as const;
+export const workflowNames = ["base", "illustration", "edit"] as const;
 
 export type WorkflowName = (typeof workflowNames)[number];
 
 export type WorkflowInput = {
   positivePrompt: string;
   negativePrompt: string;
+  inputImage: string[];
   width: number;
   height: number;
   steps: number;

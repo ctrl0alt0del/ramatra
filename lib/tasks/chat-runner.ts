@@ -589,7 +589,10 @@ const parseSseEvents = async (
       if (line.startsWith("event:")) {
         eventType = line.slice("event:".length).trim();
       } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice("data:".length).trim());
+        const dataValue = line.slice("data:".length);
+        dataLines.push(
+          dataValue.startsWith(" ") ? dataValue.slice(1) : dataValue,
+        );
       }
     }
 
@@ -613,11 +616,16 @@ const parseSseEvents = async (
     buffer += decoder.decode(value, { stream: true });
 
     while (true) {
-      const separatorIndex = buffer.indexOf("\n\n");
-      if (separatorIndex === -1) break;
+      const separatorMatch = /\r?\n\r?\n/.exec(buffer);
+      if (!separatorMatch || separatorMatch.index === undefined) {
+        break;
+      }
+
+      const separatorIndex = separatorMatch.index;
+      const separatorLength = separatorMatch[0].length;
 
       const rawEventBlock = buffer.slice(0, separatorIndex);
-      buffer = buffer.slice(separatorIndex + 2);
+      buffer = buffer.slice(separatorIndex + separatorLength);
       processEventBlock(rawEventBlock);
     }
   }

@@ -228,6 +228,7 @@ Current workflow support includes:
 
 - `base`
 - `illustration`
+- `edit`
 
 The app persists completed generations under:
 
@@ -391,3 +392,4 @@ If an external MCP wrapper exits immediately:
   "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run mcp:web-search\" \"pnpm run mcp:civitai\" \"pnpm run dev\""
 }
 ```
+

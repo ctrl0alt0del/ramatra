@@ -31,10 +31,14 @@ const STATIC_LORA_SUBFOLDERS = [
   "illustr_style",
   "chroma",
   "illustration",
+  "qwen",
 ] as const;
 
 const normalizeLoraName = (value: string) =>
-  value.trim().replace(/[\\/]+/g, path.sep).toLowerCase();
+  value
+    .trim()
+    .replace(/[\\/]+/g, path.sep)
+    .toLowerCase();
 
 const flattenTagFrequency = (value: unknown) => {
   if (!value || typeof value !== "object") {
@@ -270,10 +274,7 @@ const getClosestLoraMatches = (
       };
     })
     .filter((candidate) => candidate.score > 0)
-    .sort(
-      (a, b) =>
-        b.score - a.score || a.name.localeCompare(b.name),
-    );
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 
   return scored.slice(0, 5);
 };

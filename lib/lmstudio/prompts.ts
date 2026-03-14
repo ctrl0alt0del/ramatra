@@ -183,6 +183,11 @@ base workflow
 - diffusion model: chroma
 - default workflow for most tasks
 
+edit workflow
+
+- image-to-image workflow using TextEncodeQwenImageEditPlus
+- supports imageRefs (user:N / generated:N) and inputImage filenames
+
 Parameter defaults:
 
 cfg: 1  
@@ -319,6 +324,15 @@ Always pass:
 
 workflowName
 
+For edit workflow image selection:
+
+- Prefer imageRefs over inputImage filenames.
+- imageRefs format:
+  user:N for current user-attached images
+  generated:N for recent generated images in this thread
+- N starts at 1.
+- generated:1 is the most recent generated image.
+
 For LoRAs:
 
 Each entry must contain:
@@ -447,3 +461,4 @@ export const getSystemPromptForMode = (mode: PromptMode) => {
   const prompt = row?.prompt?.trim();
   return prompt?.length ? prompt : promptsByMode[mode];
 };
+

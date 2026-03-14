@@ -1,4 +1,7 @@
-import { getChatTaskViewByStreamTaskId } from "@/lib/tasks/chat-task-view";
+import {
+  getChatTaskView,
+  resolveChatTaskGroupIdByStreamTaskId,
+} from "@/lib/tasks/chat-task-view";
 import { subscribeToTaskEvent } from "@/lib/tasks/event-bus";
 import { processTaskQueues } from "@/lib/tasks/processor";
 
@@ -16,7 +19,19 @@ const formatSseMessage = (event: string, data: unknown) => {
 
 export async function GET(_req: Request, context: RouteContext) {
   const { taskId } = await context.params;
-  const initialView = getChatTaskViewByStreamTaskId(taskId);
+  const ownerTaskId = resolveChatTaskGroupIdByStreamTaskId(taskId) ?? taskId;
+  const getView = () => {
+    const view = getChatTaskView(ownerTaskId);
+    if (!view) {
+      return null;
+    }
+
+    return {
+      ...view,
+      taskId,
+    };
+  };
+  const initialView = getView();
 
   if (!initialView) {
     return Response.json(
@@ -38,7 +53,7 @@ export async function GET(_req: Request, context: RouteContext) {
       controller.enqueue(formatSseMessage("task", initialView));
 
       const emitCurrentView = () => {
-        const view = getChatTaskViewByStreamTaskId(taskId);
+        const view = getView();
         if (!view) return;
 
         controller.enqueue(formatSseMessage("task", view));
@@ -50,12 +65,36 @@ export async function GET(_req: Request, context: RouteContext) {
       };
 
       const unsubscribers = [
-        subscribeToTaskEvent("task:queued", () => emitCurrentView()),
-        subscribeToTaskEvent("task:started", () => emitCurrentView()),
-        subscribeToTaskEvent("task:updated", () => emitCurrentView()),
-        subscribeToTaskEvent("task:completed", () => emitCurrentView()),
-        subscribeToTaskEvent("task:failed", () => emitCurrentView()),
-        subscribeToTaskEvent("task:cancelled", () => emitCurrentView()),
+        subscribeToTaskEvent("task:queued", ({ task }) => {
+          if (task.id === ownerTaskId) {
+            emitCurrentView();
+          }
+        }),
+        subscribeToTaskEvent("task:started", ({ task }) => {
+          if (task.id === ownerTaskId) {
+            emitCurrentView();
+          }
+        }),
+        subscribeToTaskEvent("task:updated", ({ task }) => {
+          if (task.id === ownerTaskId) {
+            emitCurrentView();
+          }
+        }),
+        subscribeToTaskEvent("task:completed", ({ task }) => {
+          if (task.id === ownerTaskId) {
+            emitCurrentView();
+          }
+        }),
+        subscribeToTaskEvent("task:failed", ({ task }) => {
+          if (task.id === ownerTaskId) {
+            emitCurrentView();
+          }
+        }),
+        subscribeToTaskEvent("task:cancelled", ({ task }) => {
+          if (task.id === ownerTaskId) {
+            emitCurrentView();
+          }
+        }),
       ];
 
       const keepAliveId = setInterval(() => {

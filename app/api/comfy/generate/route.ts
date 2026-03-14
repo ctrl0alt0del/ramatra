@@ -13,6 +13,7 @@ const loraSchema = z.object({
 const workflowInputSchema = z.object({
   positivePrompt: z.string(),
   negativePrompt: z.string(),
+  inputImage: z.array(z.string()).default([]),
   width: z.number(),
   height: z.number(),
   steps: z.number(),

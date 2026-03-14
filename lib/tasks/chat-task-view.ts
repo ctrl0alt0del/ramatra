@@ -56,7 +56,7 @@ export const getChatTaskView = (taskId: string): ChatTaskView | null => {
   };
 };
 
-const findChatTaskGroupIdByStreamTaskId = (streamTaskId: string) => {
+export const resolveChatTaskGroupIdByStreamTaskId = (streamTaskId: string) => {
   const all = listAllTasks()
     .filter((task) => task.type === "chat")
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
@@ -73,7 +73,7 @@ const findChatTaskGroupIdByStreamTaskId = (streamTaskId: string) => {
 export const getChatTaskViewByStreamTaskId = (
   streamTaskId: string,
 ): ChatTaskView | null => {
-  const ownerGroupId = findChatTaskGroupIdByStreamTaskId(streamTaskId);
+  const ownerGroupId = resolveChatTaskGroupIdByStreamTaskId(streamTaskId);
   if (!ownerGroupId) {
     const direct = getChatTaskView(streamTaskId);
     if (!direct) {
