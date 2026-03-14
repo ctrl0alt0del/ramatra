@@ -14,7 +14,7 @@ const imagePartSchema = z.object({
   name: z.string().optional(),
 });
 
-import { createThread, listThreads } from "@/lib/lmstudio/threads";
+import { createThread, deleteAllThreads, listThreads } from "@/lib/lmstudio/threads";
 
 const messageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
@@ -56,4 +56,9 @@ export async function POST(req: Request) {
     })),
   });
   return NextResponse.json({ thread }, { status: 201 });
+}
+
+export async function DELETE() {
+  const result = deleteAllThreads();
+  return NextResponse.json(result);
 }

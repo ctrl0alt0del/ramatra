@@ -20,6 +20,7 @@ export function PromptSettingsButton() {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingAllChats, setDeletingAllChats] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [prompts, setPrompts] = useState<Record<PromptMode, string> | null>(null);
@@ -185,6 +186,41 @@ export function PromptSettingsButton() {
     textarea.setSelectionRange(0, textarea.value.length);
   };
 
+  const deleteAllChats = async () => {
+    if (deletingAllChats) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Delete all chats? This cannot be undone.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingAllChats(true);
+      setError(null);
+      setSavedAt(null);
+
+      const response = await fetch("/api/threads", {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete all chats.");
+      }
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to delete all chats.",
+      );
+    } finally {
+      setDeletingAllChats(false);
+    }
+  };
+
   const closeExpandedMode = () => {
     expandedTextareaRef.current?.blur();
     setExpandedMode(null);
@@ -241,6 +277,31 @@ export function PromptSettingsButton() {
                 </div>
               ) : (
                 <div className="space-y-4">
+                  <div className="flex flex-col gap-3 rounded-[20px] border border-[#efc7ce] bg-[#fff5f7] p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[#7b2334]">
+                        Danger Zone
+                      </h3>
+                      <p className="mt-0.5 text-xs text-[#a74b5d]">
+                        Permanently remove all chat threads and messages.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void deleteAllChats()}
+                      disabled={deletingAllChats || saving || loading}
+                      className="inline-flex items-center justify-center rounded-full border border-[#efc7ce] bg-[#fff5f7] px-4 py-2 text-sm font-semibold text-[#b34558] transition hover:bg-[#ffecef] disabled:cursor-not-allowed disabled:opacity-65"
+                    >
+                      {deletingAllChats ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Deleting...
+                        </>
+                      ) : (
+                        "Delete All Chats"
+                      )}
+                    </button>
+                  </div>
                   {promptModes.map((mode) => (
                     <div
                       key={mode}

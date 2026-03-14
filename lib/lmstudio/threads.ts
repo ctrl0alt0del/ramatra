@@ -524,3 +524,22 @@ export const deleteThread = (threadId: string) => {
 
   return false;
 };
+
+export const deleteAllThreads = () => {
+  const existingThreads = listThreads();
+  if (!existingThreads.length) {
+    return { deletedCount: 0 };
+  }
+
+  db.prepare(`DELETE FROM threads`).run();
+
+  for (const thread of existingThreads) {
+    publishThreadChanged({
+      change: "deleted",
+      threadId: thread.id,
+      thread,
+    });
+  }
+
+  return { deletedCount: existingThreads.length };
+};
