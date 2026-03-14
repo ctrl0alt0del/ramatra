@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { Thread, ThreadList } from "@assistant-ui/react-ui";
@@ -122,7 +122,7 @@ function ChatWorkspace() {
 
   return (
     <div className="aui-root relative flex h-[100dvh] w-full overflow-hidden sm:px-4 sm:py-4 md:px-6 md:py-6">
-      <div className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden bg-white/75 shadow-[0_28px_80px_rgba(73,56,145,0.22)] backdrop-blur-2xl sm:rounded-[28px] sm:border sm:border-white/60 md:rounded-[34px]">
+      <div className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden bg-white/82 shadow-[0_8px_24px_rgba(73,56,145,0.10)] sm:rounded-[28px] sm:border sm:border-white/60 md:rounded-[34px]">
         <aside
           className={`hidden min-h-0 shrink-0 border-r border-[hsl(var(--aui-border))]/70 bg-white/45 transition-[width] duration-300 md:flex md:flex-col ${
             desktopSidebarOpen ? "md:w-[22rem] lg:w-[24rem]" : "md:w-[5.25rem]"
@@ -249,7 +249,7 @@ function ChatWorkspace() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-hidden px-2 pb-2 pt-2 sm:px-3 sm:pb-3 lg:px-4 lg:pb-4">
-            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[26px] border border-white/65 bg-[linear-gradient(180deg,rgba(255,255,255,0.6)_0%,rgba(250,247,255,0.9)_100%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_18px_45px_rgba(73,56,145,0.08)]">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[26px] border border-white/65 bg-[linear-gradient(180deg,rgba(255,255,255,0.75)_0%,rgba(250,247,255,0.95)_100%)] shadow-[0_6px_18px_rgba(73,56,145,0.06)]">
               <Thread
                 welcome={{
                   message:
@@ -272,6 +272,7 @@ function ChatWorkspace() {
 
 function useSystemMonitor() {
   const [data, setData] = useState<MonitorState | null>(null);
+  const lastSignatureRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -290,6 +291,17 @@ function useSystemMonitor() {
         }
 
         const nextData = JSON.parse(event.data) as MonitorState;
+        const signature = JSON.stringify({
+          services: nextData.services,
+          gpu: nextData.gpu,
+          queue: nextData.queue,
+        });
+
+        if (signature === lastSignatureRef.current) {
+          return;
+        }
+
+        lastSignatureRef.current = signature;
         setData(nextData);
       });
 

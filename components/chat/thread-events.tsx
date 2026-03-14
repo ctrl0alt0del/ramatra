@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -30,6 +31,20 @@ const ThreadEventsContext = createContext<ThreadEventsContextValue>({
   compactionById: {},
 });
 
+const getThreadSummarySignature = (threads: ThreadApiSummary[]) =>
+  JSON.stringify(
+    threads.map((thread) => [
+      thread.id,
+      thread.title,
+      thread.titleGenerated,
+      thread.status,
+      thread.summaryCallCountTotal,
+      thread.summaryCallsInCurrentRequest,
+      thread.contextWindowUsedTokens,
+      thread.contextWindowTotalTokens,
+    ]),
+  );
+
 export function ThreadEventsProvider({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
@@ -37,6 +52,7 @@ export function ThreadEventsProvider({
     byId: {},
     compactionById: {},
   });
+  const lastSignatureRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +71,13 @@ export function ThreadEventsProvider({
         }
 
         const payload = JSON.parse(event.data) as ThreadsEventPayload;
+        const signature = getThreadSummarySignature(payload.threads);
+        if (signature === lastSignatureRef.current) {
+          return;
+        }
+
+        lastSignatureRef.current = signature;
+
         setState((previous) => {
           const nextById: Record<string, ThreadApiSummary> = {};
           const nextCompactionById = { ...previous.compactionById };
