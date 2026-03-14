@@ -7,13 +7,14 @@ import {
   unloadAllLmStudioModels,
 } from "@/lib/lmstudio/models";
 import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
-import { defaultPromptMode } from "@/lib/lmstudio/prompt-modes";
+import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { getActiveTask, getSchedulerState, setSchedulerGpuMode } from "@/lib/tasks/scheduler";
 import {
   getSchedulerLastError,
   resetTaskStore,
   setSchedulerLastError,
 } from "@/lib/tasks/store";
+import type { TaskGroup } from "@/lib/tasks/types";
 
 declare global {
   var __comfyBridgeGpuTransitionPromise: Promise<void> | null | undefined;
@@ -126,6 +127,43 @@ export const switchToChatGpuMode = async () => {
     );
     throw error;
   }
+};
+
+const resolveChatTaskContextLength = (task: Extract<TaskGroup, { type: "chat" }>) => {
+  if (
+    typeof task.payload.contextLength === "number" &&
+    Number.isFinite(task.payload.contextLength) &&
+    task.payload.contextLength > 0
+  ) {
+    return Math.floor(task.payload.contextLength);
+  }
+
+  if ("promptMode" in task.payload && isPromptMode(task.payload.promptMode)) {
+    const base = getConfiguredContextLengthForMode(task.payload.promptMode, process.env);
+    return task.payload.kind === "collapse_context" ? base * 2 : base;
+  }
+
+  return getConfiguredContextLengthForMode(defaultPromptMode, process.env);
+};
+
+export const prepareChatGpuForTaskGroup = async (
+  task: Extract<TaskGroup, { type: "chat" }>,
+) => {
+  const contextLength = resolveChatTaskContextLength(task);
+  const modelKey = getChatModelKey();
+  await ensureLmStudioModelLoaded({
+    modelKey,
+    contextLength,
+  });
+  if (getSchedulerState().gpuMode !== "chat") {
+    setSchedulerGpuMode("chat");
+  }
+  logGpuModelDebug("prepare-chat-task-group", {
+    taskGroupId: task.id,
+    kind: task.payload.kind,
+    contextLength,
+    modelKey,
+  });
 };
 
 export const forceResumeChatGpuMode = async () => {

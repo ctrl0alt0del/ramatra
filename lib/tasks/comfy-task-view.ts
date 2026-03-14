@@ -47,10 +47,12 @@ export const getComfyTaskView = (taskId: string): ComfyTaskView | null => {
   }
 
   if (task.status === "queued" || task.status === "running") {
+    const queuedStatus: "queued" | "running" =
+      task.result?.status === "running" ? "running" : "queued";
     return {
       taskId,
       jobId,
-      status: task.result?.status ?? task.status,
+      status: queuedStatus,
       progress: task.result?.progress ?? {
         value: null,
         max: null,

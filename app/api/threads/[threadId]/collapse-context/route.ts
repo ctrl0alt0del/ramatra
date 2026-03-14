@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
 import { isPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { getThread } from "@/lib/lmstudio/threads";
 import { processTaskQueues } from "@/lib/tasks/processor";
@@ -67,6 +68,7 @@ export async function POST(req: Request, context: RouteContext) {
       kind: "collapse_context",
       threadId,
       promptMode: json.promptMode,
+      contextLength: getConfiguredContextLengthForMode(json.promptMode, process.env) * 2,
     });
 
     void processTaskQueues();
@@ -77,6 +79,12 @@ export async function POST(req: Request, context: RouteContext) {
         {
           error: completedTask.error ?? "Failed to collapse thread context.",
         },
+        { status: 500 },
+      );
+    }
+    if (completedTask.type !== "chat") {
+      return NextResponse.json(
+        { error: "Unexpected task type for context collapse." },
         { status: 500 },
       );
     }

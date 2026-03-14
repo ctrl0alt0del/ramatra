@@ -1,6 +1,6 @@
 import {
   type SchedulerSnapshot,
-  type Task,
+  type TaskGroup,
   type TaskEventMap,
 } from "@/lib/tasks/types";
 
@@ -67,27 +67,27 @@ export const publishTaskEvent = <TEventName extends TaskEventName>(
   }
 };
 
-export const emitQueuedTask = (task: Task) => {
+export const emitQueuedTask = (task: TaskGroup) => {
   publishTaskEvent("task:queued", { task });
 };
 
-export const emitStartedTask = (task: Task) => {
+export const emitStartedTask = (task: TaskGroup) => {
   publishTaskEvent("task:started", { task });
 };
 
-export const emitUpdatedTask = (task: Task) => {
+export const emitUpdatedTask = (task: TaskGroup) => {
   publishTaskEvent("task:updated", { task });
 };
 
-export const emitCompletedTask = (task: Task) => {
+export const emitCompletedTask = (task: TaskGroup) => {
   publishTaskEvent("task:completed", { task });
 };
 
-export const emitFailedTask = (task: Task) => {
+export const emitFailedTask = (task: TaskGroup) => {
   publishTaskEvent("task:failed", { task });
 };
 
-export const emitCancelledTask = (task: Task) => {
+export const emitCancelledTask = (task: TaskGroup) => {
   publishTaskEvent("task:cancelled", { task });
 };
 

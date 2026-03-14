@@ -8,6 +8,7 @@ import {
   emitStartedTask,
   emitUpdatedTask,
 } from "@/lib/tasks/event-bus";
+import { clearPendingComfyStreamSession } from "@/lib/tasks/comfy-stream-session";
 import {
   attachComfyJobToTask,
   createTask,
@@ -19,9 +20,19 @@ import {
   listQueuedTasks,
   setActiveTaskId,
   setGpuMode,
+  updateTaskPayload,
   updateTaskStatus,
 } from "@/lib/tasks/store";
-import { type Task, type TaskPayloadMap } from "@/lib/tasks/types";
+import {
+  type Task,
+  type TaskExecutionStatus,
+  type TaskGroup,
+  type TaskGroupPayloadMap,
+} from "@/lib/tasks/types";
+
+const logTaskOrchestration = (phase: string, payload: Record<string, unknown>) => {
+  console.info(`[task-orch] ${phase}`, payload);
+};
 
 const emitSchedulerSnapshot = () => {
   const snapshot = getSchedulerSnapshot();
@@ -29,18 +40,240 @@ const emitSchedulerSnapshot = () => {
   return snapshot;
 };
 
-export const enqueueChatTask = (payload: TaskPayloadMap["chat"]) => {
-  const task = createTask("chat", payload);
+const withDefaultTasks = <TType extends keyof TaskGroupPayloadMap>(
+  type: TType,
+  payload: TaskGroupPayloadMap[TType],
+): TaskGroupPayloadMap[TType] => {
+  if (type === "chat") {
+    const chatPayload = payload as TaskGroupPayloadMap["chat"];
+    if (chatPayload.tasks?.length) {
+      return payload;
+    }
+
+    const tasks: Task[] =
+      chatPayload.kind === "conversation"
+        ? [
+            {
+              id: crypto.randomUUID(),
+              kind: "chat.generate",
+              status: "pending",
+            },
+            {
+              id: crypto.randomUUID(),
+              kind: "chat.stream",
+              status: "pending",
+            },
+          ]
+        : chatPayload.kind === "generate_title"
+          ? [
+              {
+                id: crypto.randomUUID(),
+                kind: "chat.title",
+                status: "pending",
+              },
+            ]
+          : [
+              {
+                id: crypto.randomUUID(),
+                kind: "chat.compact",
+                status: "pending",
+              },
+            ];
+
+    return {
+      ...chatPayload,
+      tasks,
+    } as TaskGroupPayloadMap[TType];
+  }
+
+  const comfyPayload = payload as TaskGroupPayloadMap["comfy"];
+  if (comfyPayload.tasks?.length) {
+    return payload;
+  }
+
+  return {
+    ...comfyPayload,
+    tasks: [
+      {
+        id: crypto.randomUUID(),
+        kind: "image.generate",
+        status: "pending",
+      },
+      {
+        id: crypto.randomUUID(),
+        kind: "image.stream",
+        status: "pending",
+      },
+    ],
+  } as TaskGroupPayloadMap[TType];
+};
+
+export const enqueueChatTask = (payload: TaskGroupPayloadMap["chat"]) => {
+  const task = createTask("chat", withDefaultTasks("chat", payload));
   emitQueuedTask(task);
   emitSchedulerSnapshot();
   return task;
 };
 
-export const enqueueComfyTask = (payload: TaskPayloadMap["comfy"]) => {
-  const task = createTask("comfy", payload);
+export const enqueueComfyTask = (payload: TaskGroupPayloadMap["comfy"]) => {
+  const task = createTask("comfy", withDefaultTasks("comfy", payload));
   emitQueuedTask(task);
   emitSchedulerSnapshot();
   return task;
+};
+
+export const transferTaskByKind = ({
+  fromTaskId,
+  toTaskId,
+  taskKind,
+  nextStatus,
+}: {
+  fromTaskId: string;
+  toTaskId: string;
+  taskKind: Task["kind"];
+  nextStatus?: TaskExecutionStatus;
+}) => {
+  const fromTask = getTask(fromTaskId);
+  const toTask = getTask(toTaskId);
+  if (
+    !fromTask ||
+    !toTask ||
+    fromTask.type !== "chat" ||
+    toTask.type !== "chat"
+  ) {
+    return null;
+  }
+
+  const fromTasks = fromTask.payload.tasks ?? [];
+  const movingTask = fromTasks.find((item) => item.kind === taskKind);
+  if (!movingTask) {
+    return null;
+  }
+  const normalizedMovingTask =
+    nextStatus && movingTask.status !== nextStatus
+      ? { ...movingTask, status: nextStatus }
+      : movingTask;
+
+  const nextFrom = updateTaskPayload(fromTaskId, {
+    ...fromTask.payload,
+    tasks: fromTasks.filter((item) => item.kind !== taskKind),
+  });
+  const nextTo = updateTaskPayload(toTaskId, {
+    ...toTask.payload,
+    tasks: [...(toTask.payload.tasks ?? []), normalizedMovingTask],
+  });
+
+  if (nextFrom) {
+    emitUpdatedTask(nextFrom);
+  }
+  if (nextTo) {
+    emitUpdatedTask(nextTo);
+  }
+  if (nextFrom && nextTo) {
+    logTaskOrchestration("task:transfer", {
+      fromTaskGroupId: fromTaskId,
+      toTaskGroupId: toTaskId,
+      taskKind,
+      taskId: normalizedMovingTask.id,
+      nextStatus: normalizedMovingTask.status,
+    });
+  }
+  if (nextFrom || nextTo) {
+    emitSchedulerSnapshot();
+  }
+
+  return nextFrom && nextTo
+    ? { fromTask: nextFrom, toTask: nextTo }
+    : null;
+};
+
+export const setGroupTaskStatusByKind = ({
+  taskId,
+  kind,
+  status,
+}: {
+  taskId: string;
+  kind: Task["kind"];
+  status: TaskExecutionStatus;
+}) => {
+  const task = getTask(taskId);
+  if (!task) {
+    return null;
+  }
+
+  const groupTasks = task.payload.tasks ?? [];
+  const index = groupTasks.findIndex((item) => item.kind === kind);
+  if (index === -1) {
+    return task;
+  }
+
+  if (groupTasks[index]?.status === status) {
+    return task;
+  }
+  const previousStatus = groupTasks[index]?.status ?? null;
+  const innerTaskId = groupTasks[index]?.id ?? null;
+
+  const nextTasks = groupTasks.map((item, itemIndex) =>
+    itemIndex === index ? { ...item, status } : item,
+  );
+  const updated = updateTaskPayload(taskId, {
+    ...task.payload,
+    tasks: nextTasks,
+  });
+  if (!updated) {
+    return null;
+  }
+
+  emitUpdatedTask(updated);
+  logTaskOrchestration("task:status", {
+    taskGroupId: taskId,
+    taskId: innerTaskId,
+    kind,
+    from: previousStatus,
+    to: status,
+  });
+  emitSchedulerSnapshot();
+  return updated;
+};
+
+export const getNextRunnableGroupTask = (taskId: string) => {
+  const task = getTask(taskId);
+  if (!task) {
+    return null;
+  }
+
+  const running = (task.payload.tasks ?? []).find(
+    (groupTask) => groupTask.status === "running",
+  );
+  if (running) {
+    return { task, groupTask: running };
+  }
+
+  const pending = (task.payload.tasks ?? []).find(
+    (groupTask) => groupTask.status === "pending",
+  );
+  if (!pending) {
+    return null;
+  }
+
+  const updated = setGroupTaskStatusByKind({
+    taskId,
+    kind: pending.kind,
+    status: "running",
+  });
+  if (!updated) {
+    return null;
+  }
+
+  const startedTask = (updated.payload.tasks ?? []).find(
+    (groupTask) =>
+      groupTask.kind === pending.kind && groupTask.status === "running",
+  );
+  if (!startedTask) {
+    return null;
+  }
+
+  return { task: updated, groupTask: startedTask };
 };
 
 export const bindComfyJobToTask = (taskId: string, jobId: string) => {
@@ -50,7 +283,7 @@ export const bindComfyJobToTask = (taskId: string, jobId: string) => {
     result: {
       taskId,
       jobId,
-      status: "queued",
+      status: "running",
       progress: {
         value: null,
         max: null,
@@ -112,7 +345,7 @@ export const markTaskStarted = (taskId: string) => {
 export const updateRunningTask = (
   taskId: string,
   input: {
-    result?: Task["result"];
+    result?: TaskGroup["result"];
     error?: string | null;
   },
 ) => {
@@ -132,7 +365,7 @@ const finishTask = (
   taskId: string,
   status: "completed" | "failed" | "cancelled",
   input?: {
-    result?: Task["result"];
+    result?: TaskGroup["result"];
     error?: string | null;
   },
 ) => {
@@ -169,9 +402,10 @@ const finishTask = (
 
 export const markTaskCompleted = (
   taskId: string,
-  result?: Task["result"],
+  result?: TaskGroup["result"],
 ) => {
   const task = finishTask(taskId, "completed", { result, error: null });
+  clearPendingComfyStreamSession(taskId);
   const jobId =
     task?.type === "comfy" ? task.result?.jobId ?? null : null;
   if (jobId) {
@@ -183,6 +417,7 @@ export const markTaskCompleted = (
 export const markTaskFailed = (taskId: string, error: string) => {
   const existing = getTask(taskId);
   const task = finishTask(taskId, "failed", { error });
+  clearPendingComfyStreamSession(taskId);
   const jobId =
     existing?.type === "comfy" ? existing.result?.jobId ?? null : null;
   if (jobId) {
@@ -197,6 +432,7 @@ export const cancelTask = (taskId: string, error?: string) => {
   const task = finishTask(taskId, "cancelled", {
     error: error ?? null,
   });
+  clearPendingComfyStreamSession(taskId);
   const jobId =
     existing?.type === "comfy" ? existing.result?.jobId ?? null : null;
   if (jobId) {
@@ -291,17 +527,34 @@ export const updateComfyTaskForJob = (
       },
   };
 
-  if (input.status === "completed") {
-    return markTaskCompleted(taskId, nextResult);
-  }
-
-  if (input.status === "failed") {
-    return markTaskFailed(taskId, input.error ?? "Comfy task failed.");
+  if (input.status === "running") {
+    setGroupTaskStatusByKind({
+      taskId,
+      kind: "image.stream",
+      status: "running",
+    });
+  } else if (input.status === "completed") {
+    setGroupTaskStatusByKind({
+      taskId,
+      kind: "image.stream",
+      status: "completed",
+    });
+    clearPendingComfyStreamSession(taskId);
+  } else if (input.status === "failed") {
+    setGroupTaskStatusByKind({
+      taskId,
+      kind: "image.stream",
+      status: "failed",
+    });
+    clearPendingComfyStreamSession(taskId);
   }
 
   const task = updateTaskStatus(taskId, {
     result: nextResult,
-    error: input.error ?? undefined,
+    error:
+      input.status === "failed"
+        ? (input.error ?? "Comfy task failed.")
+        : (input.error ?? undefined),
   });
 
   if (!task) return null;

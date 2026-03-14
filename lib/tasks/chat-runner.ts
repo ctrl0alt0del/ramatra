@@ -36,9 +36,12 @@ import {
   hasPendingTitleGenerationTask,
   markTaskCompleted,
   markTaskFailed,
-  markTaskStarted,
+  setGroupTaskStatusByKind,
+  transferTaskByKind,
   updateRunningTask,
 } from "@/lib/tasks/scheduler";
+import { getTask } from "@/lib/tasks/store";
+import type { Task } from "@/lib/tasks/types";
 
 type LmStudioOutput =
   | {
@@ -71,6 +74,28 @@ type ChatResponse = {
 const CONTEXT_COMPACT_THRESHOLD_RATIO = 0.9;
 const MAX_OVERFLOW_CONTINUATIONS_PER_TASK = 8;
 const MAX_CONTINUATION_PARTIAL_CHARS = 500;
+const DEFAULT_ESTIMATED_IMAGE_TOKENS_PER_ATTACHMENT = 1024;
+
+type PendingChatStream = {
+  stream: ReadableStream<Uint8Array>;
+  promptMode: PromptMode;
+  requestedContextLength: number;
+  modelTarget: string;
+  summaryCallsInCurrentRequest: number;
+};
+
+declare global {
+  var __comfyBridgePendingChatStreams:
+    | Map<string, PendingChatStream>
+    | undefined;
+}
+
+const getPendingChatStreams = () => {
+  if (!globalThis.__comfyBridgePendingChatStreams) {
+    globalThis.__comfyBridgePendingChatStreams = new Map();
+  }
+  return globalThis.__comfyBridgePendingChatStreams;
+};
 
 type ChatStreamEvent =
   | {
@@ -141,6 +166,22 @@ const logChatModelDebug = (phase: string, payload: Record<string, unknown>) => {
   }
 
   console.info(`[chat-runner] ${phase}`, payload);
+};
+
+const formatUnknownError = (error: unknown) => {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack ?? null,
+    };
+  }
+
+  return {
+    name: "UnknownError",
+    message: String(error),
+    stack: null,
+  };
 };
 
 const getAssistantText = (output: LmStudioOutput[] | undefined) => {
@@ -240,6 +281,28 @@ const getUsedContextTokens = (response: ChatResponse | null) => {
 const estimateMessageTokens = (message: MessagePart[]) => {
   const textLength = getTextFromMessageContent(message).length;
   return Math.ceil(textLength / 3.5);
+};
+
+const getEstimatedImageTokensPerAttachment = () => {
+  const parsed = Number.parseInt(
+    process.env.LM_STUDIO_ESTIMATED_IMAGE_TOKENS_PER_ATTACHMENT ??
+      String(DEFAULT_ESTIMATED_IMAGE_TOKENS_PER_ATTACHMENT),
+    10,
+  );
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_ESTIMATED_IMAGE_TOKENS_PER_ATTACHMENT;
+  }
+
+  return parsed;
+};
+
+const estimateImageTokens = (parts: MessagePart[]) => {
+  const imageCount = parts.filter((part) => part.type === "image").length;
+  if (imageCount <= 0) {
+    return 0;
+  }
+  return imageCount * getEstimatedImageTokensPerAttachment();
 };
 
 const shouldCompactForRatio = ({
@@ -565,27 +628,109 @@ const parseSseEvents = async (
   }
 };
 
-export const executeQueuedChatTask = async (taskId: string) => {
-  const task = markTaskStarted(taskId);
+const isFailedStopText = (value: string | null | undefined) => {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.toLowerCase();
+  return normalized === "failed" || normalized.includes("fail");
+};
+
+const hasTaskByKind = (
+  tasks:
+    | Array<{
+        id: string;
+        kind: string;
+      }>
+    | undefined,
+  kind: string,
+) => {
+  return tasks?.some((item) => item.kind === kind) ?? false;
+};
+
+const finalizeConversationViaStreamTask = ({
+  taskId,
+  text,
+  reasoning,
+  responseId,
+  summaryCallsInCurrentRequest,
+}: {
+  taskId: string;
+  text: string;
+  reasoning: string;
+  responseId: string | null;
+  summaryCallsInCurrentRequest: number;
+}) => {
+  updateRunningTask(taskId, {
+    result: {
+      text,
+      reasoning,
+      responseId,
+      summaryCallsInCurrentRequest,
+    },
+  });
+  setGroupTaskStatusByKind({
+    taskId,
+    kind: "chat.stream",
+    status: "completed",
+  });
+};
+
+export const executeQueuedChatTask = async (
+  taskId: string,
+  taskKind: Task["kind"],
+) => {
+  const task = getTask(taskId);
   if (!task || task.type !== "chat") {
     return;
   }
 
   try {
-    if (task.payload.kind === "generate_title") {
+    const groupTasks = task.payload.tasks ?? [];
+    if (taskKind === "chat.title") {
+      if (task.payload.kind !== "generate_title") {
+        throw new Error("chat.title task requires generate_title payload.");
+      }
       await executeQueuedTitleTask(task.id, task.payload.threadId);
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.title",
+        status: "completed",
+      });
       return;
     }
 
-    if (task.payload.kind === "collapse_context") {
+    if (taskKind === "chat.compact") {
+      if (task.payload.kind !== "collapse_context") {
+        throw new Error("chat.compact task requires collapse_context payload.");
+      }
       await executeQueuedCollapseContextTask(
         task.id,
         task.payload.threadId,
         task.payload.promptMode,
+        task.payload.interruption,
       );
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.compact",
+        status: "completed",
+      });
       return;
     }
 
+    if (taskKind !== "chat.generate" && taskKind !== "chat.stream") {
+      throw new Error(`Unsupported runnable chat task kind: ${taskKind}`);
+    }
+    if (task.payload.kind !== "conversation") {
+      throw new Error("chat.generate task requires conversation payload.");
+    }
+    if (!hasTaskByKind(groupTasks, "chat.generate")) {
+      throw new Error("Missing chat.generate task.");
+    }
+    if (!hasTaskByKind(groupTasks, "chat.stream")) {
+      throw new Error("Missing chat.stream task.");
+    }
     let thread = task.payload.threadId
       ? getThread(task.payload.threadId)
       : null;
@@ -595,6 +740,7 @@ export const executeQueuedChatTask = async (taskId: string) => {
         : defaultPromptMode;
 
     const shouldResetPromptState =
+      taskKind === "chat.generate" &&
       thread !== null &&
       thread.lmstudioResponseId !== null &&
       (thread.lastPromptMode === null || thread.lastPromptMode !== promptMode);
@@ -613,51 +759,59 @@ export const executeQueuedChatTask = async (taskId: string) => {
       }
     }
 
-    const autoSummaryEnabled = process.env.LM_STUDIO_AUTO_SUMMARY === "true";
+    if (taskKind === "chat.generate") {
+      const autoSummaryEnabled = process.env.LM_STUDIO_AUTO_SUMMARY === "true";
 
-    if (
-      autoSummaryEnabled &&
-      thread &&
-      shouldRefreshConversationSummary(thread, promptMode)
-    ) {
-      try {
-        const unsummarizedMessages = thread.messages.slice(
-          thread.summaryMessageCount,
-        );
-        const conversationSummary = await generateConversationSummary({
-          mode: promptMode,
-          modelInstanceId: thread.lmstudioModelInstanceId,
-          previousSummary: thread.conversationSummary,
-          messages: unsummarizedMessages,
-        });
+      if (
+        autoSummaryEnabled &&
+        thread &&
+        shouldRefreshConversationSummary(thread, promptMode)
+      ) {
+        try {
+          const unsummarizedMessages = thread.messages.slice(
+            thread.summaryMessageCount,
+          );
+          const conversationSummary = await generateConversationSummary({
+            mode: promptMode,
+            modelInstanceId: thread.lmstudioModelInstanceId,
+            previousSummary: thread.conversationSummary,
+            messages: unsummarizedMessages,
+          });
 
-        const updatedThread = updateThread(thread.id, {
-          conversationSummary,
-          summaryUpdatedAt: new Date().toISOString(),
-          summaryMessageCount: thread.messageCount,
-          lmstudioResponseId: null,
-        });
+          const updatedThread = updateThread(thread.id, {
+            conversationSummary,
+            summaryUpdatedAt: new Date().toISOString(),
+            summaryMessageCount: thread.messageCount,
+            lmstudioResponseId: null,
+          });
 
-        if (updatedThread) {
-          thread = updatedThread;
+          if (updatedThread) {
+            thread = updatedThread;
+          }
+        } catch (error) {
+          console.error("[chat-runner] summary:failed", {
+            taskId: task.id,
+            threadId: task.payload.threadId ?? null,
+            phase: "refresh",
+            continuationIndex: 0,
+            error,
+          });
         }
-      } catch (error) {
-        console.error("[chat-runner] summary:failed", {
-          taskId: task.id,
-          threadId: task.payload.threadId ?? null,
-          phase: "refresh",
-          continuationIndex: 0,
-          error,
-        });
       }
     }
 
-    const requestedContextLength = getConfiguredContextLengthForMode(
-      promptMode,
-      process.env,
-    );
+    const requestedContextLength =
+      typeof task.payload.contextLength === "number" &&
+      Number.isFinite(task.payload.contextLength) &&
+      task.payload.contextLength > 0
+        ? Math.floor(task.payload.contextLength)
+        : getConfiguredContextLengthForMode(promptMode, process.env);
 
-    let summaryCallsInCurrentRequest = 0;
+    let summaryCallsInCurrentRequest =
+      task.payload.kind === "conversation" &&
+      (task.payload.continuationIndex ?? 0) > 0
+        ? (thread?.summaryCallsInCurrentRequest ?? 0)
+        : 0;
     const setSummaryCallsInCurrentRequest = (value: number) => {
       summaryCallsInCurrentRequest = value;
       if (task.payload.kind === "conversation" && task.payload.threadId) {
@@ -671,79 +825,159 @@ export const executeQueuedChatTask = async (taskId: string) => {
     };
 
     if (
+      taskKind === "chat.generate" &&
       task.payload.threadId &&
       task.payload.kind === "conversation" &&
       thread
     ) {
-      setSummaryCallsInCurrentRequest(0);
-      const estimatedUpcomingTokens = estimateMessageTokens(
-        task.payload.userMessage,
+      const generatedImageLimitForEstimate = getAdaptiveGeneratedImageLimit({
+        contextLength: requestedContextLength,
+        userMessage: task.payload.userMessage,
+      });
+      const generatedImagesForEstimate = getGeneratedImagesForThread(
+        thread.messages,
+        generatedImageLimitForEstimate,
       );
+      if ((task.payload.continuationIndex ?? 0) === 0) {
+        setSummaryCallsInCurrentRequest(0);
+      }
+      const estimatedUpcomingTokens =
+        estimateMessageTokens(task.payload.userMessage) +
+        estimateImageTokens(generatedImagesForEstimate) +
+        estimateImageTokens(task.payload.userMessage);
       const projectedUsedTokens =
         thread.contextWindowUsedTokens === null
           ? null
           : thread.contextWindowUsedTokens + estimatedUpcomingTokens;
-
-      const maybeCompacted = await maybeAutoCompactThreadContext({
-        threadId: task.payload.threadId,
-        taskId: task.id,
-        promptMode,
-        usedTokens: projectedUsedTokens,
-        totalTokens: requestedContextLength,
-        phase: "before",
-        continuationIndex: 0,
-      });
-
-      if (maybeCompacted.thread) {
-        thread = maybeCompacted.thread;
+      if (
+        (task.payload.continuationIndex ?? 0) === 0 &&
+        projectedUsedTokens !== null
+      ) {
+        const updated = updateThread(task.payload.threadId, {
+          contextWindowUsedTokens: projectedUsedTokens,
+          contextWindowTotalTokens: requestedContextLength,
+        });
+        if (updated) {
+          thread = updated;
+        }
       }
-      if (maybeCompacted.collapsed) {
-        setSummaryCallsInCurrentRequest(summaryCallsInCurrentRequest + 1);
+      if (
+        shouldCompactForRatio({
+          usedTokens: projectedUsedTokens,
+          totalTokens: requestedContextLength,
+        })
+      ) {
+        const compactTask = enqueueChatTask({
+          kind: "collapse_context",
+          threadId: task.payload.threadId,
+          promptMode,
+          contextLength: requestedContextLength * 2,
+        });
+        const continuationTask = enqueueChatTask({
+          kind: "conversation",
+          threadId: task.payload.threadId,
+          promptMode,
+          contextLength: requestedContextLength,
+          userMessage: task.payload.userMessage,
+          continuationIndex: task.payload.continuationIndex ?? 0,
+          carryoverText: task.payload.carryoverText,
+          carryoverReasoning: task.payload.carryoverReasoning,
+          tasks: [
+            {
+              id: crypto.randomUUID(),
+              kind: "chat.generate",
+              status: "pending",
+            },
+          ],
+        });
+        if (hasTaskByKind(task.payload.tasks, "chat.stream")) {
+          transferTaskByKind({
+            fromTaskId: task.id,
+            toTaskId: continuationTask.id,
+            taskKind: "chat.stream",
+            nextStatus: "pending",
+          });
+        }
+        markTaskCompleted(task.id, {
+          text: task.payload.carryoverText ?? "",
+          reasoning: task.payload.carryoverReasoning ?? "",
+          responseId: null,
+          summaryCallsInCurrentRequest,
+          delegatedToTaskGroupId: continuationTask.id,
+        });
+        console.info("[chat-runner] summary:triggered", {
+          taskId: compactTask.id,
+          threadId: task.payload.threadId,
+          phase: "before",
+          continuationIndex: task.payload.continuationIndex ?? 0,
+        });
+        return;
       }
     }
 
-    const generatedImageLimit = getAdaptiveGeneratedImageLimit({
-      contextLength: requestedContextLength,
-      userMessage: task.payload.userMessage,
-    });
-    const userInput = buildLmStudioInput({
-      summary: thread?.conversationSummary ?? null,
-      previousResponseId: thread?.lmstudioResponseId ?? null,
-      generatedImages:
-        thread && task.payload.kind === "conversation"
-          ? getGeneratedImagesForThread(thread.messages, generatedImageLimit)
-          : [],
-      userMessage: task.payload.userMessage,
-    });
+    let modelTarget = "";
+    let userInput: string | LmStudioInputItem[] | null = null;
 
-    const exactLoadedModel = await ensureLmStudioModelLoaded({
-      modelKey: getChatModelKey(),
-      contextLength: requestedContextLength,
-    });
-    const modelTarget = await resolvePreferredLmStudioModelTarget({
-      preferredInstanceId:
-        thread?.lmstudioModelInstanceId === exactLoadedModel.instanceId
-          ? thread.lmstudioModelInstanceId
-          : exactLoadedModel.instanceId,
-      modelKey: getChatModelKey(),
-    });
-    const loadedBeforeRequest = await listLoadedLmStudioModels();
+    if (taskKind === "chat.generate") {
+      const generatedImageLimit = getAdaptiveGeneratedImageLimit({
+        contextLength: requestedContextLength,
+        userMessage: task.payload.userMessage,
+      });
+      userInput = buildLmStudioInput({
+        summary: thread?.conversationSummary ?? null,
+        previousResponseId:
+          (task.payload.continuationIndex ?? 0) > 0
+            ? null
+            : (thread?.lmstudioResponseId ?? null),
+        generatedImages:
+          thread
+            ? getGeneratedImagesForThread(thread.messages, generatedImageLimit)
+            : [],
+        userMessage: task.payload.userMessage,
+      });
 
-    logChatModelDebug("request:start", {
-      taskId: task.id,
-      kind: task.payload.kind,
-      threadId: thread?.id ?? null,
-      configuredModelKey: getChatModelKey(),
-      preferredInstanceId: thread?.lmstudioModelInstanceId ?? null,
-      selectedModelTarget: modelTarget,
-      requestedContextLength,
-      generatedImageLimit,
-      previousResponseId: thread?.lmstudioResponseId ?? null,
-      loadedModels: formatLoadedLmStudioModelsForDebug(loadedBeforeRequest),
-    });
+      const exactLoadedModel = await ensureLmStudioModelLoaded({
+        modelKey: getChatModelKey(),
+        contextLength: requestedContextLength,
+      });
+      modelTarget = await resolvePreferredLmStudioModelTarget({
+        preferredInstanceId:
+          thread?.lmstudioModelInstanceId === exactLoadedModel.instanceId
+            ? thread.lmstudioModelInstanceId
+            : exactLoadedModel.instanceId,
+        modelKey: getChatModelKey(),
+      });
+      const loadedBeforeRequest = await listLoadedLmStudioModels();
 
-    let streamedText = "";
-    let streamedReasoning = "";
+      logChatModelDebug("request:start", {
+        taskId: task.id,
+        kind: task.payload.kind,
+        threadId: thread?.id ?? null,
+        configuredModelKey: getChatModelKey(),
+        preferredInstanceId: thread?.lmstudioModelInstanceId ?? null,
+        selectedModelTarget: modelTarget,
+        requestedContextLength,
+        generatedImageLimit,
+        previousResponseId: thread?.lmstudioResponseId ?? null,
+        loadedModels: formatLoadedLmStudioModelsForDebug(loadedBeforeRequest),
+      });
+    } else {
+      const pending = getPendingChatStreams().get(task.id);
+      if (!pending) {
+        throw new Error("chat.stream task has no pending stream.");
+      }
+      modelTarget = pending.modelTarget;
+      summaryCallsInCurrentRequest = pending.summaryCallsInCurrentRequest;
+    }
+
+    let streamedText =
+      task.payload.kind === "conversation"
+        ? (task.payload.carryoverText ?? "")
+        : "";
+    let streamedReasoning =
+      task.payload.kind === "conversation"
+        ? (task.payload.carryoverReasoning ?? "")
+        : "";
     const inRequestCompactionBreakOffsets: number[] = [];
     const publishRunningResult = (responseId: string | null) => {
       const displayText = applyCompactionMarkersToText(
@@ -761,59 +995,92 @@ export const executeQueuedChatTask = async (taskId: string) => {
     };
     publishRunningResult(null);
 
-    const runChatAttempt = async ({
+    const openChatGenerationStream = async ({
       input,
       previousResponseId,
     }: {
       input: string | LmStudioInputItem[];
       previousResponseId?: string;
-    }): Promise<{
-      overflowDetected: boolean;
-      usedTokens: number | null;
-      finalResponse: ChatResponse | null;
-    }> => {
-      const response = await fetch(getLmStudioChatUrl(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(process.env.LM_STUDIO_TOKEN
-            ? { Authorization: `Bearer ${process.env.LM_STUDIO_TOKEN}` }
-            : {}),
-        },
-        body: JSON.stringify({
-          model: modelTarget,
-          context_length: requestedContextLength,
-          input,
-          previous_response_id: previousResponseId,
-          system_prompt: getSystemPromptForMode(promptMode),
-          integrations: buildIntegrations(promptMode),
-          stream: true,
-        }),
-      });
+    }) => {
+      let response: Response;
+      try {
+        response = await fetch(getLmStudioChatUrl(), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(process.env.LM_STUDIO_TOKEN
+              ? { Authorization: `Bearer ${process.env.LM_STUDIO_TOKEN}` }
+              : {}),
+          },
+          body: JSON.stringify({
+            model: modelTarget,
+            context_length: requestedContextLength,
+            input,
+            previous_response_id: previousResponseId,
+            system_prompt: getSystemPromptForMode(promptMode),
+            integrations: buildIntegrations(promptMode),
+            stream: true,
+          }),
+        });
+      } catch (error) {
+        console.error("[chat-runner] generate:request-failed", {
+          taskId: task.id,
+          threadId: task.payload.threadId ?? null,
+          selectedModelTarget: modelTarget,
+          requestedContextLength,
+          error: formatUnknownError(error),
+        });
+        throw error;
+      }
 
       if (!response.ok) {
-        const data = (await response.json()) as ChatResponse;
-        console.error("[chat-runner] rest:error-response", {
+        const bodyText = await response.text();
+        let data: ChatResponse | null = null;
+        try {
+          data = JSON.parse(bodyText) as ChatResponse;
+        } catch {
+          data = null;
+        }
+
+        console.error("[chat-runner] generate:non-2xx-response", {
           taskId: task.id,
           threadId: task.payload.threadId ?? null,
           status: response.status,
+          selectedModelTarget: modelTarget,
+          requestedContextLength,
+          contentType: response.headers.get("content-type"),
           data,
+          rawBody: bodyText,
         });
         throw new Error(
-          data.error?.message ?? "LM Studio chat request failed.",
+          data?.error?.message ||
+            bodyText ||
+            `LM Studio chat request failed: HTTP ${response.status}`,
         );
       }
       if (!response.body) {
         throw new Error("LM Studio did not return a stream body.");
       }
 
+      return response.body;
+    };
+
+    const runChatStreamTask = async ({
+      stream,
+    }: {
+      stream: ReadableStream<Uint8Array>;
+    }): Promise<{
+      overflowDetected: boolean;
+      usedTokens: number | null;
+      finalResponse: ChatResponse | null;
+    }> => {
       let localStreamedText = "";
       let localStreamedReasoning = "";
       let localFinalResponse: ChatResponse | null = null;
       let localStreamErrorMessage: string | null = null;
 
       try {
-        await parseSseEvents(response.body, (event) => {
+        await parseSseEvents(stream, (event) => {
           if (
             event.type === "reasoning.delta" &&
             typeof event.content === "string"
@@ -882,8 +1149,18 @@ export const executeQueuedChatTask = async (taskId: string) => {
         (localStreamedText.trim().length > 0 ||
           localStreamedReasoning.trim().length > 0);
       const signals = getChatStopSignals(resolvedFinalResponse);
+      const usedTokens = getUsedContextTokens(resolvedFinalResponse);
+      const hasAnyAssistantOutput =
+        localStreamedText.trim().length > 0 ||
+        localStreamedReasoning.trim().length > 0 ||
+        (localResponseOutput?.length ?? 0) > 0;
+      const failedStopDetected =
+        hasAnyAssistantOutput &&
+        (isFailedStopText(signals.stopReason) ||
+          isFailedStopText(signals.finishReason));
       const overflowDetected =
         interruptedWithoutEnd ||
+        failedStopDetected ||
         isContextOverflowSignal({
           stopReason: signals.stopReason,
           finishReason: signals.finishReason,
@@ -903,8 +1180,6 @@ export const executeQueuedChatTask = async (taskId: string) => {
 
       publishRunningResult(localResponseId);
 
-      const usedTokens = getUsedContextTokens(resolvedFinalResponse);
-
       return {
         overflowDetected,
         usedTokens,
@@ -912,27 +1187,98 @@ export const executeQueuedChatTask = async (taskId: string) => {
       };
     };
 
-    const initialAttempt = await runChatAttempt({
-      input: userInput,
-      previousResponseId: thread?.lmstudioResponseId ?? undefined,
-    });
+    let initialAttempt:
+      | {
+          overflowDetected: boolean;
+          usedTokens: number | null;
+          finalResponse: ChatResponse | null;
+        }
+      | null = null;
+
+    if (taskKind === "chat.generate") {
+      if (!userInput) {
+        throw new Error("chat.generate task is missing input payload.");
+      }
+      let stream: ReadableStream<Uint8Array>;
+      try {
+        stream = await openChatGenerationStream({
+          input: userInput,
+          previousResponseId:
+            (task.payload.continuationIndex ?? 0) > 0
+              ? undefined
+              : (thread?.lmstudioResponseId ?? undefined),
+        });
+      } catch (error) {
+        console.error("[chat-runner] generate:open-stream-failed", {
+          taskId: task.id,
+          threadId: task.payload.threadId ?? null,
+          selectedModelTarget: modelTarget,
+          requestedContextLength,
+          error: formatUnknownError(error),
+        });
+        throw error;
+      }
+
+      getPendingChatStreams().set(task.id, {
+        stream,
+        promptMode,
+        requestedContextLength,
+        modelTarget,
+        summaryCallsInCurrentRequest,
+      });
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.generate",
+        status: "completed",
+      });
+      return;
+    }
+
+    const pendingStream = getPendingChatStreams().get(task.id);
+    if (!pendingStream) {
+      throw new Error("chat.stream task has no pending stream.");
+    }
+    try {
+      initialAttempt = await runChatStreamTask({
+        stream: pendingStream.stream,
+      });
+    } finally {
+      getPendingChatStreams().delete(task.id);
+    }
 
     let finalResponse: ChatResponse | null = initialAttempt.finalResponse;
     let overflowDetected = initialAttempt.overflowDetected;
-    let currentUsedTokens = initialAttempt.usedTokens;
-    let nearLimitDetected =
-      currentUsedTokens !== null &&
-      currentUsedTokens >= requestedContextLength - 2;
-    let shouldForceContinue = overflowDetected || nearLimitDetected;
+    const nearLimitDetected =
+      initialAttempt.usedTokens !== null &&
+      initialAttempt.usedTokens >= requestedContextLength - 2;
+    const continuationCount = task.payload.continuationIndex ?? 0;
 
-    let continuationCount = 0;
-    while (
-      shouldForceContinue &&
-      continuationCount < MAX_OVERFLOW_CONTINUATIONS_PER_TASK &&
+    if (
+      (overflowDetected || nearLimitDetected) &&
       task.payload.kind === "conversation" &&
       task.payload.threadId
     ) {
-      continuationCount += 1;
+      if (continuationCount >= MAX_OVERFLOW_CONTINUATIONS_PER_TASK) {
+        console.error("[chat-runner] reached continuation safety cap", {
+          taskId: task.id,
+          threadId: task.payload.threadId,
+          continuationCount,
+          usedTokens: getUsedContextTokens(finalResponse),
+          totalTokens: requestedContextLength,
+        });
+      } else {
+      const overflowSignals = getChatStopSignals(finalResponse);
+      console.info("[chat-runner] overflow:detected", {
+        taskId: task.id,
+        threadId: task.payload.threadId,
+        stopReason: overflowSignals.stopReason,
+        finishReason: overflowSignals.finishReason,
+        usedTokens: getUsedContextTokens(finalResponse),
+        totalTokens: requestedContextLength,
+        continuationIndex: continuationCount + 1,
+        nearLimitDetected,
+      });
+      const nextContinuationIndex = continuationCount + 1;
       const breakOffset = streamedText.length;
       if (
         breakOffset > 0 &&
@@ -946,65 +1292,75 @@ export const executeQueuedChatTask = async (taskId: string) => {
           ? streamedText.slice(-MAX_CONTINUATION_PARTIAL_CHARS)
           : streamedText;
 
-      const maybeCompacted = await maybeAutoCompactThreadContext({
+      const compactTask = enqueueChatTask({
+        kind: "collapse_context",
         threadId: task.payload.threadId,
-        taskId: task.id,
         promptMode,
-        usedTokens: requestedContextLength,
-        totalTokens: requestedContextLength,
-        phase: "after",
-        continuationIndex: continuationCount,
+        contextLength: requestedContextLength * 2,
         interruption: {
           interrupted: true,
           interruptedAssistantTailChars,
           interruptedAssistantFullText: streamedText,
           interruptionContext:
-            "The assistant response was interrupted during generation near context limit. Resume from this checkpoint, continue forward only, and avoid repeating already emitted items.",
+            overflowDetected
+              ? "The assistant response was interrupted during generation near context limit. Resume from this checkpoint, continue forward only, and avoid repeating already emitted items."
+              : "The assistant response reached context capacity and requires continuation. Resume from this checkpoint, continue forward only, and avoid repeating already emitted items.",
         },
-        force: true,
       });
+      const textWithCompactionMarkers = [
+        streamedText,
+        formatContextCompactionDuringRequestMarker(nextContinuationIndex),
+      ]
+        .filter(Boolean)
+        .join("");
 
-      if (maybeCompacted.thread) {
-        thread = maybeCompacted.thread;
-      }
-      if (maybeCompacted.collapsed) {
-        setSummaryCallsInCurrentRequest(summaryCallsInCurrentRequest + 1);
-        publishRunningResult(finalResponse?.response_id ?? null);
-      }
-
-      const continuationInput = buildOverflowContinuationInput({
-        summary: thread?.conversationSummary ?? null,
+      const continuationTask = enqueueChatTask({
+        kind: "conversation",
+        threadId: task.payload.threadId,
+        promptMode,
+        contextLength: requestedContextLength,
         userMessage: task.payload.userMessage,
-        partialAssistantText: streamedText,
-        continuationIndex: continuationCount,
+        continuationIndex: nextContinuationIndex,
+        carryoverText: textWithCompactionMarkers,
+        carryoverReasoning: streamedReasoning,
+        tasks: [
+          {
+            id: crypto.randomUUID(),
+            kind: "chat.generate",
+            status: "pending",
+          },
+        ],
       });
-
-      const continuationAttempt = await runChatAttempt({
-        input: continuationInput,
-      });
-
-      if (continuationAttempt.finalResponse) {
-        finalResponse = continuationAttempt.finalResponse;
+      if (hasTaskByKind(task.payload.tasks, "chat.stream")) {
+        transferTaskByKind({
+          fromTaskId: task.id,
+          toTaskId: continuationTask.id,
+          taskKind: "chat.stream",
+          nextStatus: "pending",
+        });
       }
-      overflowDetected = continuationAttempt.overflowDetected;
-      currentUsedTokens = continuationAttempt.usedTokens;
-      nearLimitDetected =
-        currentUsedTokens !== null &&
-        currentUsedTokens >= requestedContextLength - 2;
-      shouldForceContinue = overflowDetected || nearLimitDetected;
-    }
-
-    if (
-      continuationCount >= MAX_OVERFLOW_CONTINUATIONS_PER_TASK &&
-      shouldForceContinue
-    ) {
-      console.error("[chat-runner] reached continuation safety cap", {
-        taskId: task.id,
-        threadId: task.payload.threadId ?? null,
-        continuationCount,
-        usedTokens: currentUsedTokens,
-        totalTokens: requestedContextLength,
+      markTaskCompleted(task.id, {
+        text: textWithCompactionMarkers,
+        reasoning: streamedReasoning,
+        responseId: finalResponse?.response_id ?? null,
+        summaryCallsInCurrentRequest,
+        delegatedToTaskGroupId: continuationTask.id,
       });
+      console.info("[chat-runner] overflow:delegated", {
+        sourceTaskGroupId: task.id,
+        compactTaskGroupId: compactTask.id,
+        continuationTaskGroupId: continuationTask.id,
+        threadId: task.payload.threadId,
+        continuationIndex: nextContinuationIndex,
+      });
+      console.info("[chat-runner] summary:triggered", {
+        taskId: compactTask.id,
+        threadId: task.payload.threadId,
+        phase: "after",
+        continuationIndex: nextContinuationIndex,
+      });
+      return;
+      }
     }
 
     const text = streamedText;
@@ -1053,27 +1409,41 @@ export const executeQueuedChatTask = async (taskId: string) => {
         appendMessages,
       });
 
-      if (task.payload.kind === "conversation") {
-        const maybeCompacted = await maybeAutoCompactThreadContext({
-          threadId: task.payload.threadId,
-          taskId: task.id,
-          promptMode,
+      if (
+        task.payload.kind === "conversation" &&
+        shouldCompactForRatio({
           usedTokens:
             usedContextTokens ?? updatedThread?.contextWindowUsedTokens ?? null,
           totalTokens: requestedContextLength,
+        })
+      ) {
+        const compactTask = enqueueChatTask({
+          kind: "collapse_context",
+          threadId: task.payload.threadId,
+          promptMode,
+          contextLength: requestedContextLength * 2,
+        });
+        console.info("[chat-runner] summary:triggered", {
+          taskId: compactTask.id,
+          threadId: task.payload.threadId,
           phase: "after",
           continuationIndex: continuationCount + 1,
-          force: overflowDetected,
         });
-
-        if (maybeCompacted.collapsed) {
-          setSummaryCallsInCurrentRequest(summaryCallsInCurrentRequest + 1);
-        }
       }
     }
 
-    markTaskCompleted(task.id, {
-      text: applyCompactionMarkersToText(text, inRequestCompactionBreakOffsets),
+    const finalTextWithMarkers = applyCompactionMarkersToText(
+      text,
+      inRequestCompactionBreakOffsets,
+    );
+    setGroupTaskStatusByKind({
+      taskId: task.id,
+      kind: "chat.stream",
+      status: "completed",
+    });
+    finalizeConversationViaStreamTask({
+      taskId: task.id,
+      text: finalTextWithMarkers,
       reasoning,
       responseId: finalResponse?.response_id ?? null,
       summaryCallsInCurrentRequest,
@@ -1086,6 +1456,48 @@ export const executeQueuedChatTask = async (taskId: string) => {
       maybeEnqueueTitleGenerationTask(task.payload.threadId);
     }
   } catch (error) {
+    console.error("[chat-runner] task:failed", {
+      taskId: task.id,
+      taskKind,
+      threadId:
+        task.payload.kind === "conversation" ? (task.payload.threadId ?? null) : null,
+      error: formatUnknownError(error),
+    });
+
+    if (task.payload.kind === "conversation") {
+      if (taskKind === "chat.generate") {
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.generate",
+          status: "failed",
+        });
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.stream",
+          status: "failed",
+        });
+      } else if (taskKind === "chat.stream") {
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.stream",
+          status: "failed",
+        });
+      }
+    }
+    if (task.payload.kind === "collapse_context") {
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.compact",
+        status: "failed",
+      });
+    }
+    if (task.payload.kind === "generate_title") {
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.title",
+        status: "failed",
+      });
+    }
     if (task.payload.kind === "conversation" && task.payload.threadId) {
       updateThread(task.payload.threadId, {
         summaryCallsInCurrentRequest: 0,
@@ -1125,8 +1537,10 @@ const executeQueuedTitleTask = async (taskId: string, threadId: string) => {
   }
 
   if (thread.titleGenerated && !isPlaceholderThreadTitle(thread.title)) {
-    markTaskCompleted(taskId, {
-      title: thread.title,
+    updateRunningTask(taskId, {
+      result: {
+        title: thread.title,
+      },
     });
     return;
   }
@@ -1138,8 +1552,10 @@ const executeQueuedTitleTask = async (taskId: string, threadId: string) => {
     titleGenerated: !isPlaceholderThreadTitle(nextTitle),
   });
 
-  markTaskCompleted(taskId, {
-    title: updatedThread?.title ?? nextTitle,
+  updateRunningTask(taskId, {
+    result: {
+      title: updatedThread?.title ?? nextTitle,
+    },
   });
 };
 
@@ -1147,6 +1563,12 @@ const executeQueuedCollapseContextTask = async (
   taskId: string,
   threadId: string,
   promptMode: string,
+  interruption?: {
+    interrupted: boolean;
+    interruptedAssistantTailChars?: string;
+    interruptedAssistantFullText?: string;
+    interruptionContext?: string;
+  },
 ) => {
   const thread = getThread(threadId);
   if (!thread) {
@@ -1159,10 +1581,23 @@ const executeQueuedCollapseContextTask = async (
   const result = await collapseThreadContext({
     threadId,
     promptMode,
+    interruption,
   });
 
-  markTaskCompleted(taskId, {
-    summaryCollapsed: result.collapsed,
+  if (result.collapsed && interruption?.interrupted) {
+    const latestThread = getThread(threadId);
+    if (latestThread) {
+      updateThread(threadId, {
+        summaryCallsInCurrentRequest:
+          (latestThread.summaryCallsInCurrentRequest ?? 0) + 1,
+      });
+    }
+  }
+
+  updateRunningTask(taskId, {
+    result: {
+      summaryCollapsed: result.collapsed,
+    },
   });
 };
 
@@ -1252,50 +1687,6 @@ const toLmStudioInputItems = (
   return items;
 };
 
-const buildOverflowContinuationInput = ({
-  summary,
-  userMessage,
-  partialAssistantText,
-  continuationIndex,
-}: {
-  summary: string | null;
-  userMessage: MessagePart[];
-  partialAssistantText: string;
-  continuationIndex: number;
-}) => {
-  const userText =
-    getTextFromMessageContent(userMessage).trim() ||
-    formatMessageContentForPrompt(userMessage);
-  const partialTail =
-    partialAssistantText.length > MAX_CONTINUATION_PARTIAL_CHARS
-      ? partialAssistantText.slice(-MAX_CONTINUATION_PARTIAL_CHARS)
-      : partialAssistantText;
-
-  const continuationPrompt = [
-    `Continuation step: ${continuationIndex}.`,
-    "Task: continue exactly where the interrupted answer stopped.",
-    "Hard rules (must follow):",
-    "1) Never restart from the beginning.",
-    "2) Continue directly from the checkpoint tail below.",
-    "3) Never repeat items that were already output.",
-    "4) If table was interrupted, restart table cleanly with a header row and separator row and repeat last listed item.",
-    "",
-    `User message:\n${userText}`,
-    "",
-    "Interrupted output tail (authoritative checkpoint):",
-    partialTail.trim() || "(none)",
-    "",
-    "Output policy:",
-    "- Output only the continuation content.",
-    "- No meta commentary, no explanation about continuation.",
-  ].join("\n");
-
-  return buildFreshChainInput({
-    summary,
-    userInput: continuationPrompt,
-  });
-};
-
 const applyCompactionMarkersToText = (text: string, breakOffsets: number[]) => {
   if (!text || breakOffsets.length === 0) {
     return text;
@@ -1378,5 +1769,11 @@ const maybeEnqueueTitleGenerationTask = (threadId: string) => {
   enqueueChatTask({
     kind: "generate_title",
     threadId,
+    contextLength: getConfiguredContextLengthForMode(
+      thread.lastPromptMode && isPromptMode(thread.lastPromptMode)
+        ? thread.lastPromptMode
+        : defaultPromptMode,
+      process.env,
+    ),
   });
 };

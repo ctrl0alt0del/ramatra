@@ -9,6 +9,38 @@ type DbGlobal = typeof globalThis & {
   __comfyBridgeDb?: Database.Database;
 };
 
+const buildDefaultGroupTasks = (
+  taskGroupType: string,
+  payload: Record<string, unknown>,
+) => {
+  if (taskGroupType === "chat") {
+    const kind = typeof payload.kind === "string" ? payload.kind : "";
+    if (kind === "conversation") {
+      return [
+        { id: crypto.randomUUID(), kind: "chat.generate", status: "pending" },
+        { id: crypto.randomUUID(), kind: "chat.stream", status: "pending" },
+      ];
+    }
+
+    if (kind === "generate_title") {
+      return [{ id: crypto.randomUUID(), kind: "chat.title", status: "pending" }];
+    }
+
+    if (kind === "collapse_context") {
+      return [{ id: crypto.randomUUID(), kind: "chat.compact", status: "pending" }];
+    }
+  }
+
+  if (taskGroupType === "comfy") {
+    return [
+      { id: crypto.randomUUID(), kind: "image.generate", status: "pending" },
+      { id: crypto.randomUUID(), kind: "image.stream", status: "pending" },
+    ];
+  }
+
+  return [];
+};
+
 const ensureSchema = (db: Database.Database) => {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
@@ -220,6 +252,103 @@ const ensureSchema = (db: Database.Database) => {
       ADD COLUMN context_window_total_tokens INTEGER
     `);
   }
+
+  const taskRows = db
+    .prepare(`SELECT id, type, payload_json FROM tasks`)
+    .all() as Array<{
+    id: string;
+    type: string;
+    payload_json: string;
+  }>;
+  const migrateTaskPayload = db.prepare(
+    `
+      UPDATE tasks
+      SET payload_json = ?
+      WHERE id = ?
+    `,
+  );
+  const migrateTaskPayloadsTx = db.transaction(() => {
+    for (const row of taskRows) {
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+
+      let changed = false;
+      if (
+        !Array.isArray(payload.tasks) &&
+        Array.isArray(payload.responsibilities)
+      ) {
+        payload.tasks = payload.responsibilities
+          .filter((item): item is Record<string, unknown> => {
+            return item !== null && typeof item === "object";
+          })
+          .map((item) => {
+            const id =
+              typeof item.id === "string" && item.id
+                ? item.id
+                : crypto.randomUUID();
+            const kind = typeof item.kind === "string" ? item.kind : "";
+            const legacyState = typeof item.state === "string" ? item.state : "";
+            const status =
+              legacyState === "pending" ||
+              legacyState === "running" ||
+              legacyState === "completed" ||
+              legacyState === "failed"
+                ? legacyState
+                : "pending";
+            return { id, kind, status };
+          })
+          .filter((item) => item.kind.length > 0);
+        changed = true;
+      }
+
+      if (Array.isArray(payload.tasks)) {
+        const normalizedTasks = payload.tasks
+          .filter((item): item is Record<string, unknown> => {
+            return item !== null && typeof item === "object";
+          })
+          .map((item) => {
+            const statusValue =
+              typeof item.status === "string" ? item.status : "pending";
+            const normalizedStatus =
+              statusValue === "running" ||
+              statusValue === "completed" ||
+              statusValue === "failed"
+                ? statusValue
+                : "pending";
+            if (item.status !== normalizedStatus) {
+              changed = true;
+            }
+            return {
+              ...item,
+              status: normalizedStatus,
+            };
+          });
+        payload.tasks = normalizedTasks;
+      }
+
+      if (!Array.isArray(payload.tasks) || payload.tasks.length === 0) {
+        const defaults = buildDefaultGroupTasks(row.type, payload);
+        if (defaults.length > 0) {
+          payload.tasks = defaults;
+          changed = true;
+        }
+      }
+
+      if ("responsibilities" in payload) {
+        delete payload.responsibilities;
+        changed = true;
+      }
+
+      if (changed) {
+        migrateTaskPayload.run(JSON.stringify(payload), row.id);
+      }
+    }
+  });
+  migrateTaskPayloadsTx();
 };
 
 export const getDb = () => {

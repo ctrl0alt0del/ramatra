@@ -97,8 +97,8 @@ export const createGeneration = (input: {
 
 export const updateGenerationProgress = (input: {
   jobId: string;
-  value: number;
-  max: number;
+  value: number | null;
+  max: number | null;
   node?: string | null;
 }) => {
   const timestamp = new Date().toISOString();

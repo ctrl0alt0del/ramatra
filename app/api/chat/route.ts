@@ -6,6 +6,7 @@ import {
   type MessagePart,
 } from "@/lib/chat/message-content";
 import { createThread, getThread, updateThread } from "@/lib/lmstudio/threads";
+import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
 import { defaultPromptMode, isPromptMode } from "@/lib/lmstudio/prompt-modes";
 import { processTaskQueues } from "@/lib/tasks/processor";
 import { enqueueChatTask } from "@/lib/tasks/scheduler";
@@ -124,14 +125,21 @@ export async function POST(req: Request) {
     kind: "conversation",
     threadId: thread.id,
     promptMode,
+    contextLength: getConfiguredContextLengthForMode(promptMode, process.env),
     userMessage: latestUserMessage.content,
   });
+  const streamTaskId =
+    task.type === "chat"
+      ? (task.payload.tasks ?? []).find(
+          (groupTask) => groupTask.kind === "chat.stream",
+        )?.id ?? task.id
+      : task.id;
 
   void processTaskQueues();
 
   return Response.json(
     {
-      taskId: task.id,
+      taskId: streamTaskId,
       threadId: thread.id,
       status: task.status,
     },
