@@ -92,6 +92,36 @@ body::after {
   background: rgba(216, 191, 255, 0.4);
 }
 
+@media (hover: hover) and (pointer: fine) {
+  body {
+    background-image: linear-gradient(180deg, #f2ebff 0%, #ede5ff 100%);
+  }
+
+  body::before,
+  body::after {
+    display: none;
+  }
+
+  .aui-thread-viewport-footer {
+    backdrop-filter: none;
+    background: linear-gradient(180deg, rgba(250, 247, 255, 0.7) 0%, rgba(250, 247, 255, 0.92) 100%);
+  }
+
+  .aui-root,
+  .aui-root * {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .aui-composer-root,
+  .aui-assistant-message-content,
+  .aui-user-message-content,
+  .aui-thread-welcome-message,
+  .aui-avatar-root,
+  .aui-thread-list-new {
+    box-shadow: none !important;
+  }
+}
 main,
 .aui-root {
   position: relative;
