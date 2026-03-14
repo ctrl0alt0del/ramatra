@@ -63,18 +63,6 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
     type: "sd3",
     device: "default",
   });
-  /*CLIP L (Prompt)*/
-  const [CONDITIONING_7] = cls.CLIPTextEncode({
-    text: "high quality, professinal photo, raw, candid, 1man, male solo, awe, masterpiece",
-    clip: CLIP_1,
-  });
-  /*CLIP L  (Prompt)*/
-  const [CONDITIONING_2] = cls.CLIPTextEncode({
-    text:
-      input.negativePrompt ||
-      "very low quality. ugly. deformed. cartoon. illustration. art. artistic.",
-    clip: CLIP_1,
-  });
   /*Load Diffusion Model*/
   const [MODEL_1] = cls.UNETLoader({
     unet_name: "Chroma1-HD-fp8mixed.safetensors",
@@ -119,10 +107,28 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
       clip: currentClip,
     });
   }
+  /*T5TokenizerOptions*/
+  const [TOKENIZED_CLIP_1] = cls.T5TokenizerOptions({
+    min_padding: 1,
+    min_length: 0,
+    clip: currentClip,
+  });
+  /*CLIP L (Prompt)*/
+  const [CONDITIONING_7] = cls.CLIPTextEncode({
+    text: "high quality, professinal photo, raw, candid, 1man, male solo, awe, masterpiece",
+    clip: CLIP_1,
+  });
+  /*CLIP L  (Prompt)*/
+  const [CONDITIONING_2] = cls.CLIPTextEncode({
+    text:
+      input.negativePrompt ||
+      "very low quality. ugly. deformed. cartoon. illustration. art. artistic.",
+    clip: CLIP_1,
+  });
   /*T5 (Prompt)*/
   const [CONDITIONING_6] = cls.CLIPTextEncode({
     text: input.positivePrompt,
-    clip: currentClip,
+    clip: TOKENIZED_CLIP_1,
   });
   /*Conditioning (Concat)*/
   const [CONDITIONING_3] = cls.ConditioningConcat({
@@ -166,7 +172,7 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
   /*T5 (Prompt)*/
   const [CONDITIONING_1] = cls.CLIPTextEncode({
     text: "",
-    clip: currentClip,
+    clip: TOKENIZED_CLIP_1,
   });
   /*Conditioning (Concat)*/
   const [CONDITIONING_4] = cls.ConditioningConcat({
@@ -229,7 +235,7 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
     tiled_decode: false,
     image: IMAGE_1,
     model: MODEL_2,
-    clip: CLIP_2,
+    clip: TOKENIZED_CLIP_1,
     vae: VAE_1,
     positive: CONDITIONING_3,
     negative: CONDITIONING_5,

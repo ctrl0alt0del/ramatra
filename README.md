@@ -222,11 +222,12 @@ Requirements:
 - ComfyUI must be reachable at `COMFY_BASE_URL`
 - your workflows must exist in the repo under `lib/comfy/workflows/`
 - LoRAs must live in `COMFY_LORA_DIR`
+- LoRA discovery scans only statically configured subfolders under `COMFY_LORA_DIR` (currently: `illustr_style`)
 
 Current workflow support includes:
 
-- `quick_chroma`
 - `base`
+- `illustration`
 
 The app persists completed generations under:
 

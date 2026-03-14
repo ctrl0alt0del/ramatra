@@ -1,4 +1,4 @@
-export const workflowNames = ["quick_chroma", "base"] as const;
+export const workflowNames = ["base", "illustration"] as const;
 
 export type WorkflowName = (typeof workflowNames)[number];
 

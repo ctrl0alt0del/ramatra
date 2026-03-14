@@ -16,7 +16,7 @@ export const registerListLorasMcpTool = (server: McpServer) => {
     {
       title: "List Available LoRAs",
       description:
-        "Scans the configured LoRA directory and returns available LoRAs, their file names, base-model metadata, and the single strongest concept tag. Use this before the first image generation in a conversation so matching LoRAs can be preferred for the requested concept.",
+        "Scans configured LoRA subfolders and returns available LoRA names (including subfolder path and extension). Use this before the first image generation in a conversation so matching LoRAs can be preferred for the requested concept.",
       inputSchema: listLorasInputSchema,
     },
     async (input) => {
@@ -48,3 +48,4 @@ export const registerListLorasMcpTool = (server: McpServer) => {
     },
   );
 };
+

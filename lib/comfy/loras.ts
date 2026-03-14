@@ -16,9 +16,7 @@ type LoraMetadata = {
 };
 
 export type LoraDescriptor = {
-  relativePath: string;
-  fileName: string;
-  absolutePath: string;
+  name: string;
   format: string;
   metadata: LoraMetadata | null;
 };
@@ -28,6 +26,15 @@ export type RequestedLora = {
   strength_model: number;
   strength_clip: number;
 };
+
+const STATIC_LORA_SUBFOLDERS = [
+  "illustr_style",
+  "chroma",
+  "illustration",
+] as const;
+
+const normalizeLoraName = (value: string) =>
+  value.trim().replace(/[\\/]+/g, path.sep).toLowerCase();
 
 const flattenTagFrequency = (value: unknown) => {
   if (!value || typeof value !== "object") {
@@ -78,7 +85,9 @@ const parseJsonMetadataField = (value: string | undefined) => {
   }
 };
 
-const readSafetensorsMetadata = async (filePath: string): Promise<LoraMetadata | null> => {
+const readSafetensorsMetadata = async (
+  filePath: string,
+): Promise<LoraMetadata | null> => {
   const handle = await fs.open(filePath, "r");
 
   try {
@@ -93,14 +102,17 @@ const readSafetensorsMetadata = async (filePath: string): Promise<LoraMetadata |
     const headerBuffer = Buffer.alloc(headerLength);
     await handle.read(headerBuffer, 0, headerLength, 8);
 
-    const header = JSON.parse(headerBuffer.toString("utf8")) as RawSafetensorsHeader;
+    const header = JSON.parse(
+      headerBuffer.toString("utf8"),
+    ) as RawSafetensorsHeader;
     const metadata = header.__metadata__;
     if (!metadata) {
       return null;
     }
 
     const tagFrequencyValue =
-      parseJsonMetadataField(metadata.ss_tag_frequency) ?? metadata.ss_tag_frequency;
+      parseJsonMetadataField(metadata.ss_tag_frequency) ??
+      metadata.ss_tag_frequency;
 
     return {
       name: metadata.name ?? null,
@@ -113,12 +125,50 @@ const readSafetensorsMetadata = async (filePath: string): Promise<LoraMetadata |
   }
 };
 
-const listTopLevelSafetensors = async (directoryPath: string): Promise<string[]> => {
+const listSafetensorsInDirectory = async (
+  directoryPath: string,
+): Promise<string[]> => {
   const entries = await fs.readdir(directoryPath, { withFileTypes: true });
   return entries
     .filter((entry) => entry.isFile())
     .map((entry) => path.join(directoryPath, entry.name))
-    .filter((absolutePath) => path.extname(absolutePath).toLowerCase() === ".safetensors");
+    .filter(
+      (absolutePath) =>
+        path.extname(absolutePath).toLowerCase() === ".safetensors",
+    );
+};
+
+const listStaticSubfolderSafetensors = async (rootDirectoryPath: string) => {
+  const discovered: string[] = [];
+
+  for (const subfolder of STATIC_LORA_SUBFOLDERS) {
+    const subfolderPath = path.join(rootDirectoryPath, subfolder);
+    try {
+      const stat = await fs.stat(subfolderPath);
+      if (!stat.isDirectory()) {
+        continue;
+      }
+
+      const files = await listSafetensorsInDirectory(subfolderPath);
+      discovered.push(...files);
+    } catch (error) {
+      const code =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof (error as { code?: unknown }).code === "string"
+          ? (error as { code: string }).code
+          : null;
+
+      if (code === "ENOENT") {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return discovered;
 };
 
 const scanAvailableLoras = async () => {
@@ -127,20 +177,16 @@ const scanAvailableLoras = async () => {
     throw new Error("COMFY_LORA_DIR is not configured.");
   }
 
-  const files = await listTopLevelSafetensors(loraDirectory);
+  const subfolderFiles = await listStaticSubfolderSafetensors(loraDirectory);
+  const files = subfolderFiles;
   const loras = await Promise.all(
     files.map(async (absolutePath) => {
-      const relativePath = path
-        .relative(loraDirectory, absolutePath)
-        .split(path.sep)
-        .join("/");
+      const name = path.relative(loraDirectory, absolutePath);
 
       const metadata = await readSafetensorsMetadata(absolutePath);
 
       return {
-        relativePath,
-        fileName: path.basename(absolutePath),
-        absolutePath,
+        name,
         format: path.extname(absolutePath).slice(1).toLowerCase(),
         metadata,
       } satisfies LoraDescriptor;
@@ -169,8 +215,7 @@ export const listAvailableLoras = async ({
     }
 
     const haystack = [
-      lora.relativePath,
-      lora.fileName,
+      lora.name,
       lora.metadata?.name ?? "",
       lora.metadata?.outputName ?? "",
       lora.metadata?.topTag?.name ?? "",
@@ -184,43 +229,58 @@ export const listAvailableLoras = async ({
   return {
     loraDirectory,
     total: filtered.length,
-    items: filtered.slice(0, limit),
+    items: filtered.slice(0, limit).map((lora) => ({
+      name: lora.name,
+    })),
   };
 };
 
-const getClosestLoraMatches = (requestedName: string, available: LoraDescriptor[]) => {
-  const normalizedRequestedName = requestedName.trim().toLowerCase();
+const getClosestLoraMatches = (
+  requestedName: string,
+  available: LoraDescriptor[],
+) => {
+  const normalizedRequestedName = normalizeLoraName(requestedName);
   if (!normalizedRequestedName) return [];
 
   const scored = available
     .map((lora) => {
-      const candidates = [lora.relativePath, lora.fileName];
+      const fileName = path.basename(lora.name);
+      const candidates = [lora.name, fileName];
       const score = candidates.reduce((best, candidate) => {
-        const normalizedCandidate = candidate.toLowerCase();
+        const normalizedCandidate = normalizeLoraName(candidate);
         if (normalizedCandidate === normalizedRequestedName) return 100;
-        if (normalizedCandidate.includes(normalizedRequestedName)) return Math.max(best, 60);
-        if (normalizedRequestedName.includes(normalizedCandidate)) return Math.max(best, 50);
+        if (normalizedCandidate.includes(normalizedRequestedName))
+          return Math.max(best, 60);
+        if (normalizedRequestedName.includes(normalizedCandidate))
+          return Math.max(best, 50);
         const requestedBase = normalizedRequestedName.replace(/\.[^.]+$/, "");
         const candidateBase = normalizedCandidate.replace(/\.[^.]+$/, "");
-        if (candidateBase.includes(requestedBase) || requestedBase.includes(candidateBase)) {
+        if (
+          candidateBase.includes(requestedBase) ||
+          requestedBase.includes(candidateBase)
+        ) {
           return Math.max(best, 40);
         }
         return best;
       }, 0);
 
       return {
-        relativePath: lora.relativePath,
-        fileName: lora.fileName,
+        name: lora.name,
         score,
       };
     })
     .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score || a.relativePath.localeCompare(b.relativePath));
+    .sort(
+      (a, b) =>
+        b.score - a.score || a.name.localeCompare(b.name),
+    );
 
   return scored.slice(0, 5);
 };
 
-export const validateRequestedLoras = async (requestedLoras: RequestedLora[]) => {
+export const validateRequestedLoras = async (
+  requestedLoras: RequestedLora[],
+) => {
   if (!requestedLoras.length) {
     return {
       ok: true as const,
@@ -229,28 +289,28 @@ export const validateRequestedLoras = async (requestedLoras: RequestedLora[]) =>
   }
 
   const { items } = await scanAvailableLoras();
-  const byRelativePath = new Map(
-    items.map((lora) => [lora.relativePath.toLowerCase(), lora.relativePath]),
+  const byName = new Map(
+    items.map((lora) => [normalizeLoraName(lora.name), lora.name]),
   );
   const fileNameMatches = new Map<string, string[]>();
 
   for (const lora of items) {
-    const key = lora.fileName.toLowerCase();
+    const key = path.basename(lora.name).toLowerCase();
     const existing = fileNameMatches.get(key) ?? [];
-    existing.push(lora.relativePath);
+    existing.push(lora.name);
     fileNameMatches.set(key, existing);
   }
 
   const resolved: RequestedLora[] = [];
 
   for (const requested of requestedLoras) {
-    const normalizedName = requested.name.trim().toLowerCase();
-    const exactRelativePath = byRelativePath.get(normalizedName);
+    const normalizedName = normalizeLoraName(requested.name);
+    const exactName = byName.get(normalizedName);
 
-    if (exactRelativePath) {
+    if (exactName) {
       resolved.push({
         ...requested,
-        name: exactRelativePath,
+        name: exactName,
       });
       continue;
     }
@@ -268,7 +328,7 @@ export const validateRequestedLoras = async (requestedLoras: RequestedLora[]) =>
     const suggestionText =
       suggestions.length > 0
         ? ` Closest available LoRAs: ${suggestions
-            .map((suggestion) => suggestion.relativePath)
+            .map((suggestion) => suggestion.name)
             .join(", ")}.`
         : "";
 

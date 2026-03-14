@@ -15,7 +15,7 @@ import {
 export const generateImageToolName = "generate_image";
 export const generateImageToolTitle = "Generate Image";
 export const generateImageToolDescription =
-  "Starts an image generation job in ComfyUI for the selected workflow and returns a queued job marker. Before the first image generation in a conversation, list_available_loras should normally be called so LoRAs can be preferred when they directly match the requested concept. Start with sampler euler, scheduler simple, and steps 25 by default. In loras[].name, use the exact file name or relative path returned by list_available_loras. Do not automatically retry after a failed generate_image call.";
+  "Starts an image generation job in ComfyUI for the selected workflow and returns a queued job marker. Available workflows: base, illustration. Before the first image generation in a conversation, list_available_loras should normally be called so LoRAs can be preferred when they directly match the requested concept. Start with sampler euler, scheduler simple, and steps 25 by default. In loras[].name, use the exact name returned by list_available_loras. Do not automatically retry after a failed generate_image call.";
 
 export const generateImageParameters = {
   workflowName: z.enum(workflowNames).default("base"),
@@ -130,7 +130,7 @@ export const getGenerateImageOpenAIToolSpec = () => ({
   function: {
     name: generateImageToolName,
     description:
-      "Use this whenever the user asks to create, generate, render, draw, or make an image. Choose the workflowName explicitly. Default to workflowName 'base' for most requests, pass cfg 1 unless stronger prompt adherence is truly needed, and provide any LoRAs that should be applied. Before the first image generation in a conversation, call list_available_loras unless the LoRA inventory was already checked and is still relevant. Prefer LoRAs whenever they directly match the requested concept, subject, style, or tags. Start with samplerName 'euler', scheduler 'simple', and steps 25. If higher quality is requested, switch next to samplerName 'res_2s' and scheduler 'beta57'. Only then should you increase steps. In loras[].name, use the exact file name or relative path returned by list_available_loras. If the tool call fails, do not automatically call generate_image again.",
+      "Use this whenever the user asks to create, generate, render, draw, or make an image. Choose the workflowName explicitly. Available workflows: 'base' and 'illustration'. Default to workflowName 'base' for most requests and choose 'illustration' for stylized/anime/illustrative outputs. Pass cfg 1 unless stronger prompt adherence is truly needed, and provide any LoRAs that should be applied. Before the first image generation in a conversation, call list_available_loras unless the LoRA inventory was already checked and is still relevant. Prefer LoRAs whenever they directly match the requested concept, subject, style, or tags. Start with samplerName 'euler', scheduler 'simple', and steps 25. If higher quality is requested, switch next to samplerName 'res_2s' and scheduler 'beta57'. Only then should you increase steps. In loras[].name, use the exact name returned by list_available_loras. If the tool call fails, do not automatically call generate_image again.",
     parameters: z.toJSONSchema(generateImageInputSchema),
   },
 });
@@ -168,7 +168,7 @@ export const registerGenerateImageMcpTool = (server: McpServer) => {
     {
       title: generateImageToolTitle,
       description:
-        "Starts an image generation job in ComfyUI for the selected workflow and returns a job marker that must be preserved verbatim in the assistant response. Default to workflowName 'base' for most requests and keep cfg at 1 unless a small increase is clearly needed. Before the first image generation in a conversation, list_available_loras should normally be called first, and LoRAs should be preferred when they directly match the requested concept or tags. Start with sampler euler, scheduler simple, and steps 25. If more quality is needed, switch next to res_2s and beta57, then increase steps only if needed after that. In loras[].name, use the exact file name or relative path returned by list_available_loras. If the tool call fails, do not automatically call generate_image again.",
+        "Starts an image generation job in ComfyUI for the selected workflow and returns a job marker that must be preserved verbatim in the assistant response. Available workflows: base and illustration. Default to workflowName 'base' for most requests; choose 'illustration' for stylized/anime/illustrative outputs. Keep cfg at 1 unless a small increase is clearly needed. Before the first image generation in a conversation, list_available_loras should normally be called first, and LoRAs should be preferred when they directly match the requested concept or tags. Start with sampler euler, scheduler simple, and steps 25. If more quality is needed, switch next to res_2s and beta57, then increase steps only if needed after that. In loras[].name, use the exact name returned by list_available_loras. If the tool call fails, do not automatically call generate_image again.",
       inputSchema: generateImageInputSchema,
     },
     async (input) => {
@@ -188,3 +188,4 @@ export const registerGenerateImageMcpTool = (server: McpServer) => {
     },
   );
 };
+
