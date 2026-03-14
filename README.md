@@ -43,10 +43,14 @@ Execution model:
 
 - chat requests go to `/api/chat`
 - server ensures a thread exists and persists the user message
-- a `chat` task is enqueued
-- the chat runner calls LM Studio and streams SSE updates to the client
+- a `chat` task group is enqueued
+- chat task group executes ordered tasks (`chat.generate` then `chat.stream`)
+- `chat.generate` opens LM Studio stream, `chat.stream` forwards events to client
+- on overflow/near-limit, scheduler delegates to follow-up task groups:
+  - `chat.compact`
+  - continuation `chat.generate` + transferred `chat.stream`
 - assistant reply and `lmstudioResponseId` are persisted on the same thread
-- image generation uses queued `comfy` tasks
+- image generation uses queued `comfy` task groups (`image.generate` + `image.stream`)
 - Comfy progress is pushed to the client through SSE
 
 ## Required Components
@@ -115,6 +119,12 @@ Optional auto-summary:
 
 ```env
 LM_STUDIO_AUTO_SUMMARY=false
+```
+
+Optional context projection tuning (useful with image-heavy threads):
+
+```env
+LM_STUDIO_ESTIMATED_IMAGE_TOKENS_PER_ATTACHMENT=1024
 ```
 
 Optional redundant-model cleanup after each chat task:
@@ -265,8 +275,11 @@ Available modes:
 
 Notes:
 
-- `Fast`, `Regular`, and `Writer` are text-oriented modes
-- `Artist` is image-oriented and uses MCP tools for generation, LoRA listing, and optional Civitai/web search support
+- MCP mapping by mode:
+  - `Fast`: no MCP integrations
+  - `Regular`: web search MCP only (if enabled)
+  - `Writer`: web search MCP only (if enabled)
+  - `Artist`: Comfy MCP + optional Civitai MCP
 
 ## Thread Persistence
 
@@ -288,17 +301,30 @@ Important detail:
 
 The app uses a shared task runtime.
 
-Task types:
+Task group types:
 
 - `chat`
 - `comfy`
 
 Features:
 
-- queued execution
+- queued task-group execution
+- ordered execution of tasks inside a group
 - streamed progress updates
-- scheduler-owned GPU mode transitions
+- scheduler-owned model/GPU transitions at task-group level
 - SSE task event routes
+
+Chat task kinds:
+
+- `chat.generate`
+- `chat.stream`
+- `chat.compact`
+- `chat.title`
+
+Image task kinds:
+
+- `image.generate`
+- `image.stream`
 
 ## Useful Routes
 
