@@ -24,9 +24,13 @@ const buildDefaultGroupTasks = (
 
     if (kind === "critique") {
       return [
-        { id: crypto.randomUUID(), kind: "chat.critique", status: "pending" },
-        { id: crypto.randomUUID(), kind: "chat.stream", status: "pending" },
+        { id: crypto.randomUUID(), kind: "chat.unbiased_critique", status: "pending" },
+        { id: crypto.randomUUID(), kind: "chat.biased_critique", status: "pending" },
       ];
+    }
+
+    if (kind === "update_intent") {
+      return [{ id: crypto.randomUUID(), kind: "chat.intent", status: "pending" }];
     }
 
     if (kind === "generate_title") {
@@ -68,6 +72,7 @@ const ensureSchema = (db: Database.Database) => {
       summary_calls_in_current_request INTEGER NOT NULL DEFAULT 0,
       context_window_used_tokens INTEGER,
       context_window_total_tokens INTEGER,
+      user_intent TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -298,6 +303,13 @@ const ensureSchema = (db: Database.Database) => {
     db.exec(`
       ALTER TABLE threads
       ADD COLUMN context_window_total_tokens INTEGER
+    `);
+  }
+
+  if (!columns.some((column) => column.name === "user_intent")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN user_intent TEXT
     `);
   }
 

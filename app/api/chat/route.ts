@@ -132,6 +132,12 @@ export async function POST(req: Request) {
     contextLength: getConfiguredContextLengthForMode(promptMode, process.env),
     userMessage: latestUserMessage.content,
   });
+  enqueueChatTask({
+    kind: "update_intent",
+    threadId: thread.id,
+    userMessage: latestUserMessage.content,
+    contextLength: getConfiguredContextLengthForMode(promptMode, process.env),
+  });
   const streamTaskId =
     task.type === "chat"
       ? (task.payload.tasks ?? []).find(

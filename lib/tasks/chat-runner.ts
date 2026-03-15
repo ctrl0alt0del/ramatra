@@ -139,12 +139,23 @@ type LmStudioInputItem =
       data_url: string;
     };
 
-const critiqueSystemPrompt = [
-  "You are an experienced art critique mentor.",
-  "Compare the user intent with the generated image.",
-  "Treat the generated image as incorrect by default and explain why.",
-  "List intent mismatch, anatomical issues, and graphical issues.",
-  "Then provide corrected prompt and generation settings for the artist model.",
+const unbiasedCritiqueSystemPrompt = [
+  "You are an unbiased image quality auditor.",
+  "You do not know any user intent or prompt.",
+  "Given only an AI-generated image, find flaws, artifacts, and anatomical issues.",
+  "Be concrete and technically specific.",
+].join("\n");
+const biasedCritiqueSystemPrompt = [
+  "You are an image critique mentor.",
+  "You receive: saved user intent, unbiased critique, image, and generation setup.",
+  "Produce final critique with: intent mismatch, anatomical issues, graphical issues, and a corrected prompt suggestion.",
+  "Only propose positivePrompt, negativePrompt, and LoRA usage changes. Do not alter cfg/steps/sampler/scheduler/seed.",
+].join("\n");
+const intentUpdateSystemPrompt = [
+  "You maintain a compact persistent user intent profile for an ongoing conversation.",
+  "Update intent using previous intent, previous assistant response, and latest user message.",
+  "Keep it concise and practical for future image-generation guidance.",
+  "Output plain text only.",
 ].join("\n");
 
 const critiqueAutoFollowupDisclaimer =
@@ -328,6 +339,40 @@ const getAssistantReasoning = (output: LmStudioOutput[] | undefined) => {
     .flatMap((item) => (item.type === "reasoning" ? [item.content.trim()] : []))
     .filter(Boolean)
     .join("\n\n");
+};
+
+const requestLmStudioChat = async ({
+  model,
+  contextLength,
+  input,
+  systemPrompt,
+  stream = false,
+  integrations,
+}: {
+  model: string;
+  contextLength: number;
+  input: string | LmStudioInputItem[];
+  systemPrompt: string;
+  stream?: boolean;
+  integrations?: ReturnType<typeof buildIntegrations>;
+}) => {
+  return fetch(getLmStudioChatUrl(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(process.env.LM_STUDIO_TOKEN
+        ? { Authorization: `Bearer ${process.env.LM_STUDIO_TOKEN}` }
+        : {}),
+    },
+    body: JSON.stringify({
+      model,
+      context_length: contextLength,
+      input,
+      system_prompt: systemPrompt,
+      integrations: integrations ?? [],
+      stream,
+    }),
+  });
 };
 
 const readTokenCount = (input: unknown) => {
@@ -783,8 +828,7 @@ const finalizeConversationViaStreamTask = ({
   text,
   reasoning,
   responseId,
-  summaryCallsInCurrentRequest,
-  delegatedToTaskGroupId,
+  summaryCallsInCurrentRequest,
 }: {
   taskId: string;
   text: string;
@@ -798,8 +842,7 @@ const finalizeConversationViaStreamTask = ({
       text,
       reasoning,
       responseId,
-      summaryCallsInCurrentRequest,
-      delegatedToTaskGroupId,
+      summaryCallsInCurrentRequest,
     },
   });
   setGroupTaskStatusByKind({
@@ -853,12 +896,18 @@ export const executeQueuedChatTask = async (
 
     if (
       taskKind !== "chat.generate" &&
-      taskKind !== "chat.critique" &&
+      taskKind !== "chat.intent" &&
+      taskKind !== "chat.unbiased_critique" &&
+      taskKind !== "chat.biased_critique" &&
       taskKind !== "chat.stream"
     ) {
       throw new Error(`Unsupported runnable chat task kind: ${taskKind}`);
     }
-    if (task.payload.kind !== "conversation" && task.payload.kind !== "critique") {
+    if (
+      task.payload.kind !== "conversation" &&
+      task.payload.kind !== "critique" &&
+      task.payload.kind !== "update_intent"
+    ) {
       throw new Error("Unsupported payload kind for chat runnable task.");
     }
     if (task.payload.kind === "conversation") {
@@ -868,18 +917,34 @@ export const executeQueuedChatTask = async (
       if (!hasTaskByKind(groupTasks, "chat.stream")) {
         throw new Error("Missing chat.stream task.");
       }
-      if (taskKind === "chat.critique") {
-        throw new Error("chat.critique task requires critique payload.");
+      if (
+        taskKind === "chat.unbiased_critique" ||
+        taskKind === "chat.biased_critique" ||
+        taskKind === "chat.intent"
+      ) {
+        throw new Error("This task kind requires a non-conversation payload.");
+      }
+    } else if (task.payload.kind === "critique") {
+      if (!hasTaskByKind(groupTasks, "chat.unbiased_critique")) {
+        throw new Error("Missing chat.unbiased_critique task.");
+      }
+      if (!hasTaskByKind(groupTasks, "chat.biased_critique")) {
+        throw new Error("Missing chat.biased_critique task.");
+      }
+      if (taskKind === "chat.generate" || taskKind === "chat.stream" || taskKind === "chat.intent") {
+        throw new Error("This task kind requires a different payload.");
       }
     } else {
-      if (!hasTaskByKind(groupTasks, "chat.critique")) {
-        throw new Error("Missing chat.critique task.");
+      if (!hasTaskByKind(groupTasks, "chat.intent")) {
+        throw new Error("Missing chat.intent task.");
       }
-      if (!hasTaskByKind(groupTasks, "chat.stream")) {
-        throw new Error("Missing chat.stream task.");
-      }
-      if (taskKind === "chat.generate") {
-        throw new Error("chat.generate task requires conversation payload.");
+      if (
+        taskKind === "chat.generate" ||
+        taskKind === "chat.stream" ||
+        taskKind === "chat.unbiased_critique" ||
+        taskKind === "chat.biased_critique"
+      ) {
+        throw new Error("This task kind requires a different payload.");
       }
     }
     let thread = task.payload.threadId
@@ -890,7 +955,7 @@ export const executeQueuedChatTask = async (
         ? task.payload.promptMode && isPromptMode(task.payload.promptMode)
           ? task.payload.promptMode
           : defaultPromptMode
-        : "artist";
+        : task.payload.kind === "critique" ? "artist" : "regular";
     const moodId =
       task.payload.kind === "conversation"
         ? (task.payload.moodId ?? null)
@@ -969,6 +1034,204 @@ export const executeQueuedChatTask = async (
       task.payload.contextLength > 0
         ? Math.floor(task.payload.contextLength)
         : getConfiguredContextLengthForMode(promptMode, process.env);
+
+    if (taskKind === "chat.intent") {
+      if (task.payload.kind !== "update_intent") {
+        throw new Error("chat.intent task requires update_intent payload.");
+      }
+
+      const intentThread = getThread(task.payload.threadId);
+      if (!intentThread) {
+        throw new Error("Intent update thread not found.");
+      }
+
+      const previousIntent = intentThread.userIntent ?? "";
+      const previousAssistantText = [...intentThread.messages]
+        .reverse()
+        .find((message) => message.role === "assistant");
+      const previousAssistantContent = previousAssistantText
+        ? getTextFromMessageContent(previousAssistantText.content)
+        : "";
+      const latestUserMessage = getTextFromMessageContent(task.payload.userMessage);
+
+      const exactLoadedModel = await ensureLmStudioModelLoaded({
+        modelKey: getChatModelKey(),
+        contextLength: requestedContextLength,
+      });
+      const modelTarget = await resolvePreferredLmStudioModelTarget({
+        preferredInstanceId: exactLoadedModel.instanceId,
+        modelKey: getChatModelKey(),
+      });
+
+      const intentInput = [
+        "Previous saved intent:",
+        previousIntent || "(none)",
+        "",
+        "Previous assistant response:",
+        previousAssistantContent || "(none)",
+        "",
+        "Latest user message:",
+        latestUserMessage || "(empty)",
+      ].join("\n");
+
+      const response = await requestLmStudioChat({
+        model: modelTarget,
+        contextLength: requestedContextLength,
+        input: intentInput,
+        systemPrompt: intentUpdateSystemPrompt,
+      });
+
+      const data = (await response.json()) as ChatResponse;
+      if (!response.ok) {
+        throw new Error(data.error?.message ?? "Intent update request failed.");
+      }
+
+      const nextIntent = getAssistantText(data.output).trim();
+      updateThread(task.payload.threadId, {
+        userIntent: nextIntent || null,
+      });
+
+      updateRunningTask(task.id, {
+        result: {
+          text: nextIntent,
+          reasoning: "",
+          responseId: data.response_id ?? null,
+          summaryCallsInCurrentRequest: 0,
+        },
+      });
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.intent",
+        status: "completed",
+      });
+      return;
+    }
+
+    if (taskKind === "chat.unbiased_critique") {
+      if (task.payload.kind !== "critique") {
+        throw new Error("chat.unbiased_critique task requires critique payload.");
+      }
+
+      const exactLoadedModel = await ensureLmStudioModelLoaded({
+        modelKey: getChatModelKey(),
+        contextLength: requestedContextLength,
+      });
+      const modelTarget = await resolvePreferredLmStudioModelTarget({
+        preferredInstanceId: exactLoadedModel.instanceId,
+        modelKey: getChatModelKey(),
+      });
+      const unbiasedInput = buildUnbiasedCritiqueLmStudioInput({
+        comfyTaskId: task.payload.comfyTaskId,
+        imageIndex: task.payload.imageIndex,
+      });
+      const response = await requestLmStudioChat({
+        model: modelTarget,
+        contextLength: requestedContextLength,
+        input: unbiasedInput,
+        systemPrompt: unbiasedCritiqueSystemPrompt,
+      });
+      const data = (await response.json()) as ChatResponse;
+      if (!response.ok) {
+        throw new Error(data.error?.message ?? "Unbiased critique request failed.");
+      }
+
+      const unbiasedCritique = getAssistantText(data.output).trim();
+      updateRunningTask(task.id, {
+        result: {
+          ...(task.result ?? {}),
+          text: "",
+          reasoning: "",
+          responseId: data.response_id ?? null,
+          summaryCallsInCurrentRequest: 0,
+          unbiasedCritique,
+        },
+      });
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.unbiased_critique",
+        status: "completed",
+      });
+      return;
+    }
+
+    if (taskKind === "chat.biased_critique") {
+      if (task.payload.kind !== "critique") {
+        throw new Error("chat.biased_critique task requires critique payload.");
+      }
+
+      const exactLoadedModel = await ensureLmStudioModelLoaded({
+        modelKey: getChatModelKey(),
+        contextLength: requestedContextLength,
+      });
+      const modelTarget = await resolvePreferredLmStudioModelTarget({
+        preferredInstanceId: exactLoadedModel.instanceId,
+        modelKey: getChatModelKey(),
+      });
+      const savedIntent = task.payload.threadId
+        ? (getThread(task.payload.threadId)?.userIntent ?? "")
+        : "";
+      const biasedInput = buildBiasedCritiqueLmStudioInput({
+        comfyTaskId: task.payload.comfyTaskId,
+        imageIndex: task.payload.imageIndex,
+        savedIntent,
+        unbiasedCritique: task.result?.unbiasedCritique ?? "",
+      });
+      const response = await requestLmStudioChat({
+        model: modelTarget,
+        contextLength: requestedContextLength,
+        input: biasedInput,
+        systemPrompt: biasedCritiqueSystemPrompt,
+      });
+      const data = (await response.json()) as ChatResponse;
+      if (!response.ok) {
+        throw new Error(data.error?.message ?? "Biased critique request failed.");
+      }
+
+      const critiqueText = getAssistantText(data.output).trim();
+      const critiqueReasoning = getAssistantReasoning(data.output).trim();
+      let delegatedToTaskGroupId: string | undefined;
+
+      if (task.payload.threadId) {
+        const autoFollowupMessage = [
+          critiqueAutoFollowupDisclaimer,
+          [critiqueText, critiqueReasoning]
+            .filter((value) => value.trim().length > 0)
+            .join("\n\n") || "No critique text was generated.",
+        ].join("\n\n");
+
+        const autoFollowupTask = enqueueChatTask({
+          kind: "conversation",
+          threadId: task.payload.threadId,
+          promptMode: "artist",
+          moodId: null,
+          contextLength: requestedContextLength,
+          userMessage: [
+            {
+              type: "text",
+              text: autoFollowupMessage,
+            },
+          ],
+        });
+        delegatedToTaskGroupId = autoFollowupTask.id;
+      }
+
+      updateRunningTask(task.id, {
+        result: {
+          ...(task.result ?? {}),
+          text: critiqueText,
+          reasoning: critiqueReasoning,
+          responseId: data.response_id ?? null,
+          summaryCallsInCurrentRequest: 0,
+          delegatedToTaskGroupId,
+        },
+      });
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.biased_critique",
+        status: "completed",
+      });
+      return;
+    }
 
     let summaryCallsInCurrentRequest =
       task.payload.kind === "conversation" &&
@@ -1086,39 +1349,26 @@ export const executeQueuedChatTask = async (
     let modelTarget = "";
     let userInput: string | LmStudioInputItem[] | null = null;
 
-    if (taskKind === "chat.generate" || taskKind === "chat.critique") {
+    if (taskKind === "chat.generate") {
+      if (task.payload.kind !== "conversation") {
+        throw new Error("chat.generate task requires conversation payload.");
+      }
       const generatedImageLimit = getAdaptiveGeneratedImageLimit({
         contextLength: requestedContextLength,
-        userMessage:
-          task.payload.kind === "conversation"
-            ? task.payload.userMessage
-            : [{ type: "text", text: "Image critique request" }],
+        userMessage: task.payload.userMessage,
       });
-      if (taskKind === "chat.generate") {
-        if (task.payload.kind !== "conversation") {
-          throw new Error("chat.generate task requires conversation payload.");
-        }
-        userInput = buildLmStudioInput({
-          summary: thread?.conversationSummary ?? null,
-          previousResponseId:
-            (task.payload.continuationIndex ?? 0) > 0
-              ? null
-              : (thread?.lmstudioResponseId ?? null),
-          generatedImages:
-            thread
-              ? getGeneratedImagesForThread(thread.messages, generatedImageLimit)
-              : [],
-          userMessage: task.payload.userMessage,
-        });
-      } else {
-        if (task.payload.kind !== "critique") {
-          throw new Error("chat.critique task requires critique payload.");
-        }
-        userInput = buildCritiqueLmStudioInput({
-          comfyTaskId: task.payload.comfyTaskId,
-          imageIndex: task.payload.imageIndex,
-        });
-      }
+      userInput = buildLmStudioInput({
+        summary: thread?.conversationSummary ?? null,
+        previousResponseId:
+          (task.payload.continuationIndex ?? 0) > 0
+            ? null
+            : (thread?.lmstudioResponseId ?? null),
+        generatedImages:
+          thread
+            ? getGeneratedImagesForThread(thread.messages, generatedImageLimit)
+            : [],
+        userMessage: task.payload.userMessage,
+      });
 
       const exactLoadedModel = await ensureLmStudioModelLoaded({
         modelKey: getChatModelKey(),
@@ -1418,30 +1668,22 @@ export const executeQueuedChatTask = async (
         }
       | null = null;
 
-    if (taskKind === "chat.generate" || taskKind === "chat.critique") {
+    if (taskKind === "chat.generate") {
       if (!userInput) {
         throw new Error(`${taskKind} task is missing input payload.`);
       }
       let stream: ReadableStream<Uint8Array>;
       try {
-        if (taskKind === "chat.generate") {
-          if (task.payload.kind !== "conversation") {
-            throw new Error("chat.generate task requires conversation payload.");
-          }
-          stream = await openChatGenerationStream({
-            input: userInput,
-            previousResponseId:
-              (task.payload.continuationIndex ?? 0) > 0
-                ? undefined
-                : (thread?.lmstudioResponseId ?? undefined),
-          });
-        } else {
-          stream = await openChatGenerationStream({
-            input: userInput,
-            systemPrompt: critiqueSystemPrompt,
-            integrations: [],
-          });
+        if (task.payload.kind !== "conversation") {
+          throw new Error("chat.generate task requires conversation payload.");
         }
+        stream = await openChatGenerationStream({
+          input: userInput,
+          previousResponseId:
+            (task.payload.continuationIndex ?? 0) > 0
+              ? undefined
+              : (thread?.lmstudioResponseId ?? undefined),
+        });
       } catch (error) {
         console.error("[chat-runner] generate:open-stream-failed", {
           taskId: task.id,
@@ -1687,40 +1929,12 @@ export const executeQueuedChatTask = async (
       kind: "chat.stream",
       status: "completed",
     });
-    let delegatedToTaskGroupId: string | undefined;
-
-    if (task.payload.kind === "critique" && task.payload.threadId) {
-      const critiqueBody = [finalTextWithMarkers, reasoning]
-        .filter((value) => value.trim().length > 0)
-        .join("\n\n");
-      const autoFollowupMessage = [
-        critiqueAutoFollowupDisclaimer,
-        critiqueBody || "No critique text was generated.",
-      ].join("\n\n");
-
-      const autoFollowupTask = enqueueChatTask({
-        kind: "conversation",
-        threadId: task.payload.threadId ?? null,
-        promptMode: "artist",
-        moodId: null,
-        contextLength: requestedContextLength,
-        userMessage: [
-          {
-            type: "text",
-            text: autoFollowupMessage,
-          },
-        ],
-      });
-      delegatedToTaskGroupId = autoFollowupTask.id;
-    }
-
     finalizeConversationViaStreamTask({
       taskId: task.id,
       text: finalTextWithMarkers,
       reasoning,
       responseId: finalResponse?.response_id ?? null,
-      summaryCallsInCurrentRequest,
-      delegatedToTaskGroupId,
+      summaryCallsInCurrentRequest,
     });
 
     if (
@@ -1763,24 +1977,31 @@ export const executeQueuedChatTask = async (
       }
     }
     if (task.payload.kind === "critique") {
-      if (taskKind === "chat.critique") {
+      if (taskKind === "chat.unbiased_critique") {
         setGroupTaskStatusByKind({
           taskId: task.id,
-          kind: "chat.critique",
+          kind: "chat.unbiased_critique",
           status: "failed",
         });
         setGroupTaskStatusByKind({
           taskId: task.id,
-          kind: "chat.stream",
+          kind: "chat.biased_critique",
           status: "failed",
         });
-      } else if (taskKind === "chat.stream") {
+      } else if (taskKind === "chat.biased_critique") {
         setGroupTaskStatusByKind({
           taskId: task.id,
-          kind: "chat.stream",
+          kind: "chat.biased_critique",
           status: "failed",
         });
       }
+    }
+    if (task.payload.kind === "update_intent") {
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.intent",
+        status: "failed",
+      });
     }
     if (task.payload.kind === "collapse_context") {
       setGroupTaskStatusByKind({
@@ -1990,13 +2211,13 @@ const toLmStudioInputItems = (
   return items;
 };
 
-const buildCritiqueLmStudioInput = ({
+const getCritiqueSourceData = ({
   comfyTaskId,
   imageIndex,
 }: {
   comfyTaskId: string;
   imageIndex: number;
-}): LmStudioInputItem[] => {
+}) => {
   const comfyTask = getTask(comfyTaskId);
   if (!comfyTask || comfyTask.type !== "comfy") {
     throw new Error("Critique source comfy task not found.");
@@ -2017,40 +2238,76 @@ const buildCritiqueLmStudioInput = ({
     throw new Error("Critique source image index is out of range.");
   }
 
+  return { comfyTask, image };
+};
+
+const buildUnbiasedCritiqueLmStudioInput = ({
+  comfyTaskId,
+  imageIndex,
+}: {
+  comfyTaskId: string;
+  imageIndex: number;
+}): LmStudioInputItem[] => {
+  const { image } = getCritiqueSourceData({ comfyTaskId, imageIndex });
+
+  return [
+    {
+      type: "text",
+      content: [
+        "Audit this AI-generated image without any prompt/context.",
+        "Return sections:",
+        "1) Anatomical issues",
+        "2) Graphical/rendering issues",
+        "3) Composition/lighting issues",
+        "4) Realism/style consistency issues",
+      ].join("\n"),
+    },
+    {
+      type: "image",
+      data_url: `data:${image.mimeType};base64,${image.data}`,
+    },
+  ];
+};
+
+const buildBiasedCritiqueLmStudioInput = ({
+  comfyTaskId,
+  imageIndex,
+  savedIntent,
+  unbiasedCritique,
+}: {
+  comfyTaskId: string;
+  imageIndex: number;
+  savedIntent: string;
+  unbiasedCritique: string;
+}): LmStudioInputItem[] => {
+  const { comfyTask, image } = getCritiqueSourceData({ comfyTaskId, imageIndex });
+
   const critiqueInputText = [
-    "User original intent:",
-    comfyTask.payload.sourceUserIntent?.trim() || "(not available)",
+    "Saved user intent:",
+    savedIntent.trim() || "(not available)",
     "",
-    "What was requested for generation:",
-    comfyTask.payload.prompt.trim(),
+    "Unbiased critique (image-only):",
+    unbiasedCritique.trim() || "(not available)",
     "",
-    "Generation parameters:",
+    "Generation setup to evaluate against:",
     JSON.stringify(
       {
-        workflowName: comfyTask.payload.workflowName,
-        prompt: comfyTask.payload.prompt,
+        positivePrompt: comfyTask.payload.prompt,
         negativePrompt: comfyTask.payload.negativePrompt,
-        inputImage: comfyTask.payload.inputImage,
-        width: comfyTask.payload.width,
-        height: comfyTask.payload.height,
-        steps: comfyTask.payload.steps,
-        cfg: comfyTask.payload.cfg,
-        seed: comfyTask.payload.seed,
-        samplerName: comfyTask.payload.samplerName,
-        scheduler: comfyTask.payload.scheduler,
         loras: comfyTask.payload.loras,
       },
       null,
       2,
     ),
     "",
-    "Output format (strict):",
+    "Return sections:",
     "1) Summary",
     "2) Intent mismatch bullets",
     "3) Anatomical issues bullets",
     "4) Graphical issues bullets",
-    "5) Corrected prompt",
-    "6) Corrected generation parameters as compact JSON",
+    "5) Corrected positivePrompt",
+    "6) Corrected negativePrompt",
+    "7) Recommended LoRA usage",
   ].join("\n");
 
   return [

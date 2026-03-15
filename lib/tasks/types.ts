@@ -1,4 +1,4 @@
-﻿import type { MessagePart } from "@/lib/chat/message-content";
+import type { MessagePart } from "@/lib/chat/message-content";
 
 export const taskGroupTypes = ["chat", "comfy"] as const;
 export type TaskGroupType = (typeof taskGroupTypes)[number];
@@ -14,7 +14,9 @@ export type TaskGroupStatus = (typeof taskGroupStatuses)[number];
 
 export const taskKinds = [
   "chat.generate",
-  "chat.critique",
+  "chat.intent",
+  "chat.unbiased_critique",
+  "chat.biased_critique",
   "chat.stream",
   "chat.compact",
   "chat.title",
@@ -59,6 +61,13 @@ export type TaskGroupPayloadMap = {
         threadId: string | null;
         comfyTaskId: string;
         imageIndex: number;
+        contextLength?: number;
+        tasks?: Task[];
+      }
+    | {
+        kind: "update_intent";
+        threadId: string;
+        userMessage: MessagePart[];
         contextLength?: number;
         tasks?: Task[];
       }
@@ -110,6 +119,7 @@ export type TaskGroupResultMap = {
   chat: {
     text?: string;
     reasoning?: string;
+    unbiasedCritique?: string;
     responseId?: string | null;
     summaryCallsInCurrentRequest?: number;
     delegatedToTaskGroupId?: string;

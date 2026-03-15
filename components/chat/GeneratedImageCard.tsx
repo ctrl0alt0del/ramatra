@@ -4,8 +4,10 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ChevronDown, ChevronRight, MessageSquareText } from "lucide-react";
+import { useThreadRuntime } from "@assistant-ui/react";
 
 import { SkeletonBlock } from "./SkeletonBlock";
+import type { ThreadApiDetail } from "./types";
 
 type CompletedImage = {
   mimeType: string;
@@ -91,6 +93,8 @@ export function GeneratedImageCard({
   const [hasResolvedInitialFetch, setHasResolvedInitialFetch] = useState(false);
   const [critiques, setCritiques] = useState<Record<number, CritiqueState>>({});
   const critiqueStreamsRef = useRef<Record<number, EventSource>>({});
+  const followupStreamIdsRef = useRef<Record<number, string>>({});
+  const threadRuntime = useThreadRuntime({ optional: true });
 
   useEffect(() => {
     if (!hasValidTaskId) return;
@@ -205,8 +209,60 @@ export function GeneratedImageCard({
           reasoning: payload.reasoning,
         },
       }));
-
       if (payload.status === "completed") {
+        const delegatedTaskId =
+          "delegatedToTaskGroupId" in payload &&
+          typeof payload.delegatedToTaskGroupId === "string"
+            ? payload.delegatedToTaskGroupId
+            : null;
+
+        if (
+          delegatedTaskId &&
+          threadId &&
+          followupStreamIdsRef.current[imageIndex] !== delegatedTaskId
+        ) {
+          followupStreamIdsRef.current[imageIndex] = delegatedTaskId;
+          const followupSource = new EventSource(
+            "/api/chat/task/" + delegatedTaskId + "/events",
+          );
+
+          followupSource.addEventListener("task", async (followupEvent: MessageEvent<string>) => {
+            const followupPayload = JSON.parse(followupEvent.data) as ChatTaskEvent;
+            if (followupPayload.status !== "completed") {
+              return;
+            }
+
+            followupSource.close();
+
+            if (!threadRuntime) {
+              return;
+            }
+
+            try {
+              const response = await fetch("/api/threads/" + threadId);
+              if (!response.ok) {
+                throw new Error("Failed to refresh thread after critique follow-up.");
+              }
+
+              const data = (await response.json()) as { thread: ThreadApiDetail };
+              const runtimeMessages: Array<{ role: "assistant" | "user" | "system"; content: Array<{ type: "text"; text: string }> }> = data.thread.messages.map((message) => ({
+                role: message.role,
+                content: message.content
+                  .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
+                  .map((part) => ({ type: "text" as const, text: part.text })),
+              }));
+
+              threadRuntime.reset(runtimeMessages);
+            } catch {
+              // Ignore refresh failures; persisted history still contains the message.
+            }
+          });
+
+          followupSource.onerror = () => {
+            followupSource.close();
+          };
+        }
+
         source.close();
         delete critiqueStreamsRef.current[imageIndex];
       }
