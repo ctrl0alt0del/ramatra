@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import type { WorkflowName } from "@/lib/comfy/workflows/types";
+
 type RawSafetensorsHeader = {
   __metadata__?: Record<string, string>;
 };
@@ -33,6 +35,30 @@ const STATIC_LORA_SUBFOLDERS = [
   "illustration",
   "qwen",
 ] as const;
+const WORKFLOW_LORA_SUBFOLDERS: Record<WorkflowName, string[]> = {
+  base: ["chroma"],
+  edit: ["qwen"],
+  illustration: ["illustration", "illustr_style"],
+};
+
+const normalizeLoraPath = (value: string) => {
+  return value.trim().replace(/[\\/]+/g, "/").toLowerCase();
+};
+
+const isAllowedForWorkflow = (
+  loraName: string,
+  workflowName: WorkflowName | undefined,
+) => {
+  if (!workflowName) {
+    return true;
+  }
+
+  const allowedSubfolders = WORKFLOW_LORA_SUBFOLDERS[workflowName];
+  const normalizedName = normalizeLoraPath(loraName);
+  return allowedSubfolders.some((subfolder) =>
+    normalizedName.startsWith(`${normalizeLoraPath(subfolder)}/`),
+  );
+};
 
 const normalizeLoraName = (value: string) =>
   value
@@ -205,15 +231,21 @@ const scanAvailableLoras = async () => {
 
 export const listAvailableLoras = async ({
   query,
+  workflowName,
   limit = 50,
 }: {
   query?: string;
+  workflowName?: WorkflowName;
   limit?: number;
 }) => {
   const normalizedQuery = query?.trim().toLowerCase() ?? "";
   const { loraDirectory, items } = await scanAvailableLoras();
 
   const filtered = items.filter((lora) => {
+    if (!isAllowedForWorkflow(lora.name, workflowName)) {
+      return false;
+    }
+
     if (!normalizedQuery) {
       return true;
     }
@@ -232,6 +264,10 @@ export const listAvailableLoras = async ({
 
   return {
     loraDirectory,
+    workflowName: workflowName ?? null,
+    allowedSubfolders: workflowName
+      ? WORKFLOW_LORA_SUBFOLDERS[workflowName]
+      : [...STATIC_LORA_SUBFOLDERS],
     total: filtered.length,
     items: filtered.slice(0, limit).map((lora) => ({
       name: lora.name,
@@ -355,3 +391,8 @@ export const validateRequestedLoras = async (
     resolved,
   };
 };
+
+
+
+
+

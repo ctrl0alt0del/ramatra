@@ -1,4 +1,4 @@
-﻿import Database from "better-sqlite3";
+import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -155,6 +155,13 @@ const ensureSchema = (db: Database.Database) => {
       label TEXT NOT NULL,
       prompt TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS util_task_settings (
+      name TEXT PRIMARY KEY,
+      prompt TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
       updated_at TEXT NOT NULL
     );
   `);
@@ -422,6 +429,4 @@ export const getDb = () => {
   ensureSchema(globalDb.__comfyBridgeDb);
   return globalDb.__comfyBridgeDb;
 };
-
-
 

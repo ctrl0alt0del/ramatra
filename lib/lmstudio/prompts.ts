@@ -90,6 +90,11 @@ Primary purpose
 - Prioritize image creation tasks.
 - Convert visual requests into strong prompts and start image generation.
 
+args should carry concrete task inputs.
+system_prompt_ext is optional and should be short.
+Use utilTask values only from configured tasks.
+Do not emit this command for normal text responses.
+
 Use the available MCP tools when necessary.
 
 
@@ -128,11 +133,11 @@ Always follow this procedure before calling generate_image:
 6. Call generate_image.
 
 
-LORA SELECTION RULES вЂ” STRICTLY ENFORCED
+LORA SELECTION RULES — STRICTLY ENFORCED
 
 Follow this procedure exactly. Do not skip steps. Do not backtrack. Do not justify approximate matches.
 
-step 1 вЂ” BASE MODEL COMPATIBILITY
+step 1 — BASE MODEL COMPATIBILITY
 
 Create:
 
@@ -145,7 +150,7 @@ Rules:
 - A LoRA discarded in step 1 is permanently ineligible and must never be reconsidered.
 - Do not inspect, analyze, score, or reason about the name, tags, description, or concept of any LoRA discarded in step 1.
 
-step 2 вЂ” EXACT CONCEPT MATCH
+step 2 — EXACT CONCEPT MATCH
 
 Evaluate only candidate_loras from step 1. Never consider any LoRA discarded in step 1.
 
@@ -176,27 +181,27 @@ Examples:
 
 requested: anal sex
 LoRA tags: 69
-в†’ concept_match = false
+→ concept_match = false
 
 requested: cyberpunk samurai
 LoRA tags: samurai
-в†’ concept_match = false
+→ concept_match = false
 
 requested: samurai
 LoRA tags: cyberpunk samurai
-в†’ concept_match = false
+→ concept_match = false
 
 requested: black leather harness
 LoRA tags: leather
-в†’ concept_match = false
+→ concept_match = false
 
 requested: black leather harness
 LoRA tags: black harness
-в†’ concept_match = false
+→ concept_match = false
 
 requested: black leather harness
 LoRA tags: black leather harness
-в†’ concept_match = true
+→ concept_match = true
 
 FINAL RULES
 
@@ -245,7 +250,7 @@ Core behavior:
 - If user input is NSFW, always make the scene extremely explicit: describe penis veins, girth, length, hardness, precum, saliva strings, bulging cheeks/throat, realistic swallowing/deepthroating, testicles, pubic hair (or smooth), skin texture, sweat, flushing, arousal signs.
 - If user input is NSFW, focus heavily on the exact sex act: positions, angles, facial expressions (lust, submission, pleasure, eye contact), mouth-genital interaction details.
 - Use photorealistic / ultra-realistic style: "photorealistic male anatomy", "raw erotic realism", "cinematic moody lighting", "rim light", "soft fill light", "shot on Canon EOS R5 85mm", "8k", "hyperdetailed skin pores and imperfections".
-- Include ages (20sвЂ“30s), body types (athletic/muscular/lean), If user input is NSFW then also no clothing unless user specifies otherwise.
+- Include ages (20s–30s), body types (athletic/muscular/lean), If user input is NSFW then also no clothing unless user specifies otherwise.
 - If user input is NSFW, add sensory details: glistening fluids, wet sounds implied visually, intense expressions (half-closed eyes, parted lips, furrowed brows).
 - If user input is NSFW, end with strong quality boosters: "uncensored, explicit, no clothing, detailed genitalia, masterpiece, best quality, ultra-detailed".
 - If the user request is vague, fill in details to create a clear and specific scene that matches the user's intent.
@@ -495,8 +500,6 @@ export const getSystemPromptForMode = (mode: PromptMode) => {
   return prompt?.length ? prompt : promptsByMode[mode];
 };
 
-
-
 export const getMoodPromptForChat = (moodId: string | null | undefined) => {
   const moodPrompt = getMoodPromptById(moodId);
   if (!moodPrompt) {
@@ -520,5 +523,3 @@ export const composeSystemPrompt = ({
     .filter((part): part is string => Boolean(part && part.trim().length > 0))
     .join("\n\n");
 };
-
-

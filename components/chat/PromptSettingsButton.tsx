@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -29,6 +29,29 @@ type MoodSettingsResponse = {
   moods: EditableMood[];
 };
 
+type EditableUtilTask = {
+  name: string;
+  prompt: string;
+  enabled: boolean;
+};
+
+type UtilTaskSettingsResponse = {
+  tasks: EditableUtilTask[];
+  defaults: Record<string, string>;
+};
+
+const createUtilTaskName = (tasks: EditableUtilTask[]) => {
+  let index = 1;
+
+  while (true) {
+    const candidate = `util_task_${index}`;
+    const exists = tasks.some((task) => task.name === candidate);
+    if (!exists) {
+      return candidate;
+    }
+    index += 1;
+  }
+};
 const createMoodId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     try {
@@ -43,7 +66,7 @@ const createMoodId = () => {
 
 export function PromptSettingsButton() {
   const [isMobileViewport, setIsMobileViewport] = useState(false);
-  const [activeTab, setActiveTab] = useState<"modes" | "moods">("modes");
+  const [activeTab, setActiveTab] = useState<"modes" | "moods" | "utilTasks">("modes");
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -53,6 +76,8 @@ export function PromptSettingsButton() {
   const [prompts, setPrompts] = useState<Record<PromptMode, string> | null>(null);
   const [defaults, setDefaults] = useState<Record<PromptMode, string> | null>(null);
   const [moods, setMoods] = useState<EditableMood[] | null>(null);
+  const [utilTasks, setUtilTasks] = useState<EditableUtilTask[] | null>(null);
+  const [utilTaskDefaults, setUtilTaskDefaults] = useState<Record<string, string>>({});
   const [expandedMode, setExpandedMode] = useState<PromptMode | null>(null);
   const expandedTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -87,11 +112,14 @@ export function PromptSettingsButton() {
         setLoading(true);
         setError(null);
 
-        const [promptResponse, moodResponse] = await Promise.all([
+        const [promptResponse, moodResponse, utilTaskResponse] = await Promise.all([
           fetch("/api/settings/system-prompts", {
             cache: "no-store",
           }),
           fetch("/api/settings/moods", {
+            cache: "no-store",
+          }),
+          fetch("/api/settings/util-tasks", {
             cache: "no-store",
           }),
         ]);
@@ -104,13 +132,21 @@ export function PromptSettingsButton() {
           throw new Error("Failed to load mood settings.");
         }
 
+        if (!utilTaskResponse.ok) {
+          throw new Error("Failed to load util task settings.");
+        }
+
         const promptData = (await promptResponse.json()) as PromptSettingsResponse;
         const moodData = (await moodResponse.json()) as MoodSettingsResponse;
+        const utilTaskData =
+          (await utilTaskResponse.json()) as UtilTaskSettingsResponse;
 
         if (!cancelled) {
           setPrompts(promptData.prompts);
           setDefaults(promptData.defaults);
           setMoods(moodData.moods);
+          setUtilTasks(utilTaskData.tasks);
+          setUtilTaskDefaults(utilTaskData.defaults);
         }
       } catch (nextError) {
         if (!cancelled) {
@@ -171,8 +207,8 @@ export function PromptSettingsButton() {
   }, [expandedMode]);
 
   const canSave = useMemo(
-    () => !!prompts && !!moods && !loading && !saving,
-    [prompts, moods, loading, saving],
+    () => !!prompts && !!moods && !!utilTasks && !loading && !saving,
+    [prompts, moods, utilTasks, loading, saving],
   );
 
   const updateModePrompt = (mode: PromptMode, value: string) => {
@@ -240,8 +276,73 @@ export function PromptSettingsButton() {
     });
   };
 
+  const updateUtilTask = (name: string, input: Partial<EditableUtilTask>) => {
+    setUtilTasks((previous) => {
+      if (!previous) {
+        return previous;
+      }
+
+      return previous.map((task) =>
+        task.name === name
+          ? {
+              ...task,
+              ...input,
+            }
+          : task,
+      );
+    });
+  };
+
+  const restoreUtilTaskDefault = (name: string) => {
+    const defaultPrompt = utilTaskDefaults[name];
+    if (typeof defaultPrompt !== "string") {
+      return;
+    }
+
+    updateUtilTask(name, { prompt: defaultPrompt });
+  };
+
+  const addUtilTask = () => {
+    setUtilTasks((previous) => {
+      if (!previous) {
+        return previous;
+      }
+
+      return [
+        ...previous,
+        {
+          name: createUtilTaskName(previous),
+          prompt: "",
+          enabled: true,
+        },
+      ];
+    });
+  };
+
+  const removeUtilTask = (name: string) => {
+    setUtilTasks((previous) => {
+      if (!previous) {
+        return previous;
+      }
+
+      return previous.filter((task) => task.name !== name);
+    });
+  };
+
   const save = async () => {
-    if (!prompts || !moods) {
+    if (!prompts || !moods || !utilTasks) {
+      return;
+    }
+
+    const normalizedUtilTasks = utilTasks
+      .map((task) => ({
+        ...task,
+        name: task.name.trim(),
+      }))
+      .filter((task) => task.name.length > 0);
+    const uniqueNames = new Set(normalizedUtilTasks.map((task) => task.name));
+    if (uniqueNames.size !== normalizedUtilTasks.length) {
+      setError("Util task names must be unique.");
       return;
     }
 
@@ -250,7 +351,7 @@ export function PromptSettingsButton() {
       setError(null);
       setSavedAt(null);
 
-      const [promptResponse, moodResponse] = await Promise.all([
+      const [promptResponse, moodResponse, utilTaskResponse] = await Promise.all([
         fetch("/api/settings/system-prompts", {
           method: "PATCH",
           headers: {
@@ -269,6 +370,15 @@ export function PromptSettingsButton() {
             moods,
           }),
         }),
+        fetch("/api/settings/util-tasks", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            tasks: normalizedUtilTasks,
+          }),
+        }),
       ]);
 
       if (!promptResponse.ok) {
@@ -279,13 +389,20 @@ export function PromptSettingsButton() {
         throw new Error("Failed to save mood settings.");
       }
 
+      if (!utilTaskResponse.ok) {
+        throw new Error("Failed to save util task settings.");
+      }
+
       const promptData = (await promptResponse.json()) as {
         prompts: Record<PromptMode, string>;
       };
       const moodData = (await moodResponse.json()) as MoodSettingsResponse;
+      const utilTaskData =
+        (await utilTaskResponse.json()) as { tasks: EditableUtilTask[] };
 
       setPrompts(promptData.prompts);
       setMoods(moodData.moods);
+      setUtilTasks(utilTaskData.tasks);
       setSavedAt(new Date().toISOString());
       window.dispatchEvent(new Event(MOODS_UPDATED_EVENT));
     } catch (nextError) {
@@ -360,7 +477,7 @@ export function PromptSettingsButton() {
         <Tabs.Root
           value={activeTab}
           onValueChange={(value) => {
-            if (value === "modes" || value === "moods") {
+            if (value === "modes" || value === "moods" || value === "utilTasks") {
               setActiveTab(value);
             }
             closeExpandedMode();
@@ -370,10 +487,10 @@ export function PromptSettingsButton() {
           <div className="flex items-center justify-between border-b border-white/70 px-5 py-4">
             <div>
               <h2 className="text-lg font-semibold text-[#1f1838]">
-                Mode And Mood Prompts
+                Mode, Mood, And Util Task Prompts
               </h2>
               <p className="text-sm text-[hsl(var(--aui-muted-foreground))]">
-                Edit mode prompts and dynamic mood overlays.
+                Edit mode prompts, mood overlays, and utility task prompts.
               </p>
             </div>
             <button
@@ -399,13 +516,19 @@ export function PromptSettingsButton() {
             >
               Moods
             </Tabs.Trigger>
+            <Tabs.Trigger
+              value="utilTasks"
+              className="rounded-full border border-white/70 bg-white px-3 py-1.5 text-xs font-semibold text-[hsl(var(--aui-foreground))] transition hover:bg-[#f7f2ff] data-[state=active]:border-transparent data-[state=active]:bg-[linear-gradient(135deg,#7f74ff_0%,#b7adff_100%)] data-[state=active]:text-white"
+            >
+              Util Tasks
+            </Tabs.Trigger>
           </Tabs.List>
 
           <div
             className="mx-5 mb-4 min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-b-[18px] border-x border-b border-white/70 bg-white/68 px-4 py-4"
             style={{ WebkitOverflowScrolling: "touch" }}
           >
-            {loading || !prompts || !moods ? (
+            {loading || !prompts || !moods || !utilTasks ? (
               <div className="flex h-full items-center justify-center text-sm text-[hsl(var(--aui-muted-foreground))]">
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Loading settings...
@@ -513,6 +636,94 @@ export function PromptSettingsButton() {
                             }
                             className="mt-2 min-h-[120px] w-full resize-y rounded-[12px] border border-[hsl(var(--aui-border))] bg-white px-3 py-2 text-base leading-6 text-[#2a2146] caret-[#2a2146] shadow-[inset_0_1px_1px_rgba(31,24,56,0.04)] outline-none focus:border-[#8b7cff] md:text-sm"
                             placeholder="Mood prompt overlay"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Tabs.Content>
+
+                <Tabs.Content value="utilTasks" className="space-y-4">
+                  <div className="rounded-[20px] border border-white/70 bg-white/85 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-[#1f1838]">
+                          Util Tasks
+                        </h3>
+                        <p className="mt-0.5 text-xs text-[hsl(var(--aui-muted-foreground))]">
+                          Task-specific prompts executed from stream commands.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={addUtilTask}
+                        className="inline-flex items-center gap-1 rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))] transition hover:bg-[#f7f2ff]"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Add Util Task
+                      </button>
+                    </div>
+
+                    <div className="mt-3 space-y-3">
+                      {utilTasks.length === 0 ? (
+                        <p className="rounded-[14px] border border-dashed border-white/70 bg-white/70 px-3 py-3 text-xs text-[hsl(var(--aui-muted-foreground))]">
+                          No util tasks configured.
+                        </p>
+                      ) : null}
+
+                      {utilTasks.map((task) => (
+                        <div
+                          key={task.name}
+                          className="rounded-[14px] border border-white/70 bg-white/80 p-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <input
+                              value={task.name}
+                              onChange={(event) =>
+                                updateUtilTask(task.name, {
+                                  name: event.target.value,
+                                })
+                              }
+                              className="min-w-[220px] flex-1 rounded-full border border-[hsl(var(--aui-border))] bg-white px-3 py-1.5 text-sm text-[#2a2146] outline-none focus:border-[#8b7cff]"
+                              placeholder="util task name"
+                            />
+                            <div className="flex items-center gap-2">
+                              <label className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))]">
+                                <input
+                                  type="checkbox"
+                                  checked={task.enabled}
+                                  onChange={(event) =>
+                                    updateUtilTask(task.name, {
+                                      enabled: event.target.checked,
+                                    })
+                                  }
+                                  className="h-3.5 w-3.5"
+                                />
+                                Enabled
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => restoreUtilTaskDefault(task.name)}
+                                className="rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))] transition hover:bg-[#f7f2ff]"
+                              >
+                                Restore Default
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeUtilTask(task.name)}
+                                className="inline-flex items-center gap-1 rounded-full border border-[#efc7ce] bg-[#fff5f7] px-3 py-1 text-xs font-medium text-[#b34558] transition hover:bg-[#ffecef]"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                          <textarea
+                            value={task.prompt}
+                            onChange={(event) =>
+                              updateUtilTask(task.name, { prompt: event.target.value })
+                            }
+                            className="mt-2 min-h-[140px] w-full resize-y rounded-[12px] border border-[hsl(var(--aui-border))] bg-white px-3 py-2 text-base leading-6 text-[#2a2146] caret-[#2a2146] shadow-[inset_0_1px_1px_rgba(31,24,56,0.04)] outline-none focus:border-[#8b7cff] md:text-sm"
                           />
                         </div>
                       ))}
@@ -640,6 +851,9 @@ export function PromptSettingsButton() {
     </>
   );
 }
+
+
+
 
 
 

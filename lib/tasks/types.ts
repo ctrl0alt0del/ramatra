@@ -54,6 +54,14 @@ export type TaskGroupPayloadMap = {
         continuationIndex?: number;
         carryoverText?: string;
         carryoverReasoning?: string;
+        systemPromptOverride?: string;
+        previousResponseIdOverride?: string | null;
+        utilTaskName?: string;
+        utilTaskArgs?: Record<string, unknown>;
+        utilSystemPromptExt?: string;
+        utilCommandDepth?: number;
+        utilEnqueueCount?: number;
+        utilCommandNonces?: string[];
         tasks?: Task[];
       }
     | {
@@ -177,6 +185,4 @@ export type TaskEventMap = {
   "queue:changed": SchedulerSnapshot;
   "gpu:changed": SchedulerSnapshot;
 };
-
-
 

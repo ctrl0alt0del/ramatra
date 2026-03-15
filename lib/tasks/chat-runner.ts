@@ -27,6 +27,7 @@ import {
   type PromptMode,
 } from "@/lib/lmstudio/prompt-modes";
 import { composeSystemPrompt } from "@/lib/lmstudio/prompts";
+import { getUtilTaskSettingByName } from "@/lib/lmstudio/util-tasks";
 import {
   buildFreshChainInput,
   generateConversationSummary,
@@ -1015,6 +1016,164 @@ const hasTaskByKind = (
   return tasks?.some((item) => item.kind === kind) ?? false;
 };
 
+type ChatStreamCommand = {
+  __type: "chat.stream_command";
+  command: "enqueue_util_task";
+  utilTask: string;
+  args?: Record<string, unknown>;
+  nonce?: string;
+  system_prompt_ext?: string;
+};
+
+const MAX_UTIL_COMMAND_DEPTH = 3;
+const MAX_UTIL_COMMAND_ENQUEUES = 3;
+const MAX_UTIL_NONCE_HISTORY = 24;
+
+const extractJsonObjectCandidate = (text: string) => {
+  const start = text.indexOf("{");
+  if (start === -1) {
+    return null;
+  }
+
+  let inString = false;
+  let escape = false;
+  let depth = 0;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === "\\") {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+};
+
+const parseChatStreamCommand = (text: string) => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return {
+      command: null as ChatStreamCommand | null,
+      cleanText: text,
+    };
+  }
+
+  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidates = [
+    fencedMatch?.[1] ?? "",
+    trimmed,
+    extractJsonObjectCandidate(trimmed) ?? "",
+  ].filter((value, index, all) => {
+    return value.trim().length > 0 && all.indexOf(value) === index;
+  });
+
+  for (const rawCandidate of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawCandidate.trim());
+    } catch {
+      continue;
+    }
+
+    if (!parsed || typeof parsed !== "object") {
+      continue;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    if (
+      record.__type !== "chat.stream_command" ||
+      record.command !== "enqueue_util_task" ||
+      typeof record.utilTask !== "string"
+    ) {
+      continue;
+    }
+
+    const normalizedArgs =
+      record.args && typeof record.args === "object"
+        ? (record.args as Record<string, unknown>)
+        : undefined;
+    const normalizedNonce =
+      typeof record.nonce === "string" && record.nonce.trim().length > 0
+        ? record.nonce.trim()
+        : undefined;
+    const normalizedSystemPromptExt =
+      typeof record.system_prompt_ext === "string" &&
+      record.system_prompt_ext.trim().length > 0
+        ? record.system_prompt_ext.trim().slice(0, 1000)
+        : undefined;
+
+    const command: ChatStreamCommand = {
+      __type: "chat.stream_command",
+      command: "enqueue_util_task",
+      utilTask: record.utilTask.trim(),
+      ...(normalizedArgs ? { args: normalizedArgs } : {}),
+      ...(normalizedNonce ? { nonce: normalizedNonce } : {}),
+      ...(normalizedSystemPromptExt
+        ? { system_prompt_ext: normalizedSystemPromptExt }
+        : {}),
+    };
+
+    const cleanText = trimmed.replace(rawCandidate.trim(), "").trim();
+    return {
+      command,
+      cleanText,
+    };
+  }
+
+  return {
+    command: null as ChatStreamCommand | null,
+    cleanText: text,
+  };
+};
+const appendUtilCommandNonce = (
+  existing: string[] | undefined,
+  nonce: string | undefined,
+) => {
+  if (!nonce) {
+    return existing ?? [];
+  }
+
+  const normalized = nonce.trim();
+  if (!normalized) {
+    return existing ?? [];
+  }
+
+  const next = [
+    ...(existing ?? []).filter((value) => value !== normalized),
+    normalized,
+  ];
+
+  if (next.length <= MAX_UTIL_NONCE_HISTORY) {
+    return next;
+  }
+
+  return next.slice(next.length - MAX_UTIL_NONCE_HISTORY);
+};
 const finalizeConversationViaStreamTask = ({
   taskId,
   text,
@@ -1530,6 +1689,14 @@ export const executeQueuedChatTask = async (
           continuationIndex: task.payload.continuationIndex ?? 0,
           carryoverText: task.payload.carryoverText,
           carryoverReasoning: task.payload.carryoverReasoning,
+          systemPromptOverride: task.payload.systemPromptOverride,
+          previousResponseIdOverride: task.payload.previousResponseIdOverride,
+          utilTaskName: task.payload.utilTaskName,
+          utilTaskArgs: task.payload.utilTaskArgs,
+          utilSystemPromptExt: task.payload.utilSystemPromptExt,
+          utilCommandDepth: task.payload.utilCommandDepth,
+          utilEnqueueCount: task.payload.utilEnqueueCount,
+          utilCommandNonces: task.payload.utilCommandNonces,
           tasks: [
             {
               id: crypto.randomUUID(),
@@ -1565,6 +1732,7 @@ export const executeQueuedChatTask = async (
 
     let modelTarget = "";
     let userInput: string | LmStudioInputItem[] | null = null;
+    let effectivePreviousResponseId: string | null = null;
 
     if (taskKind === "chat.generate") {
       if (task.payload.kind !== "conversation") {
@@ -1574,12 +1742,17 @@ export const executeQueuedChatTask = async (
         contextLength: requestedContextLength,
         userMessage: task.payload.userMessage,
       });
+      effectivePreviousResponseId =
+        typeof task.payload.previousResponseIdOverride === "string" &&
+        task.payload.previousResponseIdOverride.trim().length > 0
+          ? task.payload.previousResponseIdOverride.trim()
+          : (task.payload.continuationIndex ?? 0) > 0
+            ? null
+            : (thread?.lmstudioResponseId ?? null);
+
       userInput = buildLmStudioInput({
         summary: thread?.conversationSummary ?? null,
-        previousResponseId:
-          (task.payload.continuationIndex ?? 0) > 0
-            ? null
-            : (thread?.lmstudioResponseId ?? null),
+        previousResponseId: effectivePreviousResponseId,
         generatedImages: thread
           ? getGeneratedImagesForThread(thread.messages, generatedImageLimit)
           : [],
@@ -1608,7 +1781,7 @@ export const executeQueuedChatTask = async (
         selectedModelTarget: modelTarget,
         requestedContextLength,
         generatedImageLimit,
-        previousResponseId: thread?.lmstudioResponseId ?? null,
+        previousResponseId: effectivePreviousResponseId,
         loadedModels: formatLoadedLmStudioModelsForDebug(loadedBeforeRequest),
       });
     } else {
@@ -1650,11 +1823,13 @@ export const executeQueuedChatTask = async (
       previousResponseId,
       systemPrompt,
       integrations,
+      forceSystemPrompt,
     }: {
       input: string | LmStudioInputItem[];
       previousResponseId?: string;
       systemPrompt?: string;
       integrations?: ReturnType<typeof buildIntegrations>;
+      forceSystemPrompt?: boolean;
     }) => {
       let response: Response;
       try {
@@ -1671,7 +1846,7 @@ export const executeQueuedChatTask = async (
             context_length: requestedContextLength,
             input,
             previous_response_id: previousResponseId,
-            ...(previousResponseId
+            ...((previousResponseId && !forceSystemPrompt)
               ? {}
               : {
                   system_prompt:
@@ -1900,10 +2075,11 @@ export const executeQueuedChatTask = async (
         }
         stream = await openChatGenerationStream({
           input: userInput,
-          previousResponseId:
-            (task.payload.continuationIndex ?? 0) > 0
-              ? undefined
-              : (thread?.lmstudioResponseId ?? undefined),
+          previousResponseId: effectivePreviousResponseId ?? undefined,
+          systemPrompt: task.payload.systemPromptOverride,
+          forceSystemPrompt:
+            typeof task.payload.systemPromptOverride === "string" &&
+            task.payload.systemPromptOverride.trim().length > 0,
         });
       } catch (error) {
         console.error("[chat-runner] generate:open-stream-failed", {
@@ -2026,6 +2202,14 @@ export const executeQueuedChatTask = async (
           continuationIndex: nextContinuationIndex,
           carryoverText: textWithCompactionMarkers,
           carryoverReasoning: streamedReasoning,
+          systemPromptOverride: task.payload.systemPromptOverride,
+          previousResponseIdOverride: task.payload.previousResponseIdOverride,
+          utilTaskName: task.payload.utilTaskName,
+          utilTaskArgs: task.payload.utilTaskArgs,
+          utilSystemPromptExt: task.payload.utilSystemPromptExt,
+          utilCommandDepth: task.payload.utilCommandDepth,
+          utilEnqueueCount: task.payload.utilEnqueueCount,
+          utilCommandNonces: task.payload.utilCommandNonces,
           tasks: [
             {
               id: crypto.randomUUID(),
@@ -2076,6 +2260,119 @@ export const executeQueuedChatTask = async (
         );
       }
       throw new Error("LM Studio did not return any output.");
+    }
+
+    const parsedCommand = parseChatStreamCommand(text);
+    if (task.payload.kind === "conversation" && parsedCommand.command) {
+      const commandDepth = task.payload.utilCommandDepth ?? 0;
+      const utilEnqueueCount = task.payload.utilEnqueueCount ?? 0;
+      const commandNonce =
+        typeof parsedCommand.command.nonce === "string"
+          ? parsedCommand.command.nonce.trim()
+          : "";
+      const knownNonces = task.payload.utilCommandNonces ?? [];
+
+      if (commandDepth >= MAX_UTIL_COMMAND_DEPTH) {
+        console.info("[chat-runner] util-command:depth-limit", {
+          taskId: task.id,
+          commandDepth,
+          maxDepth: MAX_UTIL_COMMAND_DEPTH,
+        });
+      } else if (utilEnqueueCount >= MAX_UTIL_COMMAND_ENQUEUES) {
+        console.info("[chat-runner] util-command:enqueue-limit", {
+          taskId: task.id,
+          utilEnqueueCount,
+          maxEnqueues: MAX_UTIL_COMMAND_ENQUEUES,
+        });
+      } else if (commandNonce && knownNonces.includes(commandNonce)) {
+        console.info("[chat-runner] util-command:duplicate-nonce", {
+          taskId: task.id,
+          nonce: commandNonce,
+        });
+      } else {
+        const utilTaskName = parsedCommand.command.utilTask.trim();
+        const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
+        if (utilTaskSetting && utilTaskSetting.enabled) {
+          const utilTaskInputText = [
+            `[util_task:${utilTaskName}]`,
+            "Execute the configured utility task prompt.",
+            `Args:\n${JSON.stringify(parsedCommand.command.args ?? {}, null, 2)}`,
+          ].join("\n\n");
+          const utilSystemPromptExt =
+            typeof parsedCommand.command.system_prompt_ext === "string"
+              ? parsedCommand.command.system_prompt_ext.trim()
+              : "";
+          const delegatedSystemPrompt = [
+            utilTaskSetting.prompt,
+            utilSystemPromptExt,
+          ]
+            .filter((value) => value.length > 0)
+            .join("\n\n");
+
+          const nextNonces = appendUtilCommandNonce(
+            knownNonces,
+            commandNonce || undefined,
+          );
+
+          const delegatedTask = enqueueChatTask({
+            kind: "conversation",
+            threadId: task.payload.threadId,
+            promptMode,
+            moodId,
+            persistent: false,
+            contextLength: requestedContextLength,
+            userMessage: [{ type: "text", text: utilTaskInputText }],
+            systemPromptOverride: delegatedSystemPrompt,
+            previousResponseIdOverride: finalResponse?.response_id ?? null,
+            utilTaskName,
+            utilTaskArgs: parsedCommand.command.args,
+            utilSystemPromptExt: utilSystemPromptExt || undefined,
+            utilCommandDepth: commandDepth + 1,
+            utilEnqueueCount: utilEnqueueCount + 1,
+            utilCommandNonces: nextNonces,
+            tasks: [
+              {
+                id: crypto.randomUUID(),
+                kind: "chat.generate",
+                status: "pending",
+              },
+            ],
+          });
+
+          if (hasTaskByKind(task.payload.tasks, "chat.stream")) {
+            transferTaskByKind({
+              fromTaskId: task.id,
+              toTaskId: delegatedTask.id,
+              taskKind: "chat.stream",
+              nextStatus: "pending",
+            });
+          }
+
+          const delegatedText = applyCompactionMarkersToText(
+            parsedCommand.cleanText,
+            inRequestCompactionBreakOffsets,
+          );
+          markTaskCompleted(task.id, {
+            text: delegatedText,
+            reasoning,
+            responseId: finalResponse?.response_id ?? null,
+            summaryCallsInCurrentRequest,
+            delegatedToTaskGroupId: delegatedTask.id,
+          });
+          console.info("[chat-runner] util-command:delegated", {
+            sourceTaskGroupId: task.id,
+            delegatedTaskGroupId: delegatedTask.id,
+            utilTaskName,
+            utilEnqueueCount: utilEnqueueCount + 1,
+          });
+          return;
+        }
+
+        console.info("[chat-runner] util-command:unknown-task", {
+          taskId: task.id,
+          utilTaskName,
+        });
+      }
     }
 
     if (
@@ -2635,3 +2932,4 @@ const maybeEnqueueTitleGenerationTask = (threadId: string) => {
     ),
   });
 };
+
