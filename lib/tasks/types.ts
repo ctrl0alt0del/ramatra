@@ -59,6 +59,7 @@ export type TaskGroupPayloadMap = {
     | {
         kind: "critique";
         threadId: string | null;
+        moodId?: string | null;
         comfyTaskId: string;
         imageIndex: number;
         contextLength?: number;

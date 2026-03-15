@@ -12,6 +12,7 @@ const requestSchema = z.object({
   comfyTaskId: z.string().min(1),
   imageIndex: z.number().int().nonnegative().default(0),
   threadId: z.string().min(1),
+  moodId: z.string().nullable().optional(),
 });
 
 export async function POST(req: Request) {
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
   }
 
   const { comfyTaskId, imageIndex, threadId } = parsed.data;
+  const moodId = parsed.data.moodId?.trim() ? parsed.data.moodId.trim() : null;
   const comfyTask = getTask(comfyTaskId);
   if (!comfyTask || comfyTask.type !== "comfy") {
     return Response.json({ error: "Comfy task not found." }, { status: 404 });
@@ -57,6 +59,7 @@ export async function POST(req: Request) {
   const critiqueTask = enqueueChatTask({
     kind: "critique",
     threadId,
+    moodId,
     comfyTaskId,
     imageIndex,
     contextLength: getConfiguredContextLengthForMode("artist", process.env),
