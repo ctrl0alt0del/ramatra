@@ -1,4 +1,4 @@
-import "server-only";
+﻿import "server-only";
 
 import { formatMessageContentForPrompt } from "@/lib/chat/message-content";
 import { messagePartsContainContextCompactionMarker } from "@/lib/chat/context-compaction-marker";
@@ -33,6 +33,12 @@ const summaryConfigByMode: Record<PromptMode, SummaryConfig> = {
     characterThreshold: 9_000,
     maxSummaryCharacters: 4_500,
     maxTranscriptCharacters: 18_000,
+  },
+  roleplay: {
+    messageThreshold: 8,
+    characterThreshold: 9_500,
+    maxSummaryCharacters: 6_500,
+    maxTranscriptCharacters: 28_000,
   },
   artist: {
     messageThreshold: 8,
@@ -77,6 +83,23 @@ Rules:
 - Use structured sections.
 - Preserve story continuity over brevity, but still compress aggressively.
 - Exclude discarded ideas unless the user explicitly chose them.
+- Do not include chain-of-thought.
+- Output only the summary.`,
+  roleplay: `You are a continuity archivist for long-form interactive roleplay.
+
+Preserve:
+- world setup, universe rules, and canon or alternate-canon choices
+- active characters, roles, relationships, and voice traits
+- each character's goals, motivations, and unresolved tensions
+- scene state: location, time, props, injuries, resources, and stakes
+- chronology of key events and consequences
+- user boundaries and style constraints
+- open hooks and immediate next-scene momentum
+
+Rules:
+- Use structured sections.
+- Prioritize continuity-critical facts over stylistic fluff.
+- Keep enough detail for believable character consistency across long sessions.
 - Do not include chain-of-thought.
 - Output only the summary.`,
   artist: `You compress history into visual working memory for an image assistant.
@@ -381,3 +404,5 @@ export const buildFreshChainInput = ({
     userInput,
   ].join("\n");
 };
+
+

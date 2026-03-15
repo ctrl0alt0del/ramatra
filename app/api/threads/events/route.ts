@@ -1,4 +1,4 @@
-import { listThreads } from "@/lib/lmstudio/threads";
+﻿import { listThreads } from "@/lib/lmstudio/threads";
 import { subscribeToThreadEvents } from "@/lib/threads/event-bus";
 
 export const runtime = "nodejs";
@@ -36,7 +36,12 @@ export async function GET(req: Request) {
         }
 
         lastPayload = serialized;
-        controller.enqueue(formatSseMessage("threads", payload));
+
+        try {
+          controller.enqueue(formatSseMessage("threads", payload));
+        } catch {
+          close();
+        }
       };
 
       const close = () => {
@@ -64,8 +69,14 @@ export async function GET(req: Request) {
       });
 
       const keepAliveId = setInterval(() => {
-        if (!closed) {
+        if (closed) {
+          return;
+        }
+
+        try {
           controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          close();
         }
       }, 15000);
 
@@ -85,3 +96,4 @@ export async function GET(req: Request) {
     },
   });
 }
+

@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+﻿import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -133,7 +133,7 @@ const ensureSchema = (db: Database.Database) => {
     );
 
     CREATE TABLE IF NOT EXISTS prompt_mode_settings (
-      mode TEXT PRIMARY KEY CHECK (mode IN ('fast', 'regular', 'writer', 'artist')),
+      mode TEXT PRIMARY KEY CHECK (mode IN ('fast', 'regular', 'writer', 'roleplay', 'artist')),
       prompt TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -146,6 +146,39 @@ const ensureSchema = (db: Database.Database) => {
       updated_at TEXT NOT NULL
     );
   `);
+
+  const promptModeSettingsSqlRow = db
+    .prepare(
+      `
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'prompt_mode_settings'
+      `,
+    )
+    .get() as { sql: string } | undefined;
+
+  const promptModeSettingsSql = (promptModeSettingsSqlRow?.sql ?? "").toLowerCase();
+  if (
+    promptModeSettingsSql.length > 0 &&
+    !promptModeSettingsSql.includes("'roleplay'")
+  ) {
+    db.exec(`
+      ALTER TABLE prompt_mode_settings RENAME TO prompt_mode_settings_legacy;
+
+      CREATE TABLE prompt_mode_settings (
+        mode TEXT PRIMARY KEY CHECK (mode IN ('fast', 'regular', 'writer', 'roleplay', 'artist')),
+        prompt TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      INSERT INTO prompt_mode_settings (mode, prompt, updated_at)
+      SELECT mode, prompt, updated_at
+      FROM prompt_mode_settings_legacy
+      WHERE mode IN ('fast', 'regular', 'writer', 'artist');
+
+      DROP TABLE prompt_mode_settings_legacy;
+    `);
+  }
 
   db.prepare(
     `
@@ -370,4 +403,6 @@ export const getDb = () => {
   ensureSchema(globalDb.__comfyBridgeDb);
   return globalDb.__comfyBridgeDb;
 };
+
+
 

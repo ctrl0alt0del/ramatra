@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -31,7 +31,11 @@ type MoodSettingsResponse = {
 
 const createMoodId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
+    try {
+      return crypto.randomUUID();
+    } catch {
+      // Some browsers expose randomUUID but block it in non-secure contexts.
+    }
   }
 
   return `mood-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -636,5 +640,6 @@ export function PromptSettingsButton() {
     </>
   );
 }
+
 
 

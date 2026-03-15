@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import {
@@ -14,15 +14,13 @@ const updatePromptsSchema = z.object({
 
 export async function GET() {
   const prompts = listSystemPromptsByMode();
+  const defaults = Object.fromEntries(
+    promptModes.map((mode) => [mode, getDefaultSystemPromptForMode(mode)]),
+  );
 
   return NextResponse.json({
     prompts,
-    defaults: {
-      fast: getDefaultSystemPromptForMode("fast"),
-      regular: getDefaultSystemPromptForMode("regular"),
-      writer: getDefaultSystemPromptForMode("writer"),
-      artist: getDefaultSystemPromptForMode("artist"),
-    },
+    defaults,
     modes: promptModes,
   });
 }

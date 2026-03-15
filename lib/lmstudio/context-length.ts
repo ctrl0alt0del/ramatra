@@ -1,10 +1,11 @@
-import { type PromptMode } from "./prompt-modes";
+﻿import { type PromptMode } from "./prompt-modes";
 
 export const defaultContextLengthByMode: Record<PromptMode, number> = {
   fast: 4_096,
   regular: 16_384,
   artist: 16_384,
   writer: 65_536,
+  roleplay: 65_536,
 };
 
 export const getDefaultContextLengthForMode = (mode: PromptMode) => {

@@ -1,4 +1,4 @@
-import { getComfyTaskView } from "@/lib/tasks/comfy-task-view";
+﻿import { getComfyTaskView } from "@/lib/tasks/comfy-task-view";
 import { subscribeToTaskEvent } from "@/lib/tasks/event-bus";
 import { processTaskQueues } from "@/lib/tasks/processor";
 
@@ -14,7 +14,7 @@ const formatSseMessage = (event: string, data: unknown) => {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 };
 
-export async function GET(_req: Request, context: RouteContext) {
+export async function GET(req: Request, context: RouteContext) {
   const { taskId } = await context.params;
   const initialView = getComfyTaskView(taskId);
 
@@ -35,55 +35,119 @@ export async function GET(_req: Request, context: RouteContext) {
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(formatSseMessage("task", initialView));
-
-      const emitCurrentView = () => {
-        const view = getComfyTaskView(taskId);
-        if (!view) return;
-
-        controller.enqueue(formatSseMessage("task", view));
-
-        if (view.status === "completed" || view.status === "failed") {
-          cleanup();
-          controller.close();
-        }
-      };
-
-      const unsubscribers = [
-        subscribeToTaskEvent("task:queued", ({ task }) => {
-          if (task.id === taskId) emitCurrentView();
-        }),
-        subscribeToTaskEvent("task:started", ({ task }) => {
-          if (task.id === taskId) emitCurrentView();
-        }),
-        subscribeToTaskEvent("task:updated", ({ task }) => {
-          if (task.id === taskId) emitCurrentView();
-        }),
-        subscribeToTaskEvent("task:completed", ({ task }) => {
-          if (task.id === taskId) emitCurrentView();
-        }),
-        subscribeToTaskEvent("task:failed", ({ task }) => {
-          if (task.id === taskId) emitCurrentView();
-        }),
-        subscribeToTaskEvent("task:cancelled", ({ task }) => {
-          if (task.id === taskId) emitCurrentView();
-        }),
-      ];
-
-      const keepAliveId = setInterval(() => {
-        controller.enqueue(encoder.encode(": keepalive\n\n"));
-      }, 15000);
+      let closed = false;
+      const unsubscribers: Array<() => void> = [];
+      let keepAliveId: ReturnType<typeof setInterval> | null = null;
 
       const cleanup = () => {
-        clearInterval(keepAliveId);
+        if (keepAliveId) {
+          clearInterval(keepAliveId);
+          keepAliveId = null;
+        }
+
         for (const unsubscribe of unsubscribers) {
           unsubscribe();
         }
+        unsubscribers.length = 0;
       };
 
-      if (initialView.status === "completed" || initialView.status === "failed") {
+      const close = () => {
+        if (closed) {
+          return;
+        }
+
+        closed = true;
         cleanup();
-        controller.close();
+
+        try {
+          controller.close();
+        } catch {
+          // Stream may already be closed.
+        }
+      };
+
+      const safeEnqueue = (chunk: Uint8Array) => {
+        if (closed) {
+          return false;
+        }
+
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          close();
+          return false;
+        }
+      };
+
+      const emitCurrentView = () => {
+        const view = getComfyTaskView(taskId);
+        if (!view) {
+          return;
+        }
+
+        if (!safeEnqueue(formatSseMessage("task", view))) {
+          return;
+        }
+
+        if (view.status === "completed" || view.status === "failed") {
+          close();
+        }
+      };
+
+      safeEnqueue(formatSseMessage("task", initialView));
+
+      unsubscribers.push(
+        subscribeToTaskEvent("task:queued", ({ task }) => {
+          if (task.id === taskId) {
+            emitCurrentView();
+          }
+        }),
+      );
+      unsubscribers.push(
+        subscribeToTaskEvent("task:started", ({ task }) => {
+          if (task.id === taskId) {
+            emitCurrentView();
+          }
+        }),
+      );
+      unsubscribers.push(
+        subscribeToTaskEvent("task:updated", ({ task }) => {
+          if (task.id === taskId) {
+            emitCurrentView();
+          }
+        }),
+      );
+      unsubscribers.push(
+        subscribeToTaskEvent("task:completed", ({ task }) => {
+          if (task.id === taskId) {
+            emitCurrentView();
+          }
+        }),
+      );
+      unsubscribers.push(
+        subscribeToTaskEvent("task:failed", ({ task }) => {
+          if (task.id === taskId) {
+            emitCurrentView();
+          }
+        }),
+      );
+      unsubscribers.push(
+        subscribeToTaskEvent("task:cancelled", ({ task }) => {
+          if (task.id === taskId) {
+            emitCurrentView();
+          }
+        }),
+      );
+
+      keepAliveId = setInterval(() => {
+        safeEnqueue(encoder.encode(": keepalive\n\n"));
+      }, 15000);
+
+      req.signal.addEventListener("abort", close, { once: true });
+
+      if (initialView.status === "completed" || initialView.status === "failed") {
+        close();
       }
     },
   });

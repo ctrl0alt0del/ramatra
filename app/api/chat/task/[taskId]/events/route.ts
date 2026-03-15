@@ -1,4 +1,4 @@
-import {
+﻿import {
   getChatTaskView,
   resolveChatTaskGroupIdByStreamTaskId,
 } from "@/lib/tasks/chat-task-view";
@@ -17,7 +17,7 @@ const formatSseMessage = (event: string, data: unknown) => {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 };
 
-export async function GET(_req: Request, context: RouteContext) {
+export async function GET(req: Request, context: RouteContext) {
   const { taskId } = await context.params;
   const ownerTaskId = resolveChatTaskGroupIdByStreamTaskId(taskId) ?? taskId;
   const getView = () => {
@@ -50,67 +50,119 @@ export async function GET(_req: Request, context: RouteContext) {
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(formatSseMessage("task", initialView));
+      let closed = false;
+      const unsubscribers: Array<() => void> = [];
+      let keepAliveId: ReturnType<typeof setInterval> | null = null;
 
-      const emitCurrentView = () => {
-        const view = getView();
-        if (!view) return;
+      const cleanup = () => {
+        if (keepAliveId) {
+          clearInterval(keepAliveId);
+          keepAliveId = null;
+        }
 
-        controller.enqueue(formatSseMessage("task", view));
+        for (const unsubscribe of unsubscribers) {
+          unsubscribe();
+        }
+        unsubscribers.length = 0;
+      };
 
-        if (view.status === "completed" || view.status === "failed") {
-          cleanup();
+      const close = () => {
+        if (closed) {
+          return;
+        }
+
+        closed = true;
+        cleanup();
+
+        try {
           controller.close();
+        } catch {
+          // Stream may already be closed.
         }
       };
 
-      const unsubscribers = [
+      const safeEnqueue = (chunk: Uint8Array) => {
+        if (closed) {
+          return false;
+        }
+
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          close();
+          return false;
+        }
+      };
+
+      const emitCurrentView = () => {
+        const view = getView();
+        if (!view) {
+          return;
+        }
+
+        if (!safeEnqueue(formatSseMessage("task", view))) {
+          return;
+        }
+
+        if (view.status === "completed" || view.status === "failed") {
+          close();
+        }
+      };
+
+      safeEnqueue(formatSseMessage("task", initialView));
+
+      unsubscribers.push(
         subscribeToTaskEvent("task:queued", ({ task }) => {
           if (task.id === ownerTaskId) {
             emitCurrentView();
           }
         }),
+      );
+      unsubscribers.push(
         subscribeToTaskEvent("task:started", ({ task }) => {
           if (task.id === ownerTaskId) {
             emitCurrentView();
           }
         }),
+      );
+      unsubscribers.push(
         subscribeToTaskEvent("task:updated", ({ task }) => {
           if (task.id === ownerTaskId) {
             emitCurrentView();
           }
         }),
+      );
+      unsubscribers.push(
         subscribeToTaskEvent("task:completed", ({ task }) => {
           if (task.id === ownerTaskId) {
             emitCurrentView();
           }
         }),
+      );
+      unsubscribers.push(
         subscribeToTaskEvent("task:failed", ({ task }) => {
           if (task.id === ownerTaskId) {
             emitCurrentView();
           }
         }),
+      );
+      unsubscribers.push(
         subscribeToTaskEvent("task:cancelled", ({ task }) => {
           if (task.id === ownerTaskId) {
             emitCurrentView();
           }
         }),
-      ];
+      );
 
-      const keepAliveId = setInterval(() => {
-        controller.enqueue(encoder.encode(": keepalive\n\n"));
+      keepAliveId = setInterval(() => {
+        safeEnqueue(encoder.encode(": keepalive\n\n"));
       }, 15000);
 
-      const cleanup = () => {
-        clearInterval(keepAliveId);
-        for (const unsubscribe of unsubscribers) {
-          unsubscribe();
-        }
-      };
+      req.signal.addEventListener("abort", close, { once: true });
 
       if (initialView.status === "completed" || initialView.status === "failed") {
-        cleanup();
-        controller.close();
+        close();
       }
     },
   });

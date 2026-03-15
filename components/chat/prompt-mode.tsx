@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import * as Select from "@radix-ui/react-select";
-import { Check, ChevronDown, Image, Pencil, Sparkles, Zap } from "lucide-react";
+import { Check, ChevronDown, Image, Pencil, Sparkles, Users, Zap } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useThread } from "@assistant-ui/react";
 
@@ -30,6 +30,7 @@ const promptModeIcons: Record<PromptMode, typeof Zap> = {
   fast: Zap,
   regular: Sparkles,
   writer: Pencil,
+  roleplay: Users,
   artist: Image,
 };
 
@@ -145,3 +146,5 @@ function PromptModeOption({
     </Select.Item>
   );
 }
+
+
