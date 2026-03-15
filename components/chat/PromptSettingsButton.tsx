@@ -38,6 +38,7 @@ const createMoodId = () => {
 };
 
 export function PromptSettingsButton() {
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [activeTab, setActiveTab] = useState<"modes" | "moods">("modes");
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -50,6 +51,23 @@ export function PromptSettingsButton() {
   const [moods, setMoods] = useState<EditableMood[] | null>(null);
   const [expandedMode, setExpandedMode] = useState<PromptMode | null>(null);
   const expandedTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const media = window.matchMedia("(max-width: 767px)");
+    const apply = () => {
+      setIsMobileViewport(media.matches);
+    };
+
+    apply();
+    media.addEventListener("change", apply);
+    return () => {
+      media.removeEventListener("change", apply);
+    };
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -327,14 +345,14 @@ export function PromptSettingsButton() {
   };
 
   const modal = (
-    <div className="fixed inset-0 z-[70]">
+    <div className="fixed inset-0 z-[70] pointer-events-none">
       <button
         type="button"
         aria-label="Close settings overlay"
         onClick={() => setOpen(false)}
-        className="absolute inset-0 z-0 bg-[#1d1738]/35 backdrop-blur-sm"
+        className="pointer-events-auto absolute inset-0 z-0 bg-[#1d1738]/35 backdrop-blur-sm"
       />
-      <div className="absolute inset-0 z-10 h-[100dvh] w-full overflow-hidden border-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,239,255,0.98)_100%)] outline-none md:left-1/2 md:top-1/2 md:h-[min(88vh,860px)] md:w-[min(960px,94vw)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[28px] md:border md:border-white/70 md:shadow-[0_28px_80px_rgba(37,28,86,0.3)]">
+      <div className="pointer-events-auto absolute inset-0 z-10 h-[100dvh] w-full overflow-hidden border-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(244,239,255,0.98)_100%)] outline-none md:left-1/2 md:top-1/2 md:h-[min(88vh,860px)] md:w-[min(960px,94vw)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-[28px] md:border md:border-white/70 md:shadow-[0_28px_80px_rgba(37,28,86,0.3)]">
         <Tabs.Root
           value={activeTab}
           onValueChange={(value) => {
@@ -611,9 +629,12 @@ export function PromptSettingsButton() {
       </button>
 
       {open && typeof document !== "undefined"
-        ? createPortal(modal, document.body)
+        ? isMobileViewport
+          ? modal
+          : createPortal(modal, document.body)
         : null}
     </>
   );
 }
+
 

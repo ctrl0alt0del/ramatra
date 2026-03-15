@@ -234,8 +234,18 @@ main {
   padding-bottom: 0.65rem;
 }
 
+.aui-assistant-message-content,
+.aui-user-message-content {
+  display: block;
+  inline-size: 100% !important;
+  max-inline-size: 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 .aui-assistant-message-content {
-  max-width: min(calc(var(--aui-thread-max-width) * 0.88), 100%);
   padding: 1rem 1.1rem;
   border: 1px solid rgba(255, 255, 255, 0.7);
   border-radius: 1.65rem;
@@ -248,6 +258,12 @@ main {
   border-radius: 1.65rem;
   background: linear-gradient(135deg, rgba(143, 131, 255, 0.18), rgba(212, 200, 255, 0.46));
   box-shadow: 0 14px 32px rgba(73, 56, 145, 0.08);
+}
+
+.aui-assistant-message-content > *,
+.aui-user-message-content > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .aui-avatar-root {
@@ -287,11 +303,21 @@ main {
   background: linear-gradient(135deg, rgba(127, 116, 255, 0.18), rgba(255, 255, 255, 0.96));
 }
 
+.aui-text {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.aui-text table,
+.aui-text pre,
+.aui-text code {
+  max-width: 100%;
+}
 
 .aui-text table {
   display: block;
-  max-width: 100%;
   width: max-content;
+  min-width: 100%;
   max-height: 28rem;
   overflow-x: auto;
   overflow-y: auto;
@@ -302,6 +328,11 @@ main {
 .aui-text table tbody {
   white-space: nowrap;
 }
+
+.aui-text pre {
+  overflow-x: auto;
+}
+
 .katex {
   font-size: 1.05em;
 }
@@ -373,3 +404,84 @@ main {
 }
 
 
+/* Wide markdown should scroll inside the bubble instead of resizing it */
+.aui-assistant-message-content,
+.aui-user-message-content {
+  display: block;
+  inline-size: 100% !important;
+  max-inline-size: 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.aui-assistant-message-root {
+  grid-template-columns: auto minmax(0, var(--aui-bubble-inline-size)) minmax(0, 1fr);
+}
+
+.aui-assistant-message-content {
+  justify-self: start;
+}
+
+.aui-user-message-content {
+  justify-self: end;
+}
+
+
+/* Final bubble-width lock for mobile+desktop */
+:where(.aui-root) {
+  --aui-bubble-inline-size: min(calc(var(--aui-thread-max-width) * 0.82), calc(100vw - 7.5rem));
+}
+
+.aui-assistant-message-root {
+  grid-template-columns: auto minmax(0, var(--aui-bubble-inline-size)) minmax(0, 1fr);
+}
+
+.aui-assistant-message-content {
+  grid-column: 2 / 3;
+  justify-self: stretch;
+}
+
+.aui-user-message-content {
+  justify-self: stretch;
+}
+
+.aui-assistant-message-content,
+.aui-user-message-content {
+  inline-size: 100% !important;
+  max-inline-size: 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.aui-md-table,
+.aui-text table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.aui-md-pre,
+.aui-text pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Keep assistant action buttons inside message bubble width column */
+.aui-assistant-action-bar-root {
+  grid-column: 2 / 3 !important;
+  justify-self: stretch;
+  inline-size: 100%;
+  max-inline-size: var(--aui-bubble-inline-size);
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 !important;
+  margin-inline: 0 !important;
+}
