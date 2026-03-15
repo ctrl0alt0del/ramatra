@@ -1,4 +1,4 @@
-import {
+﻿import {
   formatMessageContentForPrompt,
   getTextFromMessageContent,
   type MessagePart,
@@ -160,6 +160,111 @@ const getChatModelKey = () => {
 const isLmStudioModelDebugEnabled = () =>
   process.env.LM_STUDIO_DEBUG_MODEL_ROUTING === "true";
 
+const TOOL_STREAM_LOG_PREVIEW_CHARS = 800;
+
+const truncateForLog = (value: string, maxChars = TOOL_STREAM_LOG_PREVIEW_CHARS) => {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  return `${value.slice(0, maxChars)}... [truncated ${value.length - maxChars} chars]`;
+};
+
+const isLikelyToolStreamEvent = (
+  eventType: string,
+  data: Record<string, unknown>,
+) => {
+  const normalizedType = eventType.toLowerCase();
+  if (normalizedType.includes("tool") || normalizedType.includes("mcp")) {
+    return true;
+  }
+
+  const keys = Object.keys(data).map((key) => key.toLowerCase());
+  return keys.some((key) => {
+    return (
+      key.includes("tool") ||
+      key.includes("mcp") ||
+      key.includes("call") ||
+      key.includes("arguments") ||
+      key.includes("result")
+    );
+  });
+};
+
+const logToolStreamEvent = ({
+  taskId,
+  threadId,
+  eventType,
+  data,
+}: {
+  taskId: string;
+  threadId: string | null;
+  eventType: string;
+  data: Record<string, unknown>;
+}) => {
+  if (!isLikelyToolStreamEvent(eventType, data)) {
+    return;
+  }
+
+  let serialized = "";
+  try {
+    serialized = JSON.stringify(data);
+  } catch {
+    serialized = "[unserializable payload]";
+  }
+
+  console.info("[chat-runner] stream:tool-event", {
+    taskId,
+    threadId,
+    eventType,
+    payloadKeys: Object.keys(data),
+    payloadPreview: truncateForLog(serialized),
+  });
+};
+const MAX_TOOL_EVENTS_FOR_INTERRUPTION = 24;
+const MAX_TOOL_EVENT_PREVIEW_CHARS = 1_200;
+const MAX_TOOL_TRANSCRIPT_CHARS = 20_000;
+
+type ToolEventSnapshot = {
+  eventType: string;
+  payloadKeys: string[];
+  payloadPreview: string;
+};
+
+const toToolEventSnapshot = (
+  eventType: string,
+  data: Record<string, unknown>,
+): ToolEventSnapshot => {
+  let serialized = "";
+  try {
+    serialized = JSON.stringify(data);
+  } catch {
+    serialized = "[unserializable payload]";
+  }
+
+  return {
+    eventType,
+    payloadKeys: Object.keys(data),
+    payloadPreview: truncateForLog(serialized, MAX_TOOL_EVENT_PREVIEW_CHARS),
+  };
+};
+
+const formatToolTranscriptForInterruption = (events: ToolEventSnapshot[]) => {
+  if (!events.length) {
+    return "";
+  }
+
+  const lines = events.map((event, index) => {
+    const keys = event.payloadKeys.join(", ");
+    return [
+      `${index + 1}. ${event.eventType}`,
+      `keys: ${keys || "(none)"}`,
+      `payload: ${event.payloadPreview}`,
+    ].join("\n");
+  });
+
+  return truncateForLog(lines.join("\n\n"), MAX_TOOL_TRANSCRIPT_CHARS);
+};
 const logChatModelDebug = (phase: string, payload: Record<string, unknown>) => {
   if (!isLmStudioModelDebugEnabled()) {
     return;
@@ -416,6 +521,7 @@ const collapseThreadContext = async ({
     interruptedAssistantTailChars?: string;
     interruptedAssistantFullText?: string;
     interruptionContext?: string;
+    toolEventsTranscript?: string;
   };
 }) => {
   const thread = getThread(threadId);
@@ -490,6 +596,7 @@ const maybeAutoCompactThreadContext = async ({
     interruptedAssistantTailChars?: string;
     interruptedAssistantFullText?: string;
     interruptionContext?: string;
+    toolEventsTranscript?: string;
   };
   force?: boolean;
 }) => {
@@ -576,6 +683,7 @@ const buildIntegrations = (promptMode: PromptMode) => {
 const parseSseEvents = async (
   stream: ReadableStream<Uint8Array>,
   onEvent: (event: ChatStreamEvent) => void,
+  onRawEvent?: (eventType: string, data: Record<string, unknown>) => void,
 ) => {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -601,6 +709,7 @@ const parseSseEvents = async (
     }
 
     const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+    onRawEvent?.(eventType, data);
     onEvent({
       type: eventType,
       ...(data as object),
@@ -1090,61 +1199,89 @@ export const executeQueuedChatTask = async (
       overflowDetected: boolean;
       usedTokens: number | null;
       finalResponse: ChatResponse | null;
+      toolEventsTranscript: string;
     }> => {
       let localStreamedText = "";
       let localStreamedReasoning = "";
       let localFinalResponse: ChatResponse | null = null;
       let localStreamErrorMessage: string | null = null;
+      const localToolEvents: ToolEventSnapshot[] = [];
 
       try {
-        await parseSseEvents(stream, (event) => {
-          if (
-            event.type === "reasoning.delta" &&
-            typeof event.content === "string"
-          ) {
-            localStreamedReasoning += event.content;
-            streamedReasoning += event.content;
-            publishRunningResult(localFinalResponse?.response_id ?? null);
-            return;
-          }
+        await parseSseEvents(
+          stream,
+          (event) => {
+            if (
+              event.type === "reasoning.delta" &&
+              typeof event.content === "string"
+            ) {
+              localStreamedReasoning += event.content;
+              streamedReasoning += event.content;
+              publishRunningResult(localFinalResponse?.response_id ?? null);
+              return;
+            }
 
-          if (
-            event.type === "message.delta" &&
-            typeof event.content === "string"
-          ) {
-            localStreamedText += event.content;
-            streamedText += event.content;
-            publishRunningResult(localFinalResponse?.response_id ?? null);
-            return;
-          }
+            if (
+              event.type === "message.delta" &&
+              typeof event.content === "string"
+            ) {
+              localStreamedText += event.content;
+              streamedText += event.content;
+              publishRunningResult(localFinalResponse?.response_id ?? null);
+              return;
+            }
 
-          if (event.type === "error") {
-            console.error("[chat-runner] stream:error-event", {
+            if (event.type === "error") {
+              console.error("[chat-runner] stream:error-event", {
+                taskId: task.id,
+                threadId: task.payload.threadId ?? null,
+                selectedModelTarget: modelTarget,
+                event,
+              });
+              throw new Error(
+                event.error?.message ?? "LM Studio streaming error.",
+              );
+            }
+
+            if (event.type === "chat.end") {
+              localFinalResponse = event.result;
+              const outputTypes = (event.result.output ?? []).map((part) => part.type);
+              if (outputTypes.length > 0) {
+                console.info("[chat-runner] stream:chat-end-output", {
+                  taskId: task.id,
+                  threadId: task.payload.threadId ?? null,
+                  outputTypes,
+                });
+              }
+              const signals = getChatStopSignals(event.result);
+              logChatModelDebug("request:end", {
+                taskId: task.id,
+                threadId: thread?.id ?? null,
+                selectedModelTarget: modelTarget,
+                responseId: event.result.response_id ?? null,
+                responseModelInstanceId: event.result.model_instance_id ?? null,
+                stopReason: signals.stopReason,
+                finishReason: signals.finishReason,
+                usage: event.result.usage ?? null,
+              });
+            }
+          },
+          (eventType, data) => {
+            logToolStreamEvent({
               taskId: task.id,
               threadId: task.payload.threadId ?? null,
-              selectedModelTarget: modelTarget,
-              event,
+              eventType,
+              data,
             });
-            throw new Error(
-              event.error?.message ?? "LM Studio streaming error.",
-            );
-          }
 
-          if (event.type === "chat.end") {
-            localFinalResponse = event.result;
-            const signals = getChatStopSignals(event.result);
-            logChatModelDebug("request:end", {
-              taskId: task.id,
-              threadId: thread?.id ?? null,
-              selectedModelTarget: modelTarget,
-              responseId: event.result.response_id ?? null,
-              responseModelInstanceId: event.result.model_instance_id ?? null,
-              stopReason: signals.stopReason,
-              finishReason: signals.finishReason,
-              usage: event.result.usage ?? null,
-            });
-          }
-        });
+            if (isLikelyToolStreamEvent(eventType, data)) {
+              localToolEvents.push(toToolEventSnapshot(eventType, data));
+              if (localToolEvents.length > MAX_TOOL_EVENTS_FOR_INTERRUPTION) {
+                localToolEvents.shift();
+              }
+            }
+          },
+        );
       } catch (error) {
         localStreamErrorMessage =
           error instanceof Error ? error.message : "LM Studio streaming error.";
@@ -1201,6 +1338,7 @@ export const executeQueuedChatTask = async (
         overflowDetected,
         usedTokens,
         finalResponse: resolvedFinalResponse,
+        toolEventsTranscript: formatToolTranscriptForInterruption(localToolEvents),
       };
     };
 
@@ -1209,6 +1347,7 @@ export const executeQueuedChatTask = async (
           overflowDetected: boolean;
           usedTokens: number | null;
           finalResponse: ChatResponse | null;
+          toolEventsTranscript: string;
         }
       | null = null;
 
@@ -1323,6 +1462,7 @@ export const executeQueuedChatTask = async (
             overflowDetected
               ? "The assistant response was interrupted during generation near context limit. Resume from this checkpoint, continue forward only, and avoid repeating already emitted items."
               : "The assistant response reached context capacity and requires continuation. Resume from this checkpoint, continue forward only, and avoid repeating already emitted items.",
+          toolEventsTranscript: initialAttempt?.toolEventsTranscript,
         },
       });
       const textWithCompactionMarkers = [
@@ -1588,6 +1728,7 @@ const executeQueuedCollapseContextTask = async (
     interruptedAssistantTailChars?: string;
     interruptedAssistantFullText?: string;
     interruptionContext?: string;
+    toolEventsTranscript?: string;
   },
 ) => {
   const thread = getThread(threadId);
@@ -1797,6 +1938,19 @@ const maybeEnqueueTitleGenerationTask = (threadId: string) => {
     ),
   });
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

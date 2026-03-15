@@ -258,6 +258,7 @@ export const generateConversationSummary = async ({
     interrupted: boolean;
     interruptedAssistantTailChars?: string;
     interruptionContext?: string;
+    toolEventsTranscript?: string;
   };
 }) => {
   if (!messages.length) {
@@ -307,6 +308,9 @@ export const generateConversationSummary = async ({
           interruption.interruptedAssistantTailChars?.trim()
             ? `Interrupted assistant output tail:\n${interruption.interruptedAssistantTailChars.trim()}`
             : "Interrupted assistant output tail:\n(none)",
+          interruption.toolEventsTranscript?.trim()
+            ? `Tool execution transcript during interruption:\n${interruption.toolEventsTranscript.trim()}`
+            : "Tool execution transcript during interruption:\n(none)",
         ].join("\n")
       : null;
 
@@ -404,5 +408,8 @@ export const buildFreshChainInput = ({
     userInput,
   ].join("\n");
 };
+
+
+
 
 

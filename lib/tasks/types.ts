@@ -1,4 +1,4 @@
-import type { MessagePart } from "@/lib/chat/message-content";
+﻿import type { MessagePart } from "@/lib/chat/message-content";
 
 export const taskGroupTypes = ["chat", "comfy"] as const;
 export type TaskGroupType = (typeof taskGroupTypes)[number];
@@ -69,6 +69,7 @@ export type TaskGroupPayloadMap = {
           interruptedAssistantTailChars?: string;
           interruptedAssistantFullText?: string;
           interruptionContext?: string;
+          toolEventsTranscript?: string;
         };
         tasks?: Task[];
       };
@@ -153,5 +154,6 @@ export type TaskEventMap = {
   "queue:changed": SchedulerSnapshot;
   "gpu:changed": SchedulerSnapshot;
 };
+
 
 
