@@ -106,19 +106,15 @@ body::after {
     backdrop-filter: none;
     background: linear-gradient(180deg, rgba(250, 247, 255, 0.7) 0%, rgba(250, 247, 255, 0.92) 100%);
   }
-
-  .aui-root,
-  .aui-root * {
-    -webkit-backdrop-filter: none !important;
-    backdrop-filter: none !important;
-  }
-
+  .aui-thread-viewport-footer,
   .aui-composer-root,
   .aui-assistant-message-content,
   .aui-user-message-content,
   .aui-thread-welcome-message,
   .aui-avatar-root,
   .aui-thread-list-new {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
     box-shadow: none !important;
   }
 }
@@ -375,4 +371,5 @@ main {
     border-radius: 1.35rem;
   }
 }
+
 
