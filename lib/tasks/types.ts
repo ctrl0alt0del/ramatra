@@ -44,6 +44,7 @@ export type TaskGroupPayloadMap = {
         kind: "conversation";
         threadId: string | null;
         promptMode: string;
+        moodId?: string | null;
         contextLength?: number;
         userMessage: MessagePart[];
         continuationIndex?: number;
@@ -61,6 +62,7 @@ export type TaskGroupPayloadMap = {
         kind: "collapse_context";
         threadId: string;
         promptMode: string;
+        moodId?: string | null;
         contextLength?: number;
         interruption?: {
           interrupted: boolean;
@@ -151,3 +153,5 @@ export type TaskEventMap = {
   "queue:changed": SchedulerSnapshot;
   "gpu:changed": SchedulerSnapshot;
 };
+
+

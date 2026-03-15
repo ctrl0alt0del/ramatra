@@ -20,6 +20,7 @@ import { ContextCompactionDivider } from "./ContextCompactionDivider";
 import { CustomThreadListItem } from "./CustomThreadListItem";
 import { CustomUserMessage } from "./CustomUserMessage";
 import { ManagedComposer } from "./ManagedComposer";
+import { MoodSelect } from "./mood";
 import { PromptModeSelect } from "./prompt-mode";
 import { PromptSettingsButton } from "./PromptSettingsButton";
 import { SystemStateProvider } from "./system-state";
@@ -195,8 +196,9 @@ function ChatWorkspace() {
                 </div>
               </div>
 
-              <div className="hidden md:block md:w-[15rem] lg:w-[16rem]">
+              <div className="hidden md:flex md:w-[15rem] md:flex-col md:gap-2 lg:w-[16rem]">
                 <PromptModeSelect />
+                <MoodSelect />
               </div>
             </div>
 
@@ -234,8 +236,9 @@ function ChatWorkspace() {
               </div>
             </div>
 
-            <div className="mt-3 md:hidden">
+            <div className="mt-3 space-y-2 md:hidden">
               <PromptModeSelect />
+              <MoodSelect />
             </div>
 
             {monitor.data?.queue.lastError ? (
@@ -441,3 +444,5 @@ function SidebarPanel({
     </div>
   );
 }
+
+

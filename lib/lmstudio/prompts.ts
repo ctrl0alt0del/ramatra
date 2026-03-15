@@ -2,6 +2,7 @@ import "server-only";
 
 import { getDb } from "@/lib/db";
 
+import { getMoodPromptById } from "./moods";
 import { promptModes, type PromptMode } from "./prompt-modes";
 
 const fastPrompt = `You are a fast text-only assistant.
@@ -462,3 +463,28 @@ export const getSystemPromptForMode = (mode: PromptMode) => {
   return prompt?.length ? prompt : promptsByMode[mode];
 };
 
+
+
+export const getMoodPromptForChat = (moodId: string | null | undefined) => {
+  const moodPrompt = getMoodPromptById(moodId);
+  if (!moodPrompt) {
+    return null;
+  }
+
+  return [
+    "Mood overlay: apply the following style to this response while preserving all existing safety and task rules.",
+    moodPrompt,
+  ].join("\n\n");
+};
+
+export const composeSystemPrompt = ({
+  mode,
+  moodId,
+}: {
+  mode: PromptMode;
+  moodId?: string | null;
+}) => {
+  return [getSystemPromptForMode(mode), getMoodPromptForChat(moodId)]
+    .filter((part): part is string => Boolean(part && part.trim().length > 0))
+    .join("\n\n");
+};

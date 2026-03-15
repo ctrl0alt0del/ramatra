@@ -24,7 +24,7 @@ import {
   isPromptMode,
   type PromptMode,
 } from "@/lib/lmstudio/prompt-modes";
-import { getSystemPromptForMode } from "@/lib/lmstudio/prompts";
+import { composeSystemPrompt } from "@/lib/lmstudio/prompts";
 import {
   buildFreshChainInput,
   generateConversationSummary,
@@ -746,6 +746,10 @@ export const executeQueuedChatTask = async (
       task.payload.promptMode && isPromptMode(task.payload.promptMode)
         ? task.payload.promptMode
         : defaultPromptMode;
+    const moodId =
+      task.payload.kind === "conversation"
+        ? (task.payload.moodId ?? null)
+        : null;
 
     const shouldResetPromptState =
       taskKind === "chat.generate" &&
@@ -879,12 +883,14 @@ export const executeQueuedChatTask = async (
           kind: "collapse_context",
           threadId: task.payload.threadId,
           promptMode,
+          moodId,
           contextLength: requestedContextLength * 2,
         });
         const continuationTask = enqueueChatTask({
           kind: "conversation",
           threadId: task.payload.threadId,
           promptMode,
+          moodId,
           contextLength: requestedContextLength,
           userMessage: task.payload.userMessage,
           continuationIndex: task.payload.continuationIndex ?? 0,
@@ -1025,7 +1031,10 @@ export const executeQueuedChatTask = async (
             context_length: requestedContextLength,
             input,
             previous_response_id: previousResponseId,
-            system_prompt: getSystemPromptForMode(promptMode),
+            system_prompt: composeSystemPrompt({
+              mode: promptMode,
+              moodId,
+            }),
             integrations: buildIntegrations(promptMode),
             stream: true,
           }),
@@ -1304,6 +1313,7 @@ export const executeQueuedChatTask = async (
         kind: "collapse_context",
         threadId: task.payload.threadId,
         promptMode,
+        moodId,
         contextLength: requestedContextLength * 2,
         interruption: {
           interrupted: true,
@@ -1326,6 +1336,7 @@ export const executeQueuedChatTask = async (
         kind: "conversation",
         threadId: task.payload.threadId,
         promptMode,
+        moodId,
         contextLength: requestedContextLength,
         userMessage: task.payload.userMessage,
         continuationIndex: nextContinuationIndex,
@@ -1429,6 +1440,7 @@ export const executeQueuedChatTask = async (
           kind: "collapse_context",
           threadId: task.payload.threadId,
           promptMode,
+          moodId,
           contextLength: requestedContextLength * 2,
         });
         console.info("[chat-runner] summary:triggered", {
@@ -1785,3 +1797,8 @@ const maybeEnqueueTitleGenerationTask = (threadId: string) => {
     ),
   });
 };
+
+
+
+
+

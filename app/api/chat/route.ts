@@ -32,6 +32,7 @@ const requestSchema = z.object({
   messages: z.array(messageSchema),
   threadId: z.string().optional(),
   promptMode: z.string().optional(),
+  moodId: z.string().nullable().optional(),
 });
 
 const toChatMessages = (messages: Array<z.infer<typeof messageSchema>>) => {
@@ -121,10 +122,13 @@ export async function POST(req: Request) {
     }
   }
 
+  const moodId = parsed.data.moodId?.trim() ? parsed.data.moodId.trim() : null;
+
   const task = enqueueChatTask({
     kind: "conversation",
     threadId: thread.id,
     promptMode,
+    moodId,
     contextLength: getConfiguredContextLengthForMode(promptMode, process.env),
     userMessage: latestUserMessage.content,
   });
@@ -146,3 +150,6 @@ export async function POST(req: Request) {
     { status: 202 },
   );
 }
+
+
+

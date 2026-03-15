@@ -137,6 +137,14 @@ const ensureSchema = (db: Database.Database) => {
       prompt TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS mood_settings (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   db.prepare(
@@ -362,3 +370,4 @@ export const getDb = () => {
   ensureSchema(globalDb.__comfyBridgeDb);
   return globalDb.__comfyBridgeDb;
 };
+

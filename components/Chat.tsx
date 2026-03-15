@@ -7,12 +7,14 @@ import {
   PromptModeProvider,
   usePromptMode,
 } from "./chat/prompt-mode";
+import { MoodProvider, useMood } from "./chat/mood";
 import { usePersistedRuntime } from "./chat/runtime";
 import { ThreadEventsProvider } from "./chat/thread-events";
 
 function ChatShell() {
   const { mode } = usePromptMode();
-  const runtime = usePersistedRuntime(mode);
+  const { moodId } = useMood();
+  const runtime = usePersistedRuntime(mode, moodId);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -26,7 +28,10 @@ function ChatShell() {
 export function Chat() {
   return (
     <PromptModeProvider>
-      <ChatShell />
+      <MoodProvider>
+        <ChatShell />
+      </MoodProvider>
     </PromptModeProvider>
   );
 }
+

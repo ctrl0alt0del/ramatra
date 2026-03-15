@@ -95,7 +95,7 @@ const waitForGeneratedThreadTitle = (
   });
 };
 
-function usePersistedChatRuntime(promptMode: PromptMode) {
+function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) {
   const attachmentAdapter = useMemo(
     () => new SimpleImageAttachmentAdapter(),
     [],
@@ -122,6 +122,7 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
             messages: serializedMessages,
             threadId: remoteThreadId,
             promptMode,
+            moodId,
           }),
           signal: abortSignal,
         });
@@ -270,7 +271,7 @@ function usePersistedChatRuntime(promptMode: PromptMode) {
         }
       },
     }),
-    [promptMode, threadListItem],
+    [moodId, promptMode, threadListItem],
   );
 
   return useLocalRuntime(modelAdapter, {
@@ -355,7 +356,10 @@ const fileToDataUrl = async (file: File) => {
   });
 };
 
-export function usePersistedRuntime(promptMode: PromptMode) {
+export function usePersistedRuntime(
+  promptMode: PromptMode,
+  moodId: string | null,
+) {
   const adapter = useMemo<RemoteThreadListAdapter>(
     () => ({
       async list() {
@@ -466,13 +470,17 @@ export function usePersistedRuntime(promptMode: PromptMode) {
       },
       unstable_Provider: PersistedHistoryProvider,
     }),
-    [],
+    [moodId, promptMode],
   );
 
   return useRemoteThreadListRuntime({
     runtimeHook: function UsePromptModeRuntimeHook() {
-      return usePersistedChatRuntime(promptMode);
+      return usePersistedChatRuntime(promptMode, moodId);
     },
     adapter,
   });
 }
+
+
+
+
