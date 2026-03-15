@@ -9,6 +9,45 @@ type DbGlobal = typeof globalThis & {
   __comfyBridgeDb?: Database.Database;
 };
 
+const migrateLegacyStreamSignalText = (input: string) => {
+  let output = input;
+
+  const replacements: Array<[RegExp, string]> = [
+    [/"__type"\s*:\s*"chat\.stream_command"/g, '"__type":"chat.stream_signal"'],
+    [/'__type'\s*:\s*'chat\.stream_command'/g, "'__type':'chat.stream_signal'"],
+    [/"command"\s*:\s*"enqueue_util_task"/g, '"route":"util_task"'],
+    [/'command'\s*:\s*'enqueue_util_task'/g, "'route':'util_task'"],
+    [/"utilTask"\s*:/g, '"stage":'],
+    [/'utilTask'\s*:/g, "'stage':"],
+    [/"system_prompt_ext"\s*:/g, '"context_text":'],
+    [/'system_prompt_ext'\s*:/g, "'context_text':"],
+    [/\benqueue_util_task\b/g, "util_task"],
+    [/\bsystem_prompt_ext\b/g, "context_text"],
+    [/\butilTask\b/g, "stage"],
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    output = output.replace(pattern, replacement);
+  }
+
+  output = output.replace(
+    /\{"__type":"chat\.stream_signal","route":"util_task","stage":"([^"]+)","context_text":"([^"]*)"\}/g,
+    "[[util_task]]\nstage: $1\ncontext_text: $2\n[[/util_task]]",
+  );
+  output = output.replace(
+    /\{'__type':'chat\.stream_signal','route':'util_task','stage':'([^']+)','context_text':'([^']*)'\}/g,
+    "[[util_task]]\nstage: $1\ncontext_text: $2\n[[/util_task]]",
+  );
+  output = output.replace(
+    /Output only valid JSON with this exact shape:/gi,
+    "Output only this bracket command block:",
+  );
+  output = output.replace(/Do not output any text before or after the JSON\./gi, "Do not output any text before or after this block.");
+  output = output.replace(/Do not include markdown, code fences, or explanations\./gi, "Do not include markdown, code fences, JSON, or explanations.");
+
+  return output;
+};
+
 const buildDefaultGroupTasks = (
   taskGroupType: string,
   payload: Record<string, unknown>,
@@ -334,6 +373,41 @@ const ensureSchema = (db: Database.Database) => {
       SET mcp_servers_json = '[]'
       WHERE mcp_servers_json IS NULL OR TRIM(COALESCE(mcp_servers_json, '')) = ''
     `);
+  }
+
+  const migratePromptSetting = db.prepare(
+    `
+      UPDATE prompt_mode_settings
+      SET prompt = ?, updated_at = ?
+      WHERE mode = ?
+    `,
+  );
+  const promptSettingRows = db
+    .prepare(`SELECT mode, prompt FROM prompt_mode_settings`)
+    .all() as Array<{ mode: string; prompt: string }>;
+  const now = new Date().toISOString();
+  for (const row of promptSettingRows) {
+    const migratedPrompt = migrateLegacyStreamSignalText(row.prompt);
+    if (migratedPrompt !== row.prompt) {
+      migratePromptSetting.run(migratedPrompt, now, row.mode);
+    }
+  }
+
+  const migrateUtilTaskSetting = db.prepare(
+    `
+      UPDATE util_task_settings
+      SET prompt = ?, updated_at = ?
+      WHERE name = ?
+    `,
+  );
+  const utilTaskSettingRows = db
+    .prepare(`SELECT name, prompt FROM util_task_settings`)
+    .all() as Array<{ name: string; prompt: string }>;
+  for (const row of utilTaskSettingRows) {
+    const migratedPrompt = migrateLegacyStreamSignalText(row.prompt);
+    if (migratedPrompt !== row.prompt) {
+      migrateUtilTaskSetting.run(migratedPrompt, now, row.name);
+    }
   }
 
   const taskRows = db

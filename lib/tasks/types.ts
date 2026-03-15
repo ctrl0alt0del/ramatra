@@ -58,7 +58,6 @@ export type TaskGroupPayloadMap = {
         previousResponseIdOverride?: string | null;
         utilChainBaseResponseId?: string | null;
         utilTaskName?: string;
-        utilTaskArgs?: Record<string, unknown>;
         utilSystemPromptExt?: string;
         utilMcpServers?: Array<"comfy" | "web_search" | "civitai">;
         utilCommandDepth?: number;

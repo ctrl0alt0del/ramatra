@@ -941,8 +941,9 @@ const buildIntegrations = (promptMode: PromptMode): EphemeralMcpIntegration[] =>
   }
 
   if (promptMode === "artist") {
-    // Artist mode no longer has direct Comfy MCP access.
-    return buildIntegrationsForServers(["civitai"]);
+    // Keep the root Artist turn tool-free so it can emit routing markers
+    // without being pushed into function/tool-call mode.
+    return [];
   }
 
   return [];
@@ -1035,29 +1036,118 @@ const hasTaskByKind = (
 };
 
 type ChatStreamCommand = {
-  __type: "chat.stream_command";
-  command: "enqueue_util_task";
-  utilTask: string;
-  args?: Record<string, unknown>;
+  __type: "chat.stream_signal";
+  route: "util_task";
+  stage: string;
+  context_text?: string;
   nonce?: string;
-  system_prompt_ext?: string;
 };
 
 const MAX_UTIL_COMMAND_DEPTH = 3;
 const MAX_UTIL_COMMAND_ENQUEUES = 3;
 const MAX_UTIL_NONCE_HISTORY = 24;
 
-const extractJsonObjectCandidate = (text: string) => {
-  const start = text.indexOf("{");
-  if (start === -1) {
-    return null;
+const parseBracketUtilCommand = (text: string) => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null as { command: ChatStreamCommand; cleanText: string } | null;
   }
 
+  const blockPattern = /\[\[util_task\]\]([\s\S]*?)\[\[\/util_task\]\]/gi;
+  const blockMatches = [...trimmed.matchAll(blockPattern)];
+  for (let index = blockMatches.length - 1; index >= 0; index -= 1) {
+    const match = blockMatches[index];
+    const full = match[0] ?? "";
+    const body = (match[1] ?? "").trim();
+    if (!full || !body) {
+      continue;
+    }
+
+    const fields: Record<string, string> = {};
+    for (const rawLine of body.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      const separatorIndex = line.indexOf(":");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+      const key = line.slice(0, separatorIndex).trim().toLowerCase();
+      const value = line.slice(separatorIndex + 1).trim();
+      if (key && value) {
+        fields[key] = value;
+      }
+    }
+
+    const stage = fields.stage?.trim() ?? "";
+    if (!stage || stage.includes("<") || stage.includes(">")) {
+      continue;
+    }
+
+    const command: ChatStreamCommand = {
+      __type: "chat.stream_signal",
+      route: "util_task",
+      stage,
+      ...(fields.context_text ? { context_text: fields.context_text.slice(0, 1000) } : {}),
+      ...(fields.nonce ? { nonce: fields.nonce } : {}),
+    };
+
+    const cleanText = trimmed.replace(full, "").trim();
+    return { command, cleanText };
+  }
+
+  const inlinePattern = /\[\[util_task:([a-zA-Z0-9_.-]+)(?:\|([^\]]+))?\]\]/gi;
+  const inlineMatches = [...trimmed.matchAll(inlinePattern)];
+  for (let index = inlineMatches.length - 1; index >= 0; index -= 1) {
+    const match = inlineMatches[index];
+    const full = match[0] ?? "";
+    const stage = (match[1] ?? "").trim();
+    const optionsRaw = (match[2] ?? "").trim();
+    if (!full || !stage) {
+      continue;
+    }
+    if (stage.includes("<") || stage.includes(">")) {
+      continue;
+    }
+
+    const options: Record<string, string> = {};
+    if (optionsRaw) {
+      for (const entry of optionsRaw.split("|")) {
+        const separatorIndex = entry.indexOf("=");
+        if (separatorIndex <= 0) {
+          continue;
+        }
+        const key = entry.slice(0, separatorIndex).trim().toLowerCase();
+        const value = entry.slice(separatorIndex + 1).trim();
+        if (key && value) {
+          options[key] = value;
+        }
+      }
+    }
+
+    const command: ChatStreamCommand = {
+      __type: "chat.stream_signal",
+      route: "util_task",
+      stage,
+      ...(options.context_text ? { context_text: options.context_text.slice(0, 1000) } : {}),
+      ...(options.nonce ? { nonce: options.nonce } : {}),
+    };
+    const cleanText = trimmed.replace(full, "").trim();
+    return { command, cleanText };
+  }
+
+  return null;
+};
+
+const extractJsonObjectCandidates = (text: string) => {
+  const candidates: string[] = [];
   let inString = false;
   let escape = false;
   let depth = 0;
+  let start = -1;
 
-  for (let index = start; index < text.length; index += 1) {
+  for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
 
     if (inString) {
@@ -1077,22 +1167,33 @@ const extractJsonObjectCandidate = (text: string) => {
     }
 
     if (char === "{") {
+      if (depth === 0) {
+        start = index;
+      }
       depth += 1;
       continue;
     }
 
     if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, index + 1);
+      if (depth > 0) {
+        depth -= 1;
+        if (depth === 0 && start >= 0) {
+          candidates.push(text.slice(start, index + 1));
+          start = -1;
+        }
       }
     }
   }
 
-  return null;
+  return candidates;
 };
 
 const parseChatStreamCommand = (text: string) => {
+  const bracketCommand = parseBracketUtilCommand(text);
+  if (bracketCommand) {
+    return bracketCommand;
+  }
+
   const trimmed = text.trim();
   if (!trimmed) {
     return {
@@ -1101,15 +1202,15 @@ const parseChatStreamCommand = (text: string) => {
     };
   }
 
-  const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  const candidates = [
-    fencedMatch?.[1] ?? "",
-    trimmed,
-    extractJsonObjectCandidate(trimmed) ?? "",
-  ].filter((value, index, all) => {
-    return value.trim().length > 0 && all.indexOf(value) === index;
-  });
+  const fencedMatches = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)].map(
+    (match) => match[1] ?? "",
+  );
+  const candidates = [...fencedMatches, trimmed, ...extractJsonObjectCandidates(trimmed)]
+    .map((value) => value.trim())
+    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
 
+  let selectedCommand: ChatStreamCommand | null = null;
+  let selectedRawCandidate = "";
   for (const rawCandidate of candidates) {
     let parsed: unknown;
     try {
@@ -1124,41 +1225,45 @@ const parseChatStreamCommand = (text: string) => {
 
     const record = parsed as Record<string, unknown>;
     if (
-      record.__type !== "chat.stream_command" ||
-      record.command !== "enqueue_util_task" ||
-      typeof record.utilTask !== "string"
+      record.__type !== "chat.stream_signal" ||
+      record.route !== "util_task" ||
+      typeof record.stage !== "string"
     ) {
       continue;
     }
 
-    const normalizedArgs =
-      record.args && typeof record.args === "object"
-        ? (record.args as Record<string, unknown>)
-        : undefined;
     const normalizedNonce =
       typeof record.nonce === "string" && record.nonce.trim().length > 0
         ? record.nonce.trim()
         : undefined;
-    const normalizedSystemPromptExt =
-      typeof record.system_prompt_ext === "string" &&
-      record.system_prompt_ext.trim().length > 0
-        ? record.system_prompt_ext.trim().slice(0, 1000)
+    const normalizedContextText =
+      typeof record.context_text === "string" &&
+      record.context_text.trim().length > 0
+        ? record.context_text.trim().slice(0, 1000)
         : undefined;
 
+    const stage = record.stage.trim();
+    if (!stage || stage.includes("<") || stage.includes(">")) {
+      continue;
+    }
+
     const command: ChatStreamCommand = {
-      __type: "chat.stream_command",
-      command: "enqueue_util_task",
-      utilTask: record.utilTask.trim(),
-      ...(normalizedArgs ? { args: normalizedArgs } : {}),
+      __type: "chat.stream_signal",
+      route: "util_task",
+      stage,
       ...(normalizedNonce ? { nonce: normalizedNonce } : {}),
-      ...(normalizedSystemPromptExt
-        ? { system_prompt_ext: normalizedSystemPromptExt }
+      ...(normalizedContextText
+        ? { context_text: normalizedContextText }
         : {}),
     };
+    selectedCommand = command;
+    selectedRawCandidate = rawCandidate.trim();
+  }
 
-    const cleanText = trimmed.replace(rawCandidate.trim(), "").trim();
+  if (selectedCommand) {
+    const cleanText = trimmed.replace(selectedRawCandidate, "").trim();
     return {
-      command,
+      command: selectedCommand,
       cleanText,
     };
   }
@@ -1711,7 +1816,6 @@ export const executeQueuedChatTask = async (
           previousResponseIdOverride: task.payload.previousResponseIdOverride,
           utilChainBaseResponseId: task.payload.utilChainBaseResponseId,
           utilTaskName: task.payload.utilTaskName,
-          utilTaskArgs: task.payload.utilTaskArgs,
           utilSystemPromptExt: task.payload.utilSystemPromptExt,
           utilMcpServers: task.payload.utilMcpServers,
           utilCommandDepth: task.payload.utilCommandDepth,
@@ -1762,13 +1866,18 @@ export const executeQueuedChatTask = async (
         contextLength: requestedContextLength,
         userMessage: task.payload.userMessage,
       });
+      const isUtilConversation =
+        typeof task.payload.utilTaskName === "string" &&
+        task.payload.utilTaskName.trim().length > 0;
       effectivePreviousResponseId =
-        typeof task.payload.previousResponseIdOverride === "string" &&
-        task.payload.previousResponseIdOverride.trim().length > 0
-          ? task.payload.previousResponseIdOverride.trim()
-          : (task.payload.continuationIndex ?? 0) > 0
-            ? null
-            : (thread?.lmstudioResponseId ?? null);
+        isUtilConversation
+          ? null
+          : typeof task.payload.previousResponseIdOverride === "string" &&
+              task.payload.previousResponseIdOverride.trim().length > 0
+            ? task.payload.previousResponseIdOverride.trim()
+            : (task.payload.continuationIndex ?? 0) > 0
+              ? null
+              : (thread?.lmstudioResponseId ?? null);
 
       userInput = buildLmStudioInput({
         summary: thread?.conversationSummary ?? null,
@@ -2085,9 +2194,13 @@ export const executeQueuedChatTask = async (
     } | null = null;
 
     if (taskKind === "chat.generate") {
-      if (!userInput) {
+      if (userInput === null) {
         throw new Error(`${taskKind} task is missing input payload.`);
       }
+      const normalizedUserInput =
+        typeof userInput === "string" && userInput.length === 0
+          ? " "
+          : userInput;
       const integrationOverride =
         task.payload.kind === "conversation" &&
         Array.isArray(task.payload.utilMcpServers)
@@ -2099,7 +2212,7 @@ export const executeQueuedChatTask = async (
           throw new Error("chat.generate task requires conversation payload.");
         }
         stream = await openChatGenerationStream({
-          input: userInput,
+          input: normalizedUserInput,
           previousResponseId: effectivePreviousResponseId ?? undefined,
           systemPrompt: task.payload.systemPromptOverride,
           forceSystemPrompt:
@@ -2232,7 +2345,6 @@ export const executeQueuedChatTask = async (
           previousResponseIdOverride: task.payload.previousResponseIdOverride,
           utilChainBaseResponseId: task.payload.utilChainBaseResponseId,
           utilTaskName: task.payload.utilTaskName,
-          utilTaskArgs: task.payload.utilTaskArgs,
           utilSystemPromptExt: task.payload.utilSystemPromptExt,
           utilMcpServers: task.payload.utilMcpServers,
           utilCommandDepth: task.payload.utilCommandDepth,
@@ -2318,13 +2430,12 @@ export const executeQueuedChatTask = async (
           nonce: commandNonce,
         });
       } else {
-        const utilTaskName = parsedCommand.command.utilTask.trim();
+        const utilTaskName = parsedCommand.command.stage.trim();
         const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
         if (utilTaskSetting && utilTaskSetting.enabled) {
-          const utilTaskInputText = "";
           const utilSystemPromptExt =
-            typeof parsedCommand.command.system_prompt_ext === "string"
-              ? parsedCommand.command.system_prompt_ext.trim()
+            typeof parsedCommand.command.context_text === "string"
+              ? parsedCommand.command.context_text.trim()
               : "";
           const delegatedSystemPrompt = [
             utilSystemPromptExt,
@@ -2341,10 +2452,13 @@ export const executeQueuedChatTask = async (
             typeof task.payload.utilChainBaseResponseId === "string" &&
             task.payload.utilChainBaseResponseId.trim().length > 0
               ? task.payload.utilChainBaseResponseId.trim()
-              : typeof task.payload.previousResponseIdOverride === "string" &&
-                  task.payload.previousResponseIdOverride.trim().length > 0
-                ? task.payload.previousResponseIdOverride.trim()
-                : (thread?.lmstudioResponseId ?? null);
+            : typeof task.payload.previousResponseIdOverride === "string" &&
+                task.payload.previousResponseIdOverride.trim().length > 0
+              ? task.payload.previousResponseIdOverride.trim()
+            : typeof finalResponse?.response_id === "string" &&
+                finalResponse.response_id.trim().length > 0
+              ? finalResponse.response_id.trim()
+              : (thread?.lmstudioResponseId ?? null);
 
           const delegatedTask = enqueueChatTask({
             kind: "conversation",
@@ -2353,12 +2467,11 @@ export const executeQueuedChatTask = async (
             moodId,
             persistent: false,
             contextLength: requestedContextLength,
-            userMessage: [{ type: "text", text: utilTaskInputText }],
+            userMessage: [{ type: "text", text: " " }],
             systemPromptOverride: delegatedSystemPrompt,
             previousResponseIdOverride: utilChainBaseResponseId,
             utilChainBaseResponseId,
             utilTaskName,
-            utilTaskArgs: undefined,
             utilSystemPromptExt: utilSystemPromptExt || undefined,
             utilMcpServers: utilTaskSetting.mcpServers,
             utilCommandDepth: commandDepth + 1,
