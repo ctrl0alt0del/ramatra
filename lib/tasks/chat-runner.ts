@@ -889,45 +889,63 @@ const maybeAutoCompactThreadContext = async ({
   }
 };
 
-const buildIntegrations = (promptMode: PromptMode) => {
-  const integrations: Array<{
-    type: "ephemeral_mcp";
-    server_label: "comfy" | "web_search" | "civitai";
-    server_url: string;
-  }> = [];
+type IntegrationServerLabel = "comfy" | "web_search" | "civitai";
 
-  if (
-    (promptMode === "regular" || promptMode === "writer") &&
-    process.env.WEB_SEARCH_MCP_ENABLED === "true" &&
-    process.env.WEB_SEARCH_MCP_URL
-  ) {
-    integrations.push({
-      type: "ephemeral_mcp",
-      server_label: "web_search",
-      server_url: process.env.WEB_SEARCH_MCP_URL,
-    });
+type EphemeralMcpIntegration = {
+  type: "ephemeral_mcp";
+  server_label: IntegrationServerLabel;
+  server_url: string;
+};
+
+const buildIntegrationsForServers = (
+  servers: IntegrationServerLabel[],
+): EphemeralMcpIntegration[] => {
+  const integrations: EphemeralMcpIntegration[] = [];
+
+  if (servers.includes("web_search") && process.env.WEB_SEARCH_MCP_ENABLED === "true") {
+    const serverUrl = process.env.WEB_SEARCH_MCP_URL;
+    if (serverUrl) {
+      integrations.push({
+        type: "ephemeral_mcp",
+        server_label: "web_search",
+        server_url: serverUrl,
+      });
+    }
   }
 
-  if (promptMode === "artist") {
+  if (servers.includes("comfy")) {
     integrations.push({
       type: "ephemeral_mcp",
       server_label: "comfy",
       server_url: getComfyMcpUrl(),
     });
+  }
 
-    if (
-      process.env.CIVITAI_MCP_ENABLED === "true" &&
-      process.env.CIVITAI_MCP_URL
-    ) {
+  if (servers.includes("civitai") && process.env.CIVITAI_MCP_ENABLED === "true") {
+    const serverUrl = process.env.CIVITAI_MCP_URL;
+    if (serverUrl) {
       integrations.push({
         type: "ephemeral_mcp",
         server_label: "civitai",
-        server_url: process.env.CIVITAI_MCP_URL,
+        server_url: serverUrl,
       });
     }
   }
 
   return integrations;
+};
+
+const buildIntegrations = (promptMode: PromptMode): EphemeralMcpIntegration[] => {
+  if (promptMode === "regular" || promptMode === "writer") {
+    return buildIntegrationsForServers(["web_search"]);
+  }
+
+  if (promptMode === "artist") {
+    // Artist mode no longer has direct Comfy MCP access.
+    return buildIntegrationsForServers(["civitai"]);
+  }
+
+  return [];
 };
 
 const parseSseEvents = async (
@@ -1691,9 +1709,11 @@ export const executeQueuedChatTask = async (
           carryoverReasoning: task.payload.carryoverReasoning,
           systemPromptOverride: task.payload.systemPromptOverride,
           previousResponseIdOverride: task.payload.previousResponseIdOverride,
+          utilChainBaseResponseId: task.payload.utilChainBaseResponseId,
           utilTaskName: task.payload.utilTaskName,
           utilTaskArgs: task.payload.utilTaskArgs,
           utilSystemPromptExt: task.payload.utilSystemPromptExt,
+          utilMcpServers: task.payload.utilMcpServers,
           utilCommandDepth: task.payload.utilCommandDepth,
           utilEnqueueCount: task.payload.utilEnqueueCount,
           utilCommandNonces: task.payload.utilCommandNonces,
@@ -2068,6 +2088,11 @@ export const executeQueuedChatTask = async (
       if (!userInput) {
         throw new Error(`${taskKind} task is missing input payload.`);
       }
+      const integrationOverride =
+        task.payload.kind === "conversation" &&
+        Array.isArray(task.payload.utilMcpServers)
+          ? buildIntegrationsForServers(task.payload.utilMcpServers)
+          : undefined;
       let stream: ReadableStream<Uint8Array>;
       try {
         if (task.payload.kind !== "conversation") {
@@ -2080,6 +2105,7 @@ export const executeQueuedChatTask = async (
           forceSystemPrompt:
             typeof task.payload.systemPromptOverride === "string" &&
             task.payload.systemPromptOverride.trim().length > 0,
+          integrations: integrationOverride,
         });
       } catch (error) {
         console.error("[chat-runner] generate:open-stream-failed", {
@@ -2204,9 +2230,11 @@ export const executeQueuedChatTask = async (
           carryoverReasoning: streamedReasoning,
           systemPromptOverride: task.payload.systemPromptOverride,
           previousResponseIdOverride: task.payload.previousResponseIdOverride,
+          utilChainBaseResponseId: task.payload.utilChainBaseResponseId,
           utilTaskName: task.payload.utilTaskName,
           utilTaskArgs: task.payload.utilTaskArgs,
           utilSystemPromptExt: task.payload.utilSystemPromptExt,
+          utilMcpServers: task.payload.utilMcpServers,
           utilCommandDepth: task.payload.utilCommandDepth,
           utilEnqueueCount: task.payload.utilEnqueueCount,
           utilCommandNonces: task.payload.utilCommandNonces,
@@ -2293,18 +2321,14 @@ export const executeQueuedChatTask = async (
         const utilTaskName = parsedCommand.command.utilTask.trim();
         const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
         if (utilTaskSetting && utilTaskSetting.enabled) {
-          const utilTaskInputText = [
-            `[util_task:${utilTaskName}]`,
-            "Execute the configured utility task prompt.",
-            `Args:\n${JSON.stringify(parsedCommand.command.args ?? {}, null, 2)}`,
-          ].join("\n\n");
+          const utilTaskInputText = "";
           const utilSystemPromptExt =
             typeof parsedCommand.command.system_prompt_ext === "string"
               ? parsedCommand.command.system_prompt_ext.trim()
               : "";
           const delegatedSystemPrompt = [
-            utilTaskSetting.prompt,
             utilSystemPromptExt,
+            utilTaskSetting.prompt,
           ]
             .filter((value) => value.length > 0)
             .join("\n\n");
@@ -2313,6 +2337,14 @@ export const executeQueuedChatTask = async (
             knownNonces,
             commandNonce || undefined,
           );
+          const utilChainBaseResponseId =
+            typeof task.payload.utilChainBaseResponseId === "string" &&
+            task.payload.utilChainBaseResponseId.trim().length > 0
+              ? task.payload.utilChainBaseResponseId.trim()
+              : typeof task.payload.previousResponseIdOverride === "string" &&
+                  task.payload.previousResponseIdOverride.trim().length > 0
+                ? task.payload.previousResponseIdOverride.trim()
+                : (thread?.lmstudioResponseId ?? null);
 
           const delegatedTask = enqueueChatTask({
             kind: "conversation",
@@ -2323,10 +2355,12 @@ export const executeQueuedChatTask = async (
             contextLength: requestedContextLength,
             userMessage: [{ type: "text", text: utilTaskInputText }],
             systemPromptOverride: delegatedSystemPrompt,
-            previousResponseIdOverride: finalResponse?.response_id ?? null,
+            previousResponseIdOverride: utilChainBaseResponseId,
+            utilChainBaseResponseId,
             utilTaskName,
-            utilTaskArgs: parsedCommand.command.args,
+            utilTaskArgs: undefined,
             utilSystemPromptExt: utilSystemPromptExt || undefined,
+            utilMcpServers: utilTaskSetting.mcpServers,
             utilCommandDepth: commandDepth + 1,
             utilEnqueueCount: utilEnqueueCount + 1,
             utilCommandNonces: nextNonces,

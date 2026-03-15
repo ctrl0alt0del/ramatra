@@ -33,8 +33,18 @@ type EditableUtilTask = {
   name: string;
   prompt: string;
   enabled: boolean;
+  mcpServers: Array<"comfy" | "web_search" | "civitai">;
 };
 
+
+const utilTaskMcpOptions: Array<{
+  value: "comfy" | "web_search" | "civitai";
+  label: string;
+}> = [
+  { value: "comfy", label: "Comfy" },
+  { value: "web_search", label: "Web Search" },
+  { value: "civitai", label: "Civitai" },
+];
 type UtilTaskSettingsResponse = {
   tasks: EditableUtilTask[];
   defaults: Record<string, string>;
@@ -51,6 +61,114 @@ const createUtilTaskName = (tasks: EditableUtilTask[]) => {
     }
     index += 1;
   }
+};
+type UtilTaskEditorProps = {
+  index: number;
+  task: EditableUtilTask;
+  onUpdate: (index: number, input: Partial<EditableUtilTask>) => void;
+  onRemove: (index: number) => void;
+  onRestoreDefault: (name: string) => void;
+};
+
+const UtilTaskEditor = ({
+  index,
+  task,
+  onUpdate,
+  onRemove,
+  onRestoreDefault,
+}: UtilTaskEditorProps) => {
+  const [localName, setLocalName] = useState(task.name);
+  const [localPrompt, setLocalPrompt] = useState(task.prompt);
+
+  useEffect(() => {
+    setLocalName(task.name);
+  }, [task.name]);
+
+  useEffect(() => {
+    setLocalPrompt(task.prompt);
+  }, [task.prompt]);
+
+  return (
+    <div className="rounded-[14px] border border-white/70 bg-white/80 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <input
+          value={localName}
+          onChange={(event) => setLocalName(event.target.value)}
+          onBlur={() => {
+            if (localName !== task.name) {
+              onUpdate(index, { name: localName });
+            }
+          }}
+          className="min-w-[220px] flex-1 rounded-full border border-[hsl(var(--aui-border))] bg-white px-3 py-1.5 text-sm text-[#2a2146] outline-none focus:border-[#8b7cff]"
+          placeholder="util task name"
+        />
+        <div className="flex items-center gap-2">
+          <label className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))]">
+            <input
+              type="checkbox"
+              checked={task.enabled}
+              onChange={(event) =>
+                onUpdate(index, {
+                  enabled: event.target.checked,
+                })
+              }
+              className="h-3.5 w-3.5"
+            />
+            Enabled
+          </label>
+          <button
+            type="button"
+            onClick={() => onRestoreDefault(task.name)}
+            className="rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))] transition hover:bg-[#f7f2ff]"
+          >
+            Restore Default
+          </button>
+          <button
+            type="button"
+            onClick={() => onRemove(index)}
+            className="inline-flex items-center gap-1 rounded-full border border-[#efc7ce] bg-[#fff5f7] px-3 py-1 text-xs font-medium text-[#b34558] transition hover:bg-[#ffecef]"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Remove
+          </button>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {utilTaskMcpOptions.map((option) => {
+          const isChecked = task.mcpServers.includes(option.value);
+          return (
+            <label
+              key={option.value}
+              className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))]"
+            >
+              <input
+                type="checkbox"
+                checked={isChecked}
+                onChange={(event) => {
+                  const next = event.target.checked
+                    ? [...task.mcpServers, option.value]
+                    : task.mcpServers.filter((value) => value !== option.value);
+                  onUpdate(index, { mcpServers: Array.from(new Set(next)) });
+                }}
+                className="h-3.5 w-3.5"
+              />
+              {option.label}
+            </label>
+          );
+        })}
+      </div>
+      <textarea
+        value={localPrompt}
+        onChange={(event) => setLocalPrompt(event.target.value)}
+        onBlur={() => {
+          if (localPrompt !== task.prompt) {
+            onUpdate(index, { prompt: localPrompt });
+          }
+        }}
+        className="mt-2 min-h-[140px] w-full resize-y rounded-[12px] border border-[hsl(var(--aui-border))] bg-white px-3 py-2 text-base leading-6 text-[#2a2146] caret-[#2a2146] shadow-[inset_0_1px_1px_rgba(31,24,56,0.04)] outline-none focus:border-[#8b7cff] md:text-sm"
+      />
+    </div>
+  );
 };
 const createMoodId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -276,14 +394,14 @@ export function PromptSettingsButton() {
     });
   };
 
-  const updateUtilTask = (name: string, input: Partial<EditableUtilTask>) => {
+  const updateUtilTask = (index: number, input: Partial<EditableUtilTask>) => {
     setUtilTasks((previous) => {
       if (!previous) {
         return previous;
       }
 
-      return previous.map((task) =>
-        task.name === name
+      return previous.map((task, taskIndex) =>
+        taskIndex === index
           ? {
               ...task,
               ...input,
@@ -299,7 +417,20 @@ export function PromptSettingsButton() {
       return;
     }
 
-    updateUtilTask(name, { prompt: defaultPrompt });
+    setUtilTasks((previous) => {
+      if (!previous) {
+        return previous;
+      }
+
+      return previous.map((task) =>
+        task.name === name
+          ? {
+              ...task,
+              prompt: defaultPrompt,
+            }
+          : task,
+      );
+    });
   };
 
   const addUtilTask = () => {
@@ -314,18 +445,19 @@ export function PromptSettingsButton() {
           name: createUtilTaskName(previous),
           prompt: "",
           enabled: true,
+          mcpServers: [],
         },
       ];
     });
   };
 
-  const removeUtilTask = (name: string) => {
+  const removeUtilTask = (index: number) => {
     setUtilTasks((previous) => {
       if (!previous) {
         return previous;
       }
 
-      return previous.filter((task) => task.name !== name);
+      return previous.filter((_, taskIndex) => taskIndex !== index);
     });
   };
 
@@ -338,6 +470,7 @@ export function PromptSettingsButton() {
       .map((task) => ({
         ...task,
         name: task.name.trim(),
+        mcpServers: Array.from(new Set(task.mcpServers ?? [])),
       }))
       .filter((task) => task.name.length > 0);
     const uniqueNames = new Set(normalizedUtilTasks.map((task) => task.name));
@@ -671,61 +804,15 @@ export function PromptSettingsButton() {
                         </p>
                       ) : null}
 
-                      {utilTasks.map((task) => (
-                        <div
-                          key={task.name}
-                          className="rounded-[14px] border border-white/70 bg-white/80 p-3"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <input
-                              value={task.name}
-                              onChange={(event) =>
-                                updateUtilTask(task.name, {
-                                  name: event.target.value,
-                                })
-                              }
-                              className="min-w-[220px] flex-1 rounded-full border border-[hsl(var(--aui-border))] bg-white px-3 py-1.5 text-sm text-[#2a2146] outline-none focus:border-[#8b7cff]"
-                              placeholder="util task name"
-                            />
-                            <div className="flex items-center gap-2">
-                              <label className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))]">
-                                <input
-                                  type="checkbox"
-                                  checked={task.enabled}
-                                  onChange={(event) =>
-                                    updateUtilTask(task.name, {
-                                      enabled: event.target.checked,
-                                    })
-                                  }
-                                  className="h-3.5 w-3.5"
-                                />
-                                Enabled
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => restoreUtilTaskDefault(task.name)}
-                                className="rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))] transition hover:bg-[#f7f2ff]"
-                              >
-                                Restore Default
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => removeUtilTask(task.name)}
-                                className="inline-flex items-center gap-1 rounded-full border border-[#efc7ce] bg-[#fff5f7] px-3 py-1 text-xs font-medium text-[#b34558] transition hover:bg-[#ffecef]"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                                Remove
-                              </button>
-                            </div>
-                          </div>
-                          <textarea
-                            value={task.prompt}
-                            onChange={(event) =>
-                              updateUtilTask(task.name, { prompt: event.target.value })
-                            }
-                            className="mt-2 min-h-[140px] w-full resize-y rounded-[12px] border border-[hsl(var(--aui-border))] bg-white px-3 py-2 text-base leading-6 text-[#2a2146] caret-[#2a2146] shadow-[inset_0_1px_1px_rgba(31,24,56,0.04)] outline-none focus:border-[#8b7cff] md:text-sm"
-                          />
-                        </div>
+                      {utilTasks.map((task, index) => (
+                        <UtilTaskEditor
+                          key={`${task.name}-${index}`}
+                          index={index}
+                          task={task}
+                          onUpdate={updateUtilTask}
+                          onRemove={removeUtilTask}
+                          onRestoreDefault={restoreUtilTaskDefault}
+                        />
                       ))}
                     </div>
                   </div>
@@ -851,7 +938,6 @@ export function PromptSettingsButton() {
     </>
   );
 }
-
 
 
 

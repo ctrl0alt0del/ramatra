@@ -162,6 +162,7 @@ const ensureSchema = (db: Database.Database) => {
       name TEXT PRIMARY KEY,
       prompt TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
+      mcp_servers_json TEXT NOT NULL DEFAULT '[]',
       updated_at TEXT NOT NULL
     );
   `);
@@ -320,6 +321,21 @@ const ensureSchema = (db: Database.Database) => {
     `);
   }
 
+  const utilTaskColumns = db.prepare(`PRAGMA table_info(util_task_settings)`).all() as Array<{
+    name: string;
+  }>;
+  if (!utilTaskColumns.some((column) => column.name === "mcp_servers_json")) {
+    db.exec(`
+      ALTER TABLE util_task_settings
+      ADD COLUMN mcp_servers_json TEXT NOT NULL DEFAULT '[]'
+    `);
+    db.exec(`
+      UPDATE util_task_settings
+      SET mcp_servers_json = '[]'
+      WHERE mcp_servers_json IS NULL OR TRIM(COALESCE(mcp_servers_json, '')) = ''
+    `);
+  }
+
   const taskRows = db
     .prepare(`SELECT id, type, payload_json FROM tasks`)
     .all() as Array<{
@@ -429,4 +445,6 @@ export const getDb = () => {
   ensureSchema(globalDb.__comfyBridgeDb);
   return globalDb.__comfyBridgeDb;
 };
+
+
 

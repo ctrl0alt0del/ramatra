@@ -5,12 +5,14 @@ import {
   listDefaultUtilTaskPrompts,
   listUtilTaskSettings,
   replaceUtilTaskSettings,
+  utilTaskMcpServerLabels,
 } from "@/lib/lmstudio/util-tasks";
 
 const utilTaskSchema = z.object({
   name: z.string().min(1),
   prompt: z.string(),
   enabled: z.boolean().optional(),
+  mcpServers: z.array(z.enum(utilTaskMcpServerLabels)).optional(),
 });
 
 const replaceUtilTasksSchema = z.object({
@@ -39,4 +41,5 @@ export async function PUT(req: Request) {
     tasks: replaceUtilTaskSettings(parsed.data.tasks),
   });
 }
+
 

@@ -2,10 +2,18 @@ import "server-only";
 
 import { getDb } from "@/lib/db";
 
+export const utilTaskMcpServerLabels = [
+  "comfy",
+  "web_search",
+  "civitai",
+] as const;
+export type UtilTaskMcpServerLabel = (typeof utilTaskMcpServerLabels)[number];
+
 export type UtilTaskSetting = {
   name: string;
   prompt: string;
   enabled: boolean;
+  mcpServers: UtilTaskMcpServerLabel[];
   updatedAt: string;
 };
 
@@ -13,6 +21,7 @@ type UtilTaskSettingsRow = {
   name: string;
   prompt: string;
   enabled: number;
+  mcp_servers_json: string;
   updated_at: string;
 };
 
@@ -48,6 +57,12 @@ const defaultUtilTaskPrompts = {
   ].join("\n"),
 } as const;
 
+const defaultUtilTaskMcpServers: Record<string, UtilTaskMcpServerLabel[]> = {
+  img_gen_workflow: [],
+  img_gen_loras: ["comfy"],
+  img_gen_finalize: ["comfy"],
+};
+
 export type DefaultUtilTaskName = keyof typeof defaultUtilTaskPrompts;
 export const defaultUtilTaskNames = Object.keys(
   defaultUtilTaskPrompts,
@@ -55,6 +70,21 @@ export const defaultUtilTaskNames = Object.keys(
 
 const db = getDb();
 let utilTaskSettingsSeeded = false;
+
+const normalizeMcpServers = (value: unknown): UtilTaskMcpServerLabel[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const set = new Set<UtilTaskMcpServerLabel>();
+  for (const item of value) {
+    if (utilTaskMcpServerLabels.includes(item as UtilTaskMcpServerLabel)) {
+      set.add(item as UtilTaskMcpServerLabel);
+    }
+  }
+
+  return [...set];
+};
 
 const ensureUtilTaskSettingsSeeded = () => {
   if (utilTaskSettingsSeeded) {
@@ -64,24 +94,38 @@ const ensureUtilTaskSettingsSeeded = () => {
   const timestamp = new Date().toISOString();
   const insert = db.prepare(
     `
-      INSERT INTO util_task_settings (name, prompt, enabled, updated_at)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO util_task_settings (name, prompt, enabled, mcp_servers_json, updated_at)
+      VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(name) DO NOTHING
     `,
   );
 
   for (const [name, prompt] of Object.entries(defaultUtilTaskPrompts)) {
-    insert.run(name, prompt, 1, timestamp);
+    insert.run(
+      name,
+      prompt,
+      1,
+      JSON.stringify(defaultUtilTaskMcpServers[name] ?? []),
+      timestamp,
+    );
   }
 
   utilTaskSettingsSeeded = true;
 };
 
 const rowToUtilTaskSetting = (row: UtilTaskSettingsRow): UtilTaskSetting => {
+  let parsedMcpServers: unknown = [];
+  try {
+    parsedMcpServers = JSON.parse(row.mcp_servers_json);
+  } catch {
+    parsedMcpServers = [];
+  }
+
   return {
     name: row.name,
     prompt: row.prompt,
     enabled: row.enabled === 1,
+    mcpServers: normalizeMcpServers(parsedMcpServers),
     updatedAt: row.updated_at,
   };
 };
@@ -92,7 +136,7 @@ export const listUtilTaskSettings = (): UtilTaskSetting[] => {
   const rows = db
     .prepare(
       `
-        SELECT name, prompt, enabled, updated_at
+        SELECT name, prompt, enabled, mcp_servers_json, updated_at
         FROM util_task_settings
         ORDER BY name ASC
       `,
@@ -118,7 +162,7 @@ export const getUtilTaskSettingByName = (name: string): UtilTaskSetting | null =
   const row = db
     .prepare(
       `
-        SELECT name, prompt, enabled, updated_at
+        SELECT name, prompt, enabled, mcp_servers_json, updated_at
         FROM util_task_settings
         WHERE name = ?
       `,
@@ -133,6 +177,7 @@ export const replaceUtilTaskSettings = (
     name: string;
     prompt: string;
     enabled?: boolean;
+    mcpServers?: UtilTaskMcpServerLabel[];
   }>,
 ) => {
   ensureUtilTaskSettingsSeeded();
@@ -141,6 +186,7 @@ export const replaceUtilTaskSettings = (
       name: task.name.trim(),
       prompt: task.prompt.trim(),
       enabled: task.enabled !== false,
+      mcpServers: normalizeMcpServers(task.mcpServers ?? []),
     }))
     .filter((task) => task.name.length > 0);
 
@@ -149,16 +195,21 @@ export const replaceUtilTaskSettings = (
     db.prepare(`DELETE FROM util_task_settings`).run();
     const insert = db.prepare(
       `
-        INSERT INTO util_task_settings (name, prompt, enabled, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO util_task_settings (name, prompt, enabled, mcp_servers_json, updated_at)
+        VALUES (?, ?, ?, ?, ?)
       `,
     );
     for (const task of normalizedTasks) {
-      insert.run(task.name, task.prompt, task.enabled ? 1 : 0, timestamp);
+      insert.run(
+        task.name,
+        task.prompt,
+        task.enabled ? 1 : 0,
+        JSON.stringify(task.mcpServers),
+        timestamp,
+      );
     }
   });
   replaceTx();
 
   return listUtilTaskSettings();
 };
-
