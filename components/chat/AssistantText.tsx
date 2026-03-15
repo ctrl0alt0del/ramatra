@@ -3,6 +3,7 @@
 import {
   MessagePartPrimitive,
   TextMessagePartProvider,
+  useThreadListItemRuntime,
   useMessagePartText,
 } from "@assistant-ui/react";
 import { makeMarkdownText } from "@assistant-ui/react-ui";
@@ -31,6 +32,8 @@ const MarkdownText = makeMarkdownText({
 });
 
 export function AssistantText() {
+  const threadListItem = useThreadListItemRuntime();
+  const threadId = threadListItem?.getState().remoteId ?? null;
   const part = useMessagePartText();
   const text = "text" in part ? part.text : "";
   const hasMarkers = hasContextCompactionMarker(text);
@@ -56,6 +59,7 @@ export function AssistantText() {
                     taskId={marker.taskId}
                     jobId={marker.jobId ?? null}
                     initialStatus={marker.status}
+                    threadId={threadId}
                   />
                 ) : null}
                 {chunk.markerCountAfter !== null ? (
@@ -83,6 +87,7 @@ export function AssistantText() {
                     taskId={marker.taskId}
                     jobId={marker.jobId ?? null}
                     initialStatus={marker.status}
+                    threadId={threadId}
                   />
                 ) : null}
                 {!cleanText && !marker ? (
@@ -94,3 +99,5 @@ export function AssistantText() {
     </>
   );
 }
+
+

@@ -1,9 +1,10 @@
-﻿import {
+import {
   formatMessageContentForPrompt,
   getTextFromMessageContent,
   type MessagePart,
 } from "@/lib/chat/message-content";
 import { formatContextCompactionDuringRequestMarker } from "@/lib/chat/context-compaction-marker";
+import { getStoredGeneration } from "@/lib/comfy/generations";
 import { getGeneratedImagesForThread } from "@/lib/comfy/thread-generated-images";
 import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
 import {
@@ -137,6 +138,17 @@ type LmStudioInputItem =
       type: "image";
       data_url: string;
     };
+
+const critiqueSystemPrompt = [
+  "You are an experienced art critique mentor.",
+  "Compare the user intent with the generated image.",
+  "Treat the generated image as incorrect by default and explain why.",
+  "List intent mismatch, anatomical issues, and graphical issues.",
+  "Then provide corrected prompt and generation settings for the artist model.",
+].join("\n");
+
+const critiqueAutoFollowupDisclaimer =
+  "[Auto-generated from critique system message] Use the critique below to produce an improved generation action. Start directly with the improved image generation response.";
 
 const getComfyMcpUrl = () => {
   const explicitUrl = process.env.COMFY_MCP_URL;
@@ -772,12 +784,14 @@ const finalizeConversationViaStreamTask = ({
   reasoning,
   responseId,
   summaryCallsInCurrentRequest,
+  delegatedToTaskGroupId,
 }: {
   taskId: string;
   text: string;
   reasoning: string;
   responseId: string | null;
   summaryCallsInCurrentRequest: number;
+  delegatedToTaskGroupId?: string;
 }) => {
   updateRunningTask(taskId, {
     result: {
@@ -785,6 +799,7 @@ const finalizeConversationViaStreamTask = ({
       reasoning,
       responseId,
       summaryCallsInCurrentRequest,
+      delegatedToTaskGroupId,
     },
   });
   setGroupTaskStatusByKind({
@@ -836,32 +851,58 @@ export const executeQueuedChatTask = async (
       return;
     }
 
-    if (taskKind !== "chat.generate" && taskKind !== "chat.stream") {
+    if (
+      taskKind !== "chat.generate" &&
+      taskKind !== "chat.critique" &&
+      taskKind !== "chat.stream"
+    ) {
       throw new Error(`Unsupported runnable chat task kind: ${taskKind}`);
     }
-    if (task.payload.kind !== "conversation") {
-      throw new Error("chat.generate task requires conversation payload.");
+    if (task.payload.kind !== "conversation" && task.payload.kind !== "critique") {
+      throw new Error("Unsupported payload kind for chat runnable task.");
     }
-    if (!hasTaskByKind(groupTasks, "chat.generate")) {
-      throw new Error("Missing chat.generate task.");
-    }
-    if (!hasTaskByKind(groupTasks, "chat.stream")) {
-      throw new Error("Missing chat.stream task.");
+    if (task.payload.kind === "conversation") {
+      if (!hasTaskByKind(groupTasks, "chat.generate")) {
+        throw new Error("Missing chat.generate task.");
+      }
+      if (!hasTaskByKind(groupTasks, "chat.stream")) {
+        throw new Error("Missing chat.stream task.");
+      }
+      if (taskKind === "chat.critique") {
+        throw new Error("chat.critique task requires critique payload.");
+      }
+    } else {
+      if (!hasTaskByKind(groupTasks, "chat.critique")) {
+        throw new Error("Missing chat.critique task.");
+      }
+      if (!hasTaskByKind(groupTasks, "chat.stream")) {
+        throw new Error("Missing chat.stream task.");
+      }
+      if (taskKind === "chat.generate") {
+        throw new Error("chat.generate task requires conversation payload.");
+      }
     }
     let thread = task.payload.threadId
       ? getThread(task.payload.threadId)
       : null;
-    const promptMode =
-      task.payload.promptMode && isPromptMode(task.payload.promptMode)
-        ? task.payload.promptMode
-        : defaultPromptMode;
+    const promptMode: PromptMode =
+      task.payload.kind === "conversation"
+        ? task.payload.promptMode && isPromptMode(task.payload.promptMode)
+          ? task.payload.promptMode
+          : defaultPromptMode
+        : "artist";
     const moodId =
       task.payload.kind === "conversation"
         ? (task.payload.moodId ?? null)
         : null;
+    const isPersistentConversation =
+      task.payload.kind === "conversation"
+        ? task.payload.persistent !== false
+        : false;
 
     const shouldResetPromptState =
       taskKind === "chat.generate" &&
+      isPersistentConversation &&
       thread !== null &&
       thread.lmstudioResponseId !== null &&
       (thread.lastPromptMode === null || thread.lastPromptMode !== promptMode);
@@ -885,6 +926,7 @@ export const executeQueuedChatTask = async (
 
       if (
         autoSummaryEnabled &&
+        isPersistentConversation &&
         thread &&
         shouldRefreshConversationSummary(thread, promptMode)
       ) {
@@ -936,11 +978,13 @@ export const executeQueuedChatTask = async (
     const setSummaryCallsInCurrentRequest = (value: number) => {
       summaryCallsInCurrentRequest = value;
       if (task.payload.kind === "conversation" && task.payload.threadId) {
-        const updated = updateThread(task.payload.threadId, {
-          summaryCallsInCurrentRequest,
-        });
-        if (updated) {
-          thread = updated;
+        if (isPersistentConversation) {
+          const updated = updateThread(task.payload.threadId, {
+            summaryCallsInCurrentRequest,
+          });
+          if (updated) {
+            thread = updated;
+          }
         }
       }
     };
@@ -949,6 +993,7 @@ export const executeQueuedChatTask = async (
       taskKind === "chat.generate" &&
       task.payload.threadId &&
       task.payload.kind === "conversation" &&
+      isPersistentConversation &&
       thread
     ) {
       const generatedImageLimitForEstimate = getAdaptiveGeneratedImageLimit({
@@ -1041,23 +1086,39 @@ export const executeQueuedChatTask = async (
     let modelTarget = "";
     let userInput: string | LmStudioInputItem[] | null = null;
 
-    if (taskKind === "chat.generate") {
+    if (taskKind === "chat.generate" || taskKind === "chat.critique") {
       const generatedImageLimit = getAdaptiveGeneratedImageLimit({
         contextLength: requestedContextLength,
-        userMessage: task.payload.userMessage,
+        userMessage:
+          task.payload.kind === "conversation"
+            ? task.payload.userMessage
+            : [{ type: "text", text: "Image critique request" }],
       });
-      userInput = buildLmStudioInput({
-        summary: thread?.conversationSummary ?? null,
-        previousResponseId:
-          (task.payload.continuationIndex ?? 0) > 0
-            ? null
-            : (thread?.lmstudioResponseId ?? null),
-        generatedImages:
-          thread
-            ? getGeneratedImagesForThread(thread.messages, generatedImageLimit)
-            : [],
-        userMessage: task.payload.userMessage,
-      });
+      if (taskKind === "chat.generate") {
+        if (task.payload.kind !== "conversation") {
+          throw new Error("chat.generate task requires conversation payload.");
+        }
+        userInput = buildLmStudioInput({
+          summary: thread?.conversationSummary ?? null,
+          previousResponseId:
+            (task.payload.continuationIndex ?? 0) > 0
+              ? null
+              : (thread?.lmstudioResponseId ?? null),
+          generatedImages:
+            thread
+              ? getGeneratedImagesForThread(thread.messages, generatedImageLimit)
+              : [],
+          userMessage: task.payload.userMessage,
+        });
+      } else {
+        if (task.payload.kind !== "critique") {
+          throw new Error("chat.critique task requires critique payload.");
+        }
+        userInput = buildCritiqueLmStudioInput({
+          comfyTaskId: task.payload.comfyTaskId,
+          imageIndex: task.payload.imageIndex,
+        });
+      }
 
       const exactLoadedModel = await ensureLmStudioModelLoaded({
         modelKey: getChatModelKey(),
@@ -1121,9 +1182,13 @@ export const executeQueuedChatTask = async (
     const openChatGenerationStream = async ({
       input,
       previousResponseId,
+      systemPrompt,
+      integrations,
     }: {
       input: string | LmStudioInputItem[];
       previousResponseId?: string;
+      systemPrompt?: string;
+      integrations?: ReturnType<typeof buildIntegrations>;
     }) => {
       let response: Response;
       try {
@@ -1140,11 +1205,13 @@ export const executeQueuedChatTask = async (
             context_length: requestedContextLength,
             input,
             previous_response_id: previousResponseId,
-            system_prompt: composeSystemPrompt({
-              mode: promptMode,
-              moodId,
-            }),
-            integrations: buildIntegrations(promptMode),
+            system_prompt:
+              systemPrompt ??
+              composeSystemPrompt({
+                mode: promptMode,
+                moodId,
+              }),
+            integrations: integrations ?? buildIntegrations(promptMode),
             stream: true,
           }),
         });
@@ -1351,19 +1418,30 @@ export const executeQueuedChatTask = async (
         }
       | null = null;
 
-    if (taskKind === "chat.generate") {
+    if (taskKind === "chat.generate" || taskKind === "chat.critique") {
       if (!userInput) {
-        throw new Error("chat.generate task is missing input payload.");
+        throw new Error(`${taskKind} task is missing input payload.`);
       }
       let stream: ReadableStream<Uint8Array>;
       try {
-        stream = await openChatGenerationStream({
-          input: userInput,
-          previousResponseId:
-            (task.payload.continuationIndex ?? 0) > 0
-              ? undefined
-              : (thread?.lmstudioResponseId ?? undefined),
-        });
+        if (taskKind === "chat.generate") {
+          if (task.payload.kind !== "conversation") {
+            throw new Error("chat.generate task requires conversation payload.");
+          }
+          stream = await openChatGenerationStream({
+            input: userInput,
+            previousResponseId:
+              (task.payload.continuationIndex ?? 0) > 0
+                ? undefined
+                : (thread?.lmstudioResponseId ?? undefined),
+          });
+        } else {
+          stream = await openChatGenerationStream({
+            input: userInput,
+            systemPrompt: critiqueSystemPrompt,
+            integrations: [],
+          });
+        }
       } catch (error) {
         console.error("[chat-runner] generate:open-stream-failed", {
           taskId: task.id,
@@ -1384,7 +1462,7 @@ export const executeQueuedChatTask = async (
       });
       setGroupTaskStatusByKind({
         taskId: task.id,
-        kind: "chat.generate",
+        kind: taskKind,
         status: "completed",
       });
       return;
@@ -1402,12 +1480,15 @@ export const executeQueuedChatTask = async (
       getPendingChatStreams().delete(task.id);
     }
 
-    let finalResponse: ChatResponse | null = initialAttempt.finalResponse;
-    let overflowDetected = initialAttempt.overflowDetected;
+    const finalResponse: ChatResponse | null = initialAttempt.finalResponse;
+    const overflowDetected = initialAttempt.overflowDetected;
     const nearLimitDetected =
       initialAttempt.usedTokens !== null &&
       initialAttempt.usedTokens >= requestedContextLength - 2;
-    const continuationCount = task.payload.continuationIndex ?? 0;
+    const continuationCount =
+      task.payload.kind === "conversation"
+        ? (task.payload.continuationIndex ?? 0)
+        : 0;
 
     if (
       (overflowDetected || nearLimitDetected) &&
@@ -1477,6 +1558,7 @@ export const executeQueuedChatTask = async (
         threadId: task.payload.threadId,
         promptMode,
         moodId,
+        persistent: task.payload.persistent,
         contextLength: requestedContextLength,
         userMessage: task.payload.userMessage,
         continuationIndex: nextContinuationIndex,
@@ -1534,7 +1616,11 @@ export const executeQueuedChatTask = async (
       throw new Error("LM Studio did not return any output.");
     }
 
-    if (task.payload.threadId) {
+    if (
+      task.payload.kind === "conversation" &&
+      task.payload.threadId &&
+      task.payload.persistent !== false
+    ) {
       const latestThread = getThread(task.payload.threadId);
       const lastMessage = latestThread?.messages.at(-1);
       const usedContextTokens = getUsedContextTokens(finalResponse);
@@ -1601,26 +1687,58 @@ export const executeQueuedChatTask = async (
       kind: "chat.stream",
       status: "completed",
     });
+    let delegatedToTaskGroupId: string | undefined;
+
+    if (task.payload.kind === "critique" && task.payload.threadId) {
+      const critiqueBody = [finalTextWithMarkers, reasoning]
+        .filter((value) => value.trim().length > 0)
+        .join("\n\n");
+      const autoFollowupMessage = [
+        critiqueAutoFollowupDisclaimer,
+        critiqueBody || "No critique text was generated.",
+      ].join("\n\n");
+
+      const autoFollowupTask = enqueueChatTask({
+        kind: "conversation",
+        threadId: task.payload.threadId ?? null,
+        promptMode: "artist",
+        moodId: null,
+        contextLength: requestedContextLength,
+        userMessage: [
+          {
+            type: "text",
+            text: autoFollowupMessage,
+          },
+        ],
+      });
+      delegatedToTaskGroupId = autoFollowupTask.id;
+    }
+
     finalizeConversationViaStreamTask({
       taskId: task.id,
       text: finalTextWithMarkers,
       reasoning,
       responseId: finalResponse?.response_id ?? null,
       summaryCallsInCurrentRequest,
+      delegatedToTaskGroupId,
     });
 
-    if (task.payload.kind === "conversation" && task.payload.threadId) {
+    if (
+      task.payload.kind === "conversation" &&
+      task.payload.threadId &&
+      task.payload.persistent !== false
+    ) {
       updateThread(task.payload.threadId, {
         summaryCallsInCurrentRequest: 0,
       });
       maybeEnqueueTitleGenerationTask(task.payload.threadId);
     }
+
   } catch (error) {
     console.error("[chat-runner] task:failed", {
       taskId: task.id,
       taskKind,
-      threadId:
-        task.payload.kind === "conversation" ? (task.payload.threadId ?? null) : null,
+      threadId: task.payload.threadId ?? null,
       error: formatUnknownError(error),
     });
 
@@ -1629,6 +1747,26 @@ export const executeQueuedChatTask = async (
         setGroupTaskStatusByKind({
           taskId: task.id,
           kind: "chat.generate",
+          status: "failed",
+        });
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.stream",
+          status: "failed",
+        });
+      } else if (taskKind === "chat.stream") {
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.stream",
+          status: "failed",
+        });
+      }
+    }
+    if (task.payload.kind === "critique") {
+      if (taskKind === "chat.critique") {
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.critique",
           status: "failed",
         });
         setGroupTaskStatusByKind({
@@ -1658,7 +1796,11 @@ export const executeQueuedChatTask = async (
         status: "failed",
       });
     }
-    if (task.payload.kind === "conversation" && task.payload.threadId) {
+    if (
+      task.payload.kind === "conversation" &&
+      task.payload.threadId &&
+      task.payload.persistent !== false
+    ) {
       updateThread(task.payload.threadId, {
         summaryCallsInCurrentRequest: 0,
       });
@@ -1848,6 +1990,81 @@ const toLmStudioInputItems = (
   return items;
 };
 
+const buildCritiqueLmStudioInput = ({
+  comfyTaskId,
+  imageIndex,
+}: {
+  comfyTaskId: string;
+  imageIndex: number;
+}): LmStudioInputItem[] => {
+  const comfyTask = getTask(comfyTaskId);
+  if (!comfyTask || comfyTask.type !== "comfy") {
+    throw new Error("Critique source comfy task not found.");
+  }
+
+  const jobId = comfyTask.result?.jobId ?? null;
+  if (!jobId) {
+    throw new Error("Critique source task has no generation job id.");
+  }
+
+  const generation = getStoredGeneration(jobId);
+  if (!generation || generation.status !== "completed") {
+    throw new Error("Critique source generation is not completed.");
+  }
+
+  const image = generation.images[imageIndex];
+  if (!image) {
+    throw new Error("Critique source image index is out of range.");
+  }
+
+  const critiqueInputText = [
+    "User original intent:",
+    comfyTask.payload.sourceUserIntent?.trim() || "(not available)",
+    "",
+    "What was requested for generation:",
+    comfyTask.payload.prompt.trim(),
+    "",
+    "Generation parameters:",
+    JSON.stringify(
+      {
+        workflowName: comfyTask.payload.workflowName,
+        prompt: comfyTask.payload.prompt,
+        negativePrompt: comfyTask.payload.negativePrompt,
+        inputImage: comfyTask.payload.inputImage,
+        width: comfyTask.payload.width,
+        height: comfyTask.payload.height,
+        steps: comfyTask.payload.steps,
+        cfg: comfyTask.payload.cfg,
+        seed: comfyTask.payload.seed,
+        samplerName: comfyTask.payload.samplerName,
+        scheduler: comfyTask.payload.scheduler,
+        loras: comfyTask.payload.loras,
+      },
+      null,
+      2,
+    ),
+    "",
+    "Output format (strict):",
+    "1) Summary",
+    "2) Intent mismatch bullets",
+    "3) Anatomical issues bullets",
+    "4) Graphical issues bullets",
+    "5) Corrected prompt",
+    "6) Corrected generation parameters as compact JSON",
+  ].join("\n");
+
+  return [
+    {
+      type: "text",
+      content: critiqueInputText,
+    },
+    {
+      type: "image",
+      data_url: `data:${image.mimeType};base64,${image.data}`,
+    },
+  ];
+};
+
 const applyCompactionMarkersToText = (text: string, breakOffsets: number[]) => {
   if (!text || breakOffsets.length === 0) {
     return text;
@@ -1938,6 +2155,12 @@ const maybeEnqueueTitleGenerationTask = (threadId: string) => {
     ),
   });
 };
+
+
+
+
+
+
 
 
 

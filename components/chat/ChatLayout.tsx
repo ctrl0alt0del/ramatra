@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -196,7 +196,7 @@ function ChatWorkspace() {
                 </div>
               </div>
 
-              <div className="hidden md:flex md:w-[15rem] md:flex-col md:gap-2 lg:w-[16rem]">
+              <div className="hidden md:flex md:w-auto md:flex-row md:items-center md:gap-2">
                 <PromptModeSelect />
                 <MoodSelect />
               </div>
@@ -355,7 +355,7 @@ function formatGpuTemperature(temperatureC: number | null) {
     return "nvidia-smi not available";
   }
 
-  return `${temperatureC}°C`;
+  return `${temperatureC}В°C`;
 }
 
 function formatLmStudioModelDetail(
@@ -444,5 +444,6 @@ function SidebarPanel({
     </div>
   );
 }
+
 
 

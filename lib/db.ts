@@ -22,6 +22,13 @@ const buildDefaultGroupTasks = (
       ];
     }
 
+    if (kind === "critique") {
+      return [
+        { id: crypto.randomUUID(), kind: "chat.critique", status: "pending" },
+        { id: crypto.randomUUID(), kind: "chat.stream", status: "pending" },
+      ];
+    }
+
     if (kind === "generate_title") {
       return [{ id: crypto.randomUUID(), kind: "chat.title", status: "pending" }];
     }

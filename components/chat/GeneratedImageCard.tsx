@@ -1,8 +1,9 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { ChevronDown, ChevronRight, MessageSquareText } from "lucide-react";
 
 import { SkeletonBlock } from "./SkeletonBlock";
 
@@ -36,14 +37,47 @@ type GenerationResponse =
       images: CompletedImage[];
     };
 
+type CritiqueStartResponse = {
+  taskId: string;
+  critiqueTaskId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+};
+
+type ChatTaskEvent =
+  | {
+      taskId: string;
+      status: "queued" | "running" | "completed";
+      text: string;
+      reasoning: string;
+      responseId: string | null;
+      summaryCallsInCurrentRequest: number;
+      delegatedToTaskGroupId?: string;
+    }
+  | {
+      taskId: string;
+      status: "failed";
+      error: string;
+    };
+
+type CritiqueState = {
+  status: "idle" | "queued" | "running" | "completed" | "failed";
+  expanded: boolean;
+  taskId?: string;
+  text?: string;
+  reasoning?: string;
+  error?: string;
+};
+
 export function GeneratedImageCard({
   taskId: initialTaskId,
   jobId: initialJobId,
   initialStatus,
+  threadId,
 }: Readonly<{
   taskId: string | null | undefined;
   jobId: string | null | undefined;
   initialStatus: "queued" | "running";
+  threadId: string | null;
 }>) {
   const taskId = typeof initialTaskId === "string" ? initialTaskId : "";
   const jobId = typeof initialJobId === "string" ? initialJobId : "";
@@ -55,6 +89,8 @@ export function GeneratedImageCard({
     status: initialStatus,
   });
   const [hasResolvedInitialFetch, setHasResolvedInitialFetch] = useState(false);
+  const [critiques, setCritiques] = useState<Record<number, CritiqueState>>({});
+  const critiqueStreamsRef = useRef<Record<number, EventSource>>({});
 
   useEffect(() => {
     if (!hasValidTaskId) return;
@@ -119,6 +155,158 @@ export function GeneratedImageCard({
       eventSource.close();
     };
   }, [hasValidTaskId, jobId, taskId]);
+
+  useEffect(() => {
+    return () => {
+      for (const stream of Object.values(critiqueStreamsRef.current)) {
+        stream.close();
+      }
+      critiqueStreamsRef.current = {};
+    };
+  }, []);
+
+  const connectCritiqueStream = (imageIndex: number, critiqueTaskId: string) => {
+    critiqueStreamsRef.current[imageIndex]?.close();
+
+    const source = new EventSource(`/api/chat/task/${critiqueTaskId}/events`);
+    critiqueStreamsRef.current[imageIndex] = source;
+
+    source.addEventListener("task", (event: MessageEvent<string>) => {
+      const payload = JSON.parse(event.data) as ChatTaskEvent;
+
+      if (payload.status === "failed") {
+        setCritiques((previous) => ({
+          ...previous,
+          [imageIndex]: {
+            status: "failed",
+            expanded: true,
+            taskId: critiqueTaskId,
+            error: payload.error || "Critique failed.",
+          },
+        }));
+        source.close();
+        delete critiqueStreamsRef.current[imageIndex];
+        return;
+      }
+
+      setCritiques((previous) => ({
+        ...previous,
+        [imageIndex]: {
+          ...previous[imageIndex],
+          status:
+            payload.status === "completed"
+              ? "completed"
+              : payload.status === "running"
+                ? "running"
+                : "queued",
+          expanded: true,
+          taskId: critiqueTaskId,
+          text: payload.text,
+          reasoning: payload.reasoning,
+        },
+      }));
+
+      if (payload.status === "completed") {
+        source.close();
+        delete critiqueStreamsRef.current[imageIndex];
+      }
+    });
+
+    source.onerror = () => {
+      setCritiques((previous) => ({
+        ...previous,
+        [imageIndex]: {
+          ...previous[imageIndex],
+          status: "failed",
+          expanded: true,
+          taskId: critiqueTaskId,
+          error: "Critique stream connection failed.",
+        },
+      }));
+      source.close();
+      delete critiqueStreamsRef.current[imageIndex];
+    };
+  };
+
+  const runCritique = async (imageIndex: number) => {
+    setCritiques((previous) => ({
+      ...previous,
+      [imageIndex]: {
+        status: "running",
+        expanded: true,
+      },
+    }));
+
+    try {
+      const response = await fetch("/api/chat/critique", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          comfyTaskId: taskId,
+          imageIndex,
+          threadId,
+        }),
+      });
+
+      const data = (await response.json()) as
+        | CritiqueStartResponse
+        | {
+            error?: string;
+          };
+
+      if (!response.ok || !("taskId" in data)) {
+        throw new Error(
+          "error" in data && typeof data.error === "string"
+            ? data.error
+            : "Critique request failed.",
+        );
+      }
+
+      setCritiques((previous) => ({
+        ...previous,
+        [imageIndex]: {
+          ...previous[imageIndex],
+          status: "queued",
+          expanded: true,
+          taskId: data.taskId,
+          error: undefined,
+        },
+      }));
+
+      connectCritiqueStream(imageIndex, data.taskId);
+    } catch (error) {
+      setCritiques((previous) => ({
+        ...previous,
+        [imageIndex]: {
+          ...previous[imageIndex],
+          status: "failed",
+          expanded: true,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to generate critique.",
+        },
+      }));
+    }
+  };
+  const toggleCritiqueExpanded = (imageIndex: number) => {
+    setCritiques((previous) => {
+      const next = previous[imageIndex];
+      if (!next) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        [imageIndex]: {
+          ...next,
+          expanded: !next.expanded,
+        },
+      };
+    });
+  };
 
   return (
     <div className="mt-3 overflow-hidden rounded-2xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-muted))]">
@@ -189,41 +377,119 @@ export function GeneratedImageCard({
             </span>
           </div>
           <div className="grid gap-3">
-            {result.images.map((image, index) => (
-              <Dialog.Root key={`${taskId}-${index}`}>
-                <Dialog.Trigger asChild>
-                  <button
-                    type="button"
-                    className="overflow-hidden rounded-xl border border-[hsl(var(--aui-border))] text-left transition-opacity hover:opacity-95"
-                  >
-                    <Image
-                      src={`data:${image.mimeType};base64,${image.data}`}
-                      alt="Generated result"
-                      width={1024}
-                      height={1024}
-                      unoptimized
-                      className="h-auto w-full object-contain"
-                    />
-                  </button>
-                </Dialog.Trigger>
-                <Dialog.Portal>
-                  <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm" />
-                  <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[92vh] w-[min(92vw,1400px)] -translate-x-1/2 -translate-y-1/2 outline-none">
-                    <Image
-                      src={`data:${image.mimeType};base64,${image.data}`}
-                      alt="Generated result enlarged"
-                      width={1600}
-                      height={1600}
-                      unoptimized
-                      className="max-h-[92vh] h-auto w-full rounded-2xl object-contain"
-                    />
-                  </Dialog.Content>
-                </Dialog.Portal>
-              </Dialog.Root>
-            ))}
+            {result.images.map((image, index) => {
+              const critiqueState = critiques[index];
+              const isCritiquing =
+                critiqueState?.status === "queued" ||
+                critiqueState?.status === "running";
+
+              return (
+                <div
+                  key={`${taskId}-${index}`}
+                  className="space-y-2 overflow-hidden rounded-xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))]"
+                >
+                  <div className="relative">
+                    <Dialog.Root>
+                      <Dialog.Trigger asChild>
+                        <button
+                          type="button"
+                          className="w-full overflow-hidden text-left transition-opacity hover:opacity-95"
+                        >
+                          <Image
+                            src={`data:${image.mimeType};base64,${image.data}`}
+                            alt="Generated result"
+                            width={1024}
+                            height={1024}
+                            unoptimized
+                            className="h-auto w-full object-contain"
+                          />
+                        </button>
+                      </Dialog.Trigger>
+                      <Dialog.Portal>
+                        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm" />
+                        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[92vh] w-[min(92vw,1400px)] -translate-x-1/2 -translate-y-1/2 outline-none">
+                          <Image
+                            src={`data:${image.mimeType};base64,${image.data}`}
+                            alt="Generated result enlarged"
+                            width={1600}
+                            height={1600}
+                            unoptimized
+                            className="max-h-[92vh] h-auto w-full rounded-2xl object-contain"
+                          />
+                        </Dialog.Content>
+                      </Dialog.Portal>
+                    </Dialog.Root>
+
+                    <button
+                      type="button"
+                      onClick={() => void runCritique(index)}
+                      disabled={isCritiquing}
+                      className="absolute bottom-2 right-2 inline-flex items-center gap-1.5 rounded-full border border-[hsl(var(--aui-border))] bg-white/90 px-3 py-1.5 text-xs font-medium text-[hsl(var(--aui-foreground))] shadow-sm backdrop-blur transition hover:bg-white disabled:cursor-wait disabled:opacity-70"
+                    >
+                      <MessageSquareText className="h-3.5 w-3.5" />
+                      {isCritiquing ? "Critiquing..." : "Critique"}
+                    </button>
+                  </div>
+
+                  {critiqueState?.status === "failed" ? (
+                    <div className="px-3 pb-3">
+                      <p className="rounded-lg border border-[#ffd8cd] bg-[#fff7f3] px-3 py-2 text-xs text-[#7a4a3d]">
+                        {critiqueState.error ?? "Critique failed."}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {(critiqueState?.text || critiqueState?.reasoning || isCritiquing) &&
+                  critiqueState ? (
+                    <div className="border-t border-[hsl(var(--aui-border))] px-3 pb-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => toggleCritiqueExpanded(index)}
+                        className="flex items-center gap-1.5 text-xs font-medium text-[hsl(var(--aui-muted-foreground))]"
+                      >
+                        {critiqueState.expanded ? (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        )}
+                        Critique reasoning
+                      </button>
+
+                      {critiqueState.expanded ? (
+                        <div className="mt-2 space-y-2 text-xs text-[hsl(var(--aui-foreground))]">
+                          {critiqueState.reasoning ? (
+                            <p className="whitespace-pre-wrap">{critiqueState.reasoning}</p>
+                          ) : null}
+                          {critiqueState.text ? (
+                            <p className="whitespace-pre-wrap">{critiqueState.text}</p>
+                          ) : null}
+                          {isCritiquing &&
+                          !critiqueState.reasoning &&
+                          !critiqueState.text ? (
+                            <p className="text-[hsl(var(--aui-muted-foreground))]">Generating critique...</p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+

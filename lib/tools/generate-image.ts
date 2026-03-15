@@ -3,6 +3,7 @@ import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { encodeComfyJobMarker } from "@/components/chat/comfy-marker";
+import { getTextFromMessageContent } from "@/lib/chat/message-content";
 import { validateRequestedLoras } from "@/lib/comfy/loras";
 import { getGeneratedImagesForThread } from "@/lib/comfy/thread-generated-images";
 import { workflowNames } from "@/lib/comfy/workflows/types";
@@ -205,6 +206,27 @@ const getReferenceableImages = () => {
   };
 };
 
+
+const getActiveConversationSourceContext = () => {
+  const activeTask = getActiveTask();
+  if (
+    !activeTask ||
+    activeTask.type !== "chat" ||
+    activeTask.payload.kind !== "conversation"
+  ) {
+    return {
+      sourceThreadId: null as string | null,
+      sourceUserIntent: null as string | null,
+    };
+  }
+
+  const intent = getTextFromMessageContent(activeTask.payload.userMessage).trim();
+
+  return {
+    sourceThreadId: activeTask.payload.threadId ?? null,
+    sourceUserIntent: intent.length > 0 ? intent : null,
+  };
+};
 const resolveImageRefsToDataUrls = (refs: string[]) => {
   const pools = getReferenceableImages();
   const resolved: string[] = [];
@@ -276,6 +298,7 @@ export const executeGenerateImage = async (
     }
 
     const task = enqueueComfyTask({
+      ...getActiveConversationSourceContext(),
       workflowName,
       prompt,
       negativePrompt,
@@ -377,5 +400,4 @@ export const registerGenerateImageMcpTool = (server: McpServer) => {
     },
   );
 };
-
 

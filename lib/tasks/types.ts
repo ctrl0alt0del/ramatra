@@ -14,6 +14,7 @@ export type TaskGroupStatus = (typeof taskGroupStatuses)[number];
 
 export const taskKinds = [
   "chat.generate",
+  "chat.critique",
   "chat.stream",
   "chat.compact",
   "chat.title",
@@ -45,11 +46,20 @@ export type TaskGroupPayloadMap = {
         threadId: string | null;
         promptMode: string;
         moodId?: string | null;
+        persistent?: boolean;
         contextLength?: number;
         userMessage: MessagePart[];
         continuationIndex?: number;
         carryoverText?: string;
         carryoverReasoning?: string;
+        tasks?: Task[];
+      }
+    | {
+        kind: "critique";
+        threadId: string | null;
+        comfyTaskId: string;
+        imageIndex: number;
+        contextLength?: number;
         tasks?: Task[];
       }
     | {
@@ -74,6 +84,8 @@ export type TaskGroupPayloadMap = {
         tasks?: Task[];
       };
   comfy: {
+    sourceThreadId?: string | null;
+    sourceUserIntent?: string | null;
     workflowName: string;
     prompt: string;
     negativePrompt: string;
