@@ -1671,12 +1671,16 @@ export const executeQueuedChatTask = async (
             context_length: requestedContextLength,
             input,
             previous_response_id: previousResponseId,
-            system_prompt:
-              systemPrompt ??
-              composeSystemPrompt({
-                mode: promptMode,
-                moodId,
-              }),
+            ...(previousResponseId
+              ? {}
+              : {
+                  system_prompt:
+                    systemPrompt ??
+                    composeSystemPrompt({
+                      mode: promptMode,
+                      moodId,
+                    }),
+                }),
             integrations: integrations ?? buildIntegrations(promptMode),
             stream: true,
           }),
