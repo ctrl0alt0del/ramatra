@@ -56,6 +56,34 @@ const titleSystemPrompt = [
   "No markdown.",
 ].join("\n");
 
+const stripForbiddenLmStudioSamplingParams = (
+  payload: Record<string, unknown>,
+) => {
+  const next = { ...payload };
+  const forbiddenKeys = [
+    "temperature",
+    "top_k",
+    "top_p",
+    "min_p",
+    "typical_p",
+    "tfs_z",
+    "repeat_penalty",
+    "presence_penalty",
+    "frequency_penalty",
+    "mirostat",
+    "mirostat_tau",
+    "mirostat_eta",
+  ];
+
+  for (const key of forbiddenKeys) {
+    if (key in next) {
+      delete next[key];
+    }
+  }
+
+  return next;
+};
+
 const getAssistantText = (
   output: Array<{ type: string; content?: string }> | undefined,
 ) => {
@@ -80,6 +108,15 @@ const normalizeTitle = (title: string) => {
 };
 
 export const generateThreadTitle = async (thread: ThreadDetail) => {
+  const payload = stripForbiddenLmStudioSamplingParams({
+    model: await resolvePreferredLmStudioModelTarget({
+      preferredInstanceId: thread.lmstudioModelInstanceId,
+      modelKey: process.env.LM_STUDIO_MODEL!,
+    }),
+    system_prompt: titleSystemPrompt,
+    input: buildTitleInput(thread),
+  });
+
   const response = await fetch(getLmStudioChatUrl(), {
     method: "POST",
     headers: {
@@ -88,14 +125,7 @@ export const generateThreadTitle = async (thread: ThreadDetail) => {
         ? { Authorization: `Bearer ${process.env.LM_STUDIO_TOKEN}` }
         : {}),
     },
-    body: JSON.stringify({
-      model: await resolvePreferredLmStudioModelTarget({
-        preferredInstanceId: thread.lmstudioModelInstanceId,
-        modelKey: process.env.LM_STUDIO_MODEL!,
-      }),
-      system_prompt: titleSystemPrompt,
-      input: buildTitleInput(thread),
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {

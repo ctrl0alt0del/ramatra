@@ -230,15 +230,10 @@ const scanAvailableLoras = async () => {
 };
 
 export const listAvailableLoras = async ({
-  query,
   workflowName,
-  limit = 50,
 }: {
-  query?: string;
   workflowName?: WorkflowName;
-  limit?: number;
 }) => {
-  const normalizedQuery = query?.trim().toLowerCase() ?? "";
   const { loraDirectory, items } = await scanAvailableLoras();
 
   const filtered = items.filter((lora) => {
@@ -246,20 +241,7 @@ export const listAvailableLoras = async ({
       return false;
     }
 
-    if (!normalizedQuery) {
-      return true;
-    }
-
-    const haystack = [
-      lora.name,
-      lora.metadata?.name ?? "",
-      lora.metadata?.outputName ?? "",
-      lora.metadata?.topTag?.name ?? "",
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    return haystack.includes(normalizedQuery);
+    return true;
   });
 
   return {
@@ -269,12 +251,11 @@ export const listAvailableLoras = async ({
       ? WORKFLOW_LORA_SUBFOLDERS[workflowName]
       : [...STATIC_LORA_SUBFOLDERS],
     total: filtered.length,
-    items: filtered.slice(0, limit).map((lora) => ({
+    items: filtered.map((lora) => ({
       name: lora.name,
     })),
   };
 };
-
 const getClosestLoraMatches = (
   requestedName: string,
   available: LoraDescriptor[],

@@ -11,6 +11,7 @@ import {
   HardDrive,
   HeartPulse,
   PanelLeft,
+  Power,
   Sparkles,
   X,
 } from "lucide-react";
@@ -393,6 +394,34 @@ function SidebarPanel({
   isMobile?: boolean;
   onCollapse: () => void;
 }>) {
+  const [hardResetting, setHardResetting] = useState(false);
+
+  const handleHardReset = async () => {
+    if (hardResetting) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Hard reset chat?\n\nThis will unload LM Studio and ComfyUI models, interrupt and clear Comfy queue, and delete all running/queued tasks.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setHardResetting(true);
+    try {
+      const response = await fetch("/api/system/hard-reset", { method: "POST" });
+      if (!response.ok) {
+        throw new Error(`Hard reset failed: HTTP ${response.status}`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Hard reset failed.";
+      window.alert(message);
+    } finally {
+      setHardResetting(false);
+    }
+  };
+
   return (
     <div
       className={`flex h-full min-h-0 flex-col ${
@@ -415,6 +444,17 @@ function SidebarPanel({
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleHardReset}
+            disabled={hardResetting}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[#ffd8cd] bg-[#fff7f3] px-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#b34a31] shadow-[0_10px_20px_rgba(179,74,49,0.12)] transition hover:bg-[#fff1ea] disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Hard reset chat"
+            title="Hard reset chat"
+          >
+            <Power className="h-3.5 w-3.5" />
+            {hardResetting ? "Resetting..." : "Hard Reset"}
+          </button>
           <PromptSettingsButton />
           <button
             type="button"

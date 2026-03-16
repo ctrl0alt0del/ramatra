@@ -14,7 +14,7 @@ import { enqueueComfyTask, getActiveTask } from "@/lib/tasks/scheduler";
 export const generateImageToolName = "generate_image";
 export const generateImageToolTitle = "Generate Image";
 export const generateImageToolDescription =
-  "Starts an image generation job in ComfyUI for the selected workflow and returns a queued job marker. Available workflows: base, illustration, edit. For edit workflow, prefer imageRefs like user:1 or generated:1 so the model can select images from the current conversation; direct inputImage filenames are still supported. Before the first image generation in a conversation, list_available_loras should normally be called so LoRAs can be preferred when they directly match the requested concept. Start with sampler euler, scheduler simple, and steps 25 by default. In loras[].name, use the exact name returned by list_available_loras. Do not automatically retry after a failed generate_image call.";
+  "Starts a ComfyUI image generation job for the selected workflow and returns a queued job marker.";
 
 export const generateImageParameters = {
   workflowName: z.enum(workflowNames).default("base"),
@@ -341,8 +341,7 @@ export const getGenerateImageOpenAIToolSpec = () => ({
   type: "function" as const,
   function: {
     name: generateImageToolName,
-    description:
-      "Use this whenever the user asks to create, generate, render, draw, or make an image. Choose the workflowName explicitly. Available workflows: 'base', 'illustration', and 'edit'. Default to workflowName 'base' for most requests and choose 'illustration' for stylized/anime/illustrative outputs. For 'edit', choose imageRefs explicitly so the model decides which source image to use: use 'user:N' for recent user-attached images in thread context and 'generated:N' for recent generated images (N starts at 1, with generated:1 being the most recent). inputImage (filenames) is also supported but imageRefs is preferred. Pass cfg 1 unless stronger prompt adherence is truly needed, and provide any LoRAs that should be applied. Before the first image generation in a conversation, call list_available_loras unless the LoRA inventory was already checked and is still relevant. Prefer LoRAs whenever they directly match the requested concept, subject, style, or tags. Start with samplerName 'euler', scheduler 'simple', and steps 25. If higher quality is requested, switch next to samplerName 'res_2s' and scheduler 'beta57'. Only then should you increase steps. In loras[].name, use the exact name returned by list_available_loras. If the tool call fails, do not automatically call generate_image again.",
+    description: generateImageToolDescription,
     parameters: z.toJSONSchema(generateImageInputSchema),
   },
 });
@@ -379,8 +378,7 @@ export const registerGenerateImageMcpTool = (server: McpServer) => {
     generateImageToolName,
     {
       title: generateImageToolTitle,
-      description:
-        "Starts an image generation job in ComfyUI for the selected workflow and returns a job marker that must be preserved verbatim in the assistant response. Available workflows: base, illustration, and edit. Default to workflowName 'base' for most requests; choose 'illustration' for stylized/anime/illustrative outputs. For 'edit', provide imageRefs to select source images from conversation context: 'user:N' for recent user-attached images in thread context and 'generated:N' for recent generated images (generated:1 is the most recent). inputImage (filenames) is also accepted. Keep cfg at 1 unless a small increase is clearly needed. Before the first image generation in a conversation, list_available_loras should normally be called first, and LoRAs should be preferred when they directly match the requested concept or tags. Start with sampler euler, scheduler simple, and steps 25. If more quality is needed, switch next to res_2s and beta57, then increase steps only if needed after that. In loras[].name, use the exact name returned by list_available_loras. If the tool call fails, do not automatically call generate_image again.",
+      description: generateImageToolDescription,
       inputSchema: generateImageInputSchema,
     },
     async (input) => {

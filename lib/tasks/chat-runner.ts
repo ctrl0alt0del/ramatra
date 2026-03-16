@@ -620,6 +620,34 @@ const getAssistantReasoning = (output: LmStudioOutput[] | undefined) => {
     .join("\n\n");
 };
 
+const stripForbiddenLmStudioSamplingParams = (
+  payload: Record<string, unknown>,
+) => {
+  const next = { ...payload };
+  const forbiddenKeys = [
+    "temperature",
+    "top_k",
+    "top_p",
+    "min_p",
+    "typical_p",
+    "tfs_z",
+    "repeat_penalty",
+    "presence_penalty",
+    "frequency_penalty",
+    "mirostat",
+    "mirostat_tau",
+    "mirostat_eta",
+  ];
+
+  for (const key of forbiddenKeys) {
+    if (key in next) {
+      delete next[key];
+    }
+  }
+
+  return next;
+};
+
 const requestLmStudioChat = async ({
   model,
   contextLength,
@@ -635,6 +663,15 @@ const requestLmStudioChat = async ({
   stream?: boolean;
   integrations?: ReturnType<typeof buildIntegrations>;
 }) => {
+  const payload = stripForbiddenLmStudioSamplingParams({
+    model,
+    context_length: contextLength,
+    input,
+    system_prompt: systemPrompt,
+    integrations: integrations ?? [],
+    stream,
+  });
+
   return fetch(getLmStudioChatUrl(), {
     method: "POST",
     headers: {
@@ -643,14 +680,7 @@ const requestLmStudioChat = async ({
         ? { Authorization: `Bearer ${process.env.LM_STUDIO_TOKEN}` }
         : {}),
     },
-    body: JSON.stringify({
-      model,
-      context_length: contextLength,
-      input,
-      system_prompt: systemPrompt,
-      integrations: integrations ?? [],
-      stream,
-    }),
+    body: JSON.stringify(payload),
   });
 };
 
@@ -1718,6 +1748,7 @@ export const executeQueuedChatTask = async (
           basePrompt: unbiasedCritiqueSystemPrompt,
           moodId,
         }),
+        integrations: buildIntegrationsForServers(["comfy"]),
       });
       const data = (await response.json()) as ChatResponse;
       if (!response.ok) {
@@ -1775,6 +1806,7 @@ export const executeQueuedChatTask = async (
           basePrompt: biasedCritiqueSystemPrompt,
           moodId,
         }),
+        integrations: buildIntegrationsForServers(["comfy"]),
       });
       const data = (await response.json()) as ChatResponse;
       if (!response.ok) {
@@ -2059,6 +2091,25 @@ export const executeQueuedChatTask = async (
     }) => {
       let response: Response;
       try {
+        const payload = stripForbiddenLmStudioSamplingParams({
+          model: modelTarget,
+          context_length: requestedContextLength,
+          input,
+          previous_response_id: previousResponseId,
+          ...((previousResponseId && !forceSystemPrompt)
+            ? {}
+            : {
+                system_prompt:
+                  systemPrompt ??
+                  composeSystemPrompt({
+                    mode: promptMode,
+                    moodId,
+                  }),
+              }),
+          integrations: integrations ?? buildIntegrations(promptMode),
+          stream: true,
+        });
+
         response = await fetch(getLmStudioChatUrl(), {
           method: "POST",
           headers: {
@@ -2067,24 +2118,7 @@ export const executeQueuedChatTask = async (
               ? { Authorization: `Bearer ${process.env.LM_STUDIO_TOKEN}` }
               : {}),
           },
-          body: JSON.stringify({
-            model: modelTarget,
-            context_length: requestedContextLength,
-            input,
-            previous_response_id: previousResponseId,
-            ...((previousResponseId && !forceSystemPrompt)
-              ? {}
-              : {
-                  system_prompt:
-                    systemPrompt ??
-                    composeSystemPrompt({
-                      mode: promptMode,
-                      moodId,
-                    }),
-                }),
-            integrations: integrations ?? buildIntegrations(promptMode),
-            stream: true,
-          }),
+          body: JSON.stringify(payload),
         });
       } catch (error) {
         console.error("[chat-runner] generate:request-failed", {
