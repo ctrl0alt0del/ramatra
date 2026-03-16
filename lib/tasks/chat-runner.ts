@@ -41,6 +41,7 @@ import {
   markTaskFailed,
   setGroupTaskStatusByKind,
   transferTaskByKind,
+  updateChatTaskPayload,
   updateRunningTask,
 } from "@/lib/tasks/scheduler";
 import { getTask } from "@/lib/tasks/store";
@@ -2613,18 +2614,16 @@ export const executeQueuedChatTask = async (
               ? finalResponse.response_id.trim()
               : (thread?.lmstudioResponseId ?? null);
 
-          const delegatedTask = enqueueChatTask({
-            kind: "conversation",
-            threadId: task.payload.threadId,
-            promptMode,
-            moodId,
+          const delegatedText = applyCompactionMarkersToText(
+            parsedCommand.cleanText,
+            inRequestCompactionBreakOffsets,
+          );
+
+          const updatedConversationPayload = {
+            ...task.payload,
+            kind: "conversation" as const,
             persistent: parsedCommand.command.persistent === true,
-            contextLength: requestedContextLength,
-            userMessage: [{ type: "text", text: " " }],
-            carryoverText: applyCompactionMarkersToText(
-              parsedCommand.cleanText,
-              inRequestCompactionBreakOffsets,
-            ),
+            carryoverText: delegatedText,
             carryoverReasoning: reasoning,
             systemPromptOverride: delegatedSystemPrompt,
             previousResponseIdOverride: utilChainBaseResponseId,
@@ -2635,38 +2634,32 @@ export const executeQueuedChatTask = async (
             utilCommandDepth: commandDepth + 1,
             utilEnqueueCount: utilEnqueueCount + 1,
             utilCommandNonces: nextNonces,
-            tasks: [
-              {
-                id: crypto.randomUUID(),
-                kind: "chat.generate",
-                status: "pending",
-              },
-            ],
+          };
+
+          updateChatTaskPayload(task.id, updatedConversationPayload);
+          setGroupTaskStatusByKind({
+            taskId: task.id,
+            kind: "chat.generate",
+            status: "pending",
+          });
+          setGroupTaskStatusByKind({
+            taskId: task.id,
+            kind: "chat.stream",
+            status: "pending",
           });
 
-          if (hasTaskByKind(task.payload.tasks, "chat.stream")) {
-            transferTaskByKind({
-              fromTaskId: task.id,
-              toTaskId: delegatedTask.id,
-              taskKind: "chat.stream",
-              nextStatus: "pending",
-            });
-          }
-
-          const delegatedText = applyCompactionMarkersToText(
-            parsedCommand.cleanText,
-            inRequestCompactionBreakOffsets,
-          );
-          markTaskCompleted(task.id, {
-            text: delegatedText,
-            reasoning,
-            responseId: finalResponse?.response_id ?? null,
-            summaryCallsInCurrentRequest,
-            delegatedToTaskGroupId: delegatedTask.id,
+          updateRunningTask(task.id, {
+            result: {
+              ...(task.result ?? {}),
+              text: delegatedText,
+              reasoning,
+              responseId: finalResponse?.response_id ?? null,
+              summaryCallsInCurrentRequest,
+            },
           });
-          console.info("[chat-runner] util-command:delegated", {
-            sourceTaskGroupId: task.id,
-            delegatedTaskGroupId: delegatedTask.id,
+
+          console.info("[chat-runner] util-command:continued-in-group", {
+            taskGroupId: task.id,
             utilTaskName,
             utilEnqueueCount: utilEnqueueCount + 1,
           });
@@ -3244,6 +3237,4 @@ const maybeEnqueueTitleGenerationTask = (threadId: string) => {
     ),
   });
 };
-
-
 
