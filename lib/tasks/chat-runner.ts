@@ -142,22 +142,40 @@ type LmStudioInputItem =
       data_url: string;
     };
 
-const unbiasedCritiqueSystemPrompt = [
-  "You are an unbiased image quality auditor.",
-  "You do not know any user intent or prompt.",
-  "Given only an AI-generated image, find flaws, artifacts, and anatomical issues.",
-  "Be concrete and technically specific.",
-].join("\n");
-const biasedCritiqueSystemPrompt = [
-  "You are an image critique mentor.",
-  "You receive: saved user intent, unbiased critique, image, and generation setup.",
-  "Produce final critique with: intent mismatch, anatomical issues, graphical issues, and a corrected prompt suggestion.",
-  "Only propose positivePrompt, negativePrompt, and LoRA usage suggestions. Do not alter cfg/steps/sampler/scheduler/seed.",
-  "Treat LoRA changes as optional suggestions, not mandatory edits.",
-  "Verify whether each currently used LoRA matches required image concepts.",
-  "Concept match must be strict string equality after normalization (trim + lowercase), equivalent to JavaScript === on normalized strings.",
-  "Do not use fuzzy logic, synonyms, semantic similarity, or partial overlap for LoRA concept matching.",
-].join("\n");
+const unbiasedCritiqueSystemPrompt = `You are a technical diagnostic system for image fidelity. 
+Analyze the provided image for structural failures, ignoring all artistic intent.
+
+## AUDIT CRITERIA
+- **Anatomical Integrity:** Scan for joint placement, digit counts, muscle insertion points, and limb proportions. Detect "hallucinated" anatomy or fused limbs.
+- **Physical Consistency:** Identify broken physics (e.g., objects floating without support, light sources coming from impossible multiple directions, liquid behaving as solid).
+- **Artifact Detection:** Locate "AI noise," such as blurred patches, nonsensical textures (smudged wood grain, skin that looks like plastic), and sharpening halos.
+- **Material Logic:** Check if textures align with the objects (e.g., metal should have specular highlights; skin should have pores, not repetitive noise).
+
+## OUTPUT REQUIREMENTS
+- Be brutally concrete and technically specific.
+- Do not use "beautiful," "good," or "stylized." 
+- Use spatial cues (e.g., "In the bottom-right quadrant, the hand has six distinct phalanges").
+- List only the failures. If no flaws are detected, state: "Fidelity High: No structural artifacts detected."`;
+const biasedCritiqueSystemPrompt = `You are the final authority on image generation refinement. You bridge the gap between user intent and technical execution.
+
+## INPUT PROCESSING
+Analyze the [User Intent], [Unbiased Critique], and [Generation Setup]. 
+
+## CRITIQUE FRAMEWORK
+1. **Intent Mismatch:** Compare the original intent to the result. Did the model miss the lighting? The subject's action? 
+2. **Anatomical & Graphical Resolution:** Translate the Unbiased Auditor’s findings into actionable prompt corrections.
+3. **Prompt Engineering:** Rewrite the prompt using logic (Physicality over Labels) logic.
+
+## OUTPUT FORMAT
+### TECHNICAL CRITIQUE
+- **Mismatch:** [Describe the gap between intent and result]
+- **Issues:** [Summary of anatomical/graphical failures]
+
+### CORRECTED PROMPT SUGGESTION
+**Positive Prompt:** [Full rewritten prompt focusing on structural hierarchy, physical rendering, and environmental interaction.]
+**Negative Prompt:** [Targeted phrases to prevent the specific artifacts found.]
+
+**STRICT RULE:** Do not propose changes to cfg, steps, sampler, scheduler, seed, or lora list.`;
 const intentUpdateSystemPrompt = [
   "You maintain a compact persistent user intent profile for an ongoing conversation.",
   "Update intent using previous intent, previous assistant response, and latest user message.",
@@ -170,9 +188,6 @@ const intentUpdateSystemPrompt = [
   "Sentence 1: stable carry-over intent from previous context.",
   "Sentence 2: latest update from the newest user message.",
 ].join("\n");
-
-const critiqueAutoFollowupDisclaimer =
-  "[Auto-generated from critique system message] Use the critique below to produce an improved generation action. Start directly with the improved image generation response.";
 
 const composeCritiqueSystemPrompt = ({
   basePrompt,
@@ -380,7 +395,9 @@ const buildUtilHistorySnapshot = ({
   }
 
   const recent = thread.messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(
+      (message) => message.role === "user" || message.role === "assistant",
+    )
     .slice(-MAX_UTIL_HISTORY_MESSAGES)
     .map((message) => {
       const content = formatMessageContentForPrompt(message.content).trim();
@@ -400,9 +417,10 @@ const buildUtilHistorySnapshot = ({
     recent.length > MAX_UTIL_HISTORY_CHARS
       ? recent.slice(recent.length - MAX_UTIL_HISTORY_CHARS)
       : recent;
-  const generatedCount = getGeneratedImagesForThread(thread.messages, 12).filter(
-    (part) => part.type === "image",
-  ).length;
+  const generatedCount = getGeneratedImagesForThread(
+    thread.messages,
+    12,
+  ).filter((part) => part.type === "image").length;
   const userCount = getReferenceableUserImageCount({
     thread,
     currentUserMessage,
@@ -1015,7 +1033,11 @@ const maybeAutoCompactThreadContext = async ({
   }
 };
 
-type IntegrationServerLabel = "comfy" | "comfy_readonly" | "web_search" | "civitai";
+type IntegrationServerLabel =
+  | "comfy"
+  | "comfy_readonly"
+  | "web_search"
+  | "civitai";
 
 type EphemeralMcpIntegration = {
   type: "ephemeral_mcp";
@@ -1028,7 +1050,10 @@ const buildIntegrationsForServers = (
 ): EphemeralMcpIntegration[] => {
   const integrations: EphemeralMcpIntegration[] = [];
 
-  if (servers.includes("web_search") && process.env.WEB_SEARCH_MCP_ENABLED === "true") {
+  if (
+    servers.includes("web_search") &&
+    process.env.WEB_SEARCH_MCP_ENABLED === "true"
+  ) {
     const serverUrl = process.env.WEB_SEARCH_MCP_URL;
     if (serverUrl) {
       integrations.push({
@@ -1055,7 +1080,10 @@ const buildIntegrationsForServers = (
     });
   }
 
-  if (servers.includes("civitai") && process.env.CIVITAI_MCP_ENABLED === "true") {
+  if (
+    servers.includes("civitai") &&
+    process.env.CIVITAI_MCP_ENABLED === "true"
+  ) {
     const serverUrl = process.env.CIVITAI_MCP_URL;
     if (serverUrl) {
       integrations.push({
@@ -1069,7 +1097,9 @@ const buildIntegrationsForServers = (
   return integrations;
 };
 
-const buildIntegrations = (promptMode: PromptMode): EphemeralMcpIntegration[] => {
+const buildIntegrations = (
+  promptMode: PromptMode,
+): EphemeralMcpIntegration[] => {
   if (promptMode === "regular" || promptMode === "writer") {
     return buildIntegrationsForServers(["web_search"]);
   }
@@ -1188,16 +1218,16 @@ const parseBracketUtilCommand = (text: string) => {
     return null as { command: ChatStreamCommand; cleanText: string } | null;
   }
 
-  const blockPattern = /\[\[util_task(?:@persistent)?\]\]([\s\S]*?)\[\[\/util_task\]\]/gi;
+  const blockPattern =
+    /\[\[util_task(?:@(persistent|persistant))?\]\]([\s\S]*?)(?:\[\[\/util_task\]\]|\[\/util_task\])/gi;
   const blockMatches = [...trimmed.matchAll(blockPattern)];
   for (let index = blockMatches.length - 1; index >= 0; index -= 1) {
     const match = blockMatches[index];
     const full = match[0] ?? "";
-    const body = (match[1] ?? "").trim();
-    const isPersistent = full
-      .slice(0, full.indexOf("]]") + 2)
-      .toLowerCase()
-      .includes("@persistent");
+    const persistenceTag = (match[1] ?? "").toLowerCase();
+    const body = (match[2] ?? "").trim();
+    const isPersistent =
+      persistenceTag === "persistent" || persistenceTag === "persistant";
     if (!full || !body) {
       continue;
     }
@@ -1228,7 +1258,9 @@ const parseBracketUtilCommand = (text: string) => {
       __type: "chat.stream_signal",
       route: "util_task",
       stage,
-      ...(fields.context_text ? { context_text: fields.context_text.slice(0, 1000) } : {}),
+      ...(fields.context_text
+        ? { context_text: fields.context_text.slice(0, 1000) }
+        : {}),
       ...(fields.nonce ? { nonce: fields.nonce } : {}),
       ...(isPersistent ? { persistent: true } : {}),
     };
@@ -1270,7 +1302,9 @@ const parseBracketUtilCommand = (text: string) => {
       __type: "chat.stream_signal",
       route: "util_task",
       stage,
-      ...(options.context_text ? { context_text: options.context_text.slice(0, 1000) } : {}),
+      ...(options.context_text
+        ? { context_text: options.context_text.slice(0, 1000) }
+        : {}),
       ...(options.nonce ? { nonce: options.nonce } : {}),
       ...(options.persistent === "true" || options.persistent === "1"
         ? { persistent: true }
@@ -1331,10 +1365,19 @@ const extractJsonObjectCandidates = (text: string) => {
   return candidates;
 };
 
-const parseChatStreamCommand = (text: string) => {
+const parseChatStreamCommand = (
+  text: string,
+): {
+  command: ChatStreamCommand | null;
+  cleanText: string;
+  source: "text" | "none";
+} => {
   const bracketCommand = parseBracketUtilCommand(text);
   if (bracketCommand) {
-    return bracketCommand;
+    return {
+      ...bracketCommand,
+      source: "text",
+    };
   }
 
   const trimmed = text.trim();
@@ -1342,15 +1385,22 @@ const parseChatStreamCommand = (text: string) => {
     return {
       command: null as ChatStreamCommand | null,
       cleanText: text,
+      source: "none",
     };
   }
 
-  const fencedMatches = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi)].map(
-    (match) => match[1] ?? "",
-  );
-  const candidates = [...fencedMatches, trimmed, ...extractJsonObjectCandidates(trimmed)]
+  const fencedMatches = [
+    ...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/gi),
+  ].map((match) => match[1] ?? "");
+  const candidates = [
+    ...fencedMatches,
+    trimmed,
+    ...extractJsonObjectCandidates(trimmed),
+  ]
     .map((value) => value.trim())
-    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+    .filter(
+      (value, index, all) => value.length > 0 && all.indexOf(value) === index,
+    );
 
   let selectedCommand: ChatStreamCommand | null = null;
   let selectedRawCandidate = "";
@@ -1396,9 +1446,7 @@ const parseChatStreamCommand = (text: string) => {
       route: "util_task",
       stage,
       ...(normalizedNonce ? { nonce: normalizedNonce } : {}),
-      ...(normalizedContextText
-        ? { context_text: normalizedContextText }
-        : {}),
+      ...(normalizedContextText ? { context_text: normalizedContextText } : {}),
       ...(normalizedPersistent ? { persistent: true } : {}),
     };
     selectedCommand = command;
@@ -1410,12 +1458,164 @@ const parseChatStreamCommand = (text: string) => {
     return {
       command: selectedCommand,
       cleanText,
+      source: "text",
     };
   }
 
   return {
     command: null as ChatStreamCommand | null,
     cleanText: text,
+    source: "none",
+  };
+};
+
+const parseChatStreamCommandFromOutputs = ({
+  text,
+  reasoning,
+  allowReasoningFallback = true,
+}: {
+  text: string;
+  reasoning: string;
+  allowReasoningFallback?: boolean;
+}): {
+  command: ChatStreamCommand | null;
+  cleanText: string;
+  source: "text" | "reasoning" | "none";
+} => {
+  const fromText = parseChatStreamCommand(text);
+  if (fromText.command) {
+    return fromText;
+  }
+
+  if (!allowReasoningFallback || reasoning.trim().length === 0) {
+    return fromText;
+  }
+
+  const fromReasoning = parseChatStreamCommand(reasoning);
+  if (fromReasoning.command) {
+    return {
+      command: fromReasoning.command,
+      cleanText: text,
+      source: "reasoning" as const,
+    };
+  }
+
+  return fromText;
+};
+
+type KnownImageWorkflow = "base" | "illustration" | "edit";
+
+const extractWorkflowNameFromText = (
+  input: string | null | undefined,
+): KnownImageWorkflow | null => {
+  if (!input) {
+    return null;
+  }
+  const match = input.match(/\bselected\s+workflow\s*:\s*(base|illustration|edit)\b/i);
+  if (!match) {
+    return null;
+  }
+  const workflow = (match[1] ?? "").toLowerCase();
+  if (
+    workflow === "base" ||
+    workflow === "illustration" ||
+    workflow === "edit"
+  ) {
+    return workflow;
+  }
+  return null;
+};
+
+const normalizeUtilStageForImageChain = ({
+  currentUtilTaskName,
+  parsedStage,
+  parsedContextText,
+  currentSystemPromptExt,
+  parsedPersistent,
+}: {
+  currentUtilTaskName: string;
+  parsedStage: string;
+  parsedContextText?: string;
+  currentSystemPromptExt?: string;
+  parsedPersistent?: boolean;
+}):
+  | {
+      accepted: true;
+      stage: string;
+      persistent?: boolean;
+      normalized: boolean;
+      reason?: string;
+    }
+  | {
+      accepted: false;
+      reason: string;
+    } => {
+  if (!currentUtilTaskName.startsWith("img_gen_")) {
+    return {
+      accepted: true,
+      stage: parsedStage,
+      persistent: parsedPersistent,
+      normalized: false,
+    };
+  }
+
+  if (currentUtilTaskName === "img_gen_workflow") {
+    if (parsedStage === "img_gen_loras") {
+      return {
+        accepted: true,
+        stage: parsedStage,
+        persistent: parsedPersistent,
+        normalized: false,
+      };
+    }
+    return {
+      accepted: false,
+      reason: `invalid transition ${currentUtilTaskName} -> ${parsedStage}`,
+    };
+  }
+
+  if (currentUtilTaskName === "img_gen_loras") {
+    if (/^img_gen_(base|illustration|edit)_finalize$/.test(parsedStage)) {
+      return {
+        accepted: true,
+        stage: parsedStage,
+        persistent: parsedPersistent,
+        normalized: false,
+      };
+    }
+
+    const workflow =
+      extractWorkflowNameFromText(parsedContextText) ??
+      extractWorkflowNameFromText(currentSystemPromptExt);
+
+    if (workflow) {
+      return {
+        accepted: true,
+        stage: `img_gen_${workflow}_finalize`,
+        persistent: true,
+        normalized: true,
+        reason: `normalized from ${parsedStage} using workflow=${workflow}`,
+      };
+    }
+
+    return {
+      accepted: false,
+      reason: `could not resolve finalize workflow for ${currentUtilTaskName} -> ${parsedStage}`,
+    };
+  }
+
+  if (/^img_gen_(base|illustration|edit)_finalize$/.test(currentUtilTaskName)) {
+    return {
+      accepted: false,
+      reason: `no next util stage expected after ${currentUtilTaskName}`,
+    };
+  }
+
+  return {
+    accepted: true,
+    stage: parsedStage,
+    persistent: parsedPersistent,
+    normalized: false,
   };
 };
 const appendUtilCommandNonce = (
@@ -1767,21 +1967,91 @@ export const executeQueuedChatTask = async (
           moodId,
         }),
         integrations: buildIntegrationsForServers(["comfy"]),
+        stream: true,
       });
-      const data = (await response.json()) as ChatResponse;
       if (!response.ok) {
+        const bodyText = await response.text();
+        let data: ChatResponse | null = null;
+        try {
+          data = JSON.parse(bodyText) as ChatResponse;
+        } catch {
+          data = null;
+        }
         throw new Error(
-          data.error?.message ?? "Unbiased critique request failed.",
+          data?.error?.message ??
+            bodyText ??
+            "Unbiased critique request failed.",
         );
       }
+      if (!response.body) {
+        throw new Error("Unbiased critique stream body is missing.");
+      }
 
-      const unbiasedCritique = getAssistantText(data.output).trim();
+      let streamedText = "";
+      let streamedReasoning = "";
+      let finalOutput: LmStudioOutput[] = [];
+      let finalResponseId: string | null = null;
+
+      await parseSseEvents(response.body, (event) => {
+        if (event.type === "message.delta" && typeof event.content === "string") {
+          streamedText += event.content;
+          updateRunningTask(task.id, {
+            result: {
+              ...(getTask(task.id)?.result ?? {}),
+              text: streamedText,
+              reasoning: streamedReasoning,
+              responseId: finalResponseId,
+              summaryCallsInCurrentRequest: 0,
+            },
+          });
+          return;
+        }
+
+        if (
+          event.type === "reasoning.delta" &&
+          typeof event.content === "string"
+        ) {
+          streamedReasoning += event.content;
+          updateRunningTask(task.id, {
+            result: {
+              ...(getTask(task.id)?.result ?? {}),
+              text: streamedText,
+              reasoning: streamedReasoning,
+              responseId: finalResponseId,
+              summaryCallsInCurrentRequest: 0,
+            },
+          });
+          return;
+        }
+
+        if (event.type === "chat.end") {
+          finalOutput = event.result.output ?? [];
+          finalResponseId = event.result.response_id ?? null;
+          return;
+        }
+
+        if (event.type === "error") {
+          throw new Error(
+            event.error?.message ?? "Unbiased critique streaming error.",
+          );
+        }
+      });
+
+      const finalText =
+        finalOutput.length > 0
+          ? getAssistantText(finalOutput).trim()
+          : streamedText.trim();
+      const finalReasoning =
+        finalOutput.length > 0
+          ? getAssistantReasoning(finalOutput).trim()
+          : streamedReasoning.trim();
+      const unbiasedCritique = finalText;
       updateRunningTask(task.id, {
         result: {
-          ...(task.result ?? {}),
-          text: "",
-          reasoning: "",
-          responseId: data.response_id ?? null,
+          ...(getTask(task.id)?.result ?? {}),
+          text: finalText,
+          reasoning: finalReasoning,
+          responseId: finalResponseId,
           summaryCallsInCurrentRequest: 0,
           unbiasedCritique,
         },
@@ -1825,40 +2095,109 @@ export const executeQueuedChatTask = async (
           moodId,
         }),
         integrations: buildIntegrationsForServers(["comfy"]),
+        stream: true,
       });
-      const data = (await response.json()) as ChatResponse;
       if (!response.ok) {
+        const bodyText = await response.text();
+        let data: ChatResponse | null = null;
+        try {
+          data = JSON.parse(bodyText) as ChatResponse;
+        } catch {
+          data = null;
+        }
         throw new Error(
-          data.error?.message ?? "Biased critique request failed.",
+          data?.error?.message ??
+            bodyText ??
+            "Biased critique request failed.",
         );
       }
+      if (!response.body) {
+        throw new Error("Biased critique stream body is missing.");
+      }
 
-      const critiqueText = getAssistantText(data.output).trim();
-      const critiqueReasoning = getAssistantReasoning(data.output).trim();
-      let delegatedToTaskGroupId: string | undefined;
+      let streamedText = "";
+      let streamedReasoning = "";
+      let finalOutput: LmStudioOutput[] = [];
+      let finalResponseId: string | null = null;
 
-      if (task.payload.threadId) {
-        const autoFollowupMessage = [
-          critiqueAutoFollowupDisclaimer,
-          [critiqueText, critiqueReasoning]
-            .filter((value) => value.trim().length > 0)
-            .join("\n\n") || "No critique text was generated.",
-        ].join("\n\n");
-
-        const autoFollowupTask = enqueueChatTask({
-          kind: "conversation",
-          threadId: task.payload.threadId,
-          promptMode: "artist",
-          moodId: null,
-          contextLength: requestedContextLength,
-          userMessage: [
-            {
-              type: "text",
-              text: autoFollowupMessage,
+      await parseSseEvents(response.body, (event) => {
+        if (event.type === "message.delta" && typeof event.content === "string") {
+          streamedText += event.content;
+          updateRunningTask(task.id, {
+            result: {
+              ...(getTask(task.id)?.result ?? {}),
+              text: streamedText,
+              reasoning: streamedReasoning,
+              responseId: finalResponseId,
+              summaryCallsInCurrentRequest: 0,
             },
-          ],
+          });
+          return;
+        }
+
+        if (
+          event.type === "reasoning.delta" &&
+          typeof event.content === "string"
+        ) {
+          streamedReasoning += event.content;
+          updateRunningTask(task.id, {
+            result: {
+              ...(getTask(task.id)?.result ?? {}),
+              text: streamedText,
+              reasoning: streamedReasoning,
+              responseId: finalResponseId,
+              summaryCallsInCurrentRequest: 0,
+            },
+          });
+          return;
+        }
+
+        if (event.type === "chat.end") {
+          finalOutput = event.result.output ?? [];
+          finalResponseId = event.result.response_id ?? null;
+          return;
+        }
+
+        if (event.type === "error") {
+          throw new Error(
+            event.error?.message ?? "Biased critique streaming error.",
+          );
+        }
+      });
+
+      const critiqueText =
+        finalOutput.length > 0
+          ? getAssistantText(finalOutput).trim()
+          : streamedText.trim();
+      const critiqueReasoning =
+        finalOutput.length > 0
+          ? getAssistantReasoning(finalOutput).trim()
+          : streamedReasoning.trim();
+
+      if (task.payload.threadId && critiqueText.length > 0) {
+        const latestThread = getThread(task.payload.threadId);
+        const lastMessage = latestThread?.messages.at(-1);
+        const shouldAppendAssistantMessage =
+          !lastMessage ||
+          lastMessage.role !== "assistant" ||
+          getTextFromMessageContent(lastMessage.content) !== critiqueText;
+
+        updateThread(task.payload.threadId, {
+          ...(shouldAppendAssistantMessage
+            ? {
+                appendMessages: [
+                  {
+                    role: "assistant" as const,
+                    content: [{ type: "text" as const, text: critiqueText }],
+                  },
+                ],
+              }
+            : {}),
+          lmstudioResponseId: finalResponseId,
+          lmstudioModelInstanceId:
+            latestThread?.lmstudioModelInstanceId ?? null,
+          lastPromptMode: "artist",
         });
-        delegatedToTaskGroupId = autoFollowupTask.id;
       }
 
       updateRunningTask(task.id, {
@@ -1866,9 +2205,8 @@ export const executeQueuedChatTask = async (
           ...(task.result ?? {}),
           text: critiqueText,
           reasoning: critiqueReasoning,
-          responseId: data.response_id ?? null,
+          responseId: finalResponseId,
           summaryCallsInCurrentRequest: 0,
-          delegatedToTaskGroupId,
         },
       });
       setGroupTaskStatusByKind({
@@ -2016,15 +2354,14 @@ export const executeQueuedChatTask = async (
       const isUtilConversation =
         typeof task.payload.utilTaskName === "string" &&
         task.payload.utilTaskName.trim().length > 0;
-      effectivePreviousResponseId =
-        isUtilConversation
-          ? null
-          : typeof task.payload.previousResponseIdOverride === "string" &&
-              task.payload.previousResponseIdOverride.trim().length > 0
-            ? task.payload.previousResponseIdOverride.trim()
-            : (task.payload.continuationIndex ?? 0) > 0
-              ? null
-              : (thread?.lmstudioResponseId ?? null);
+      effectivePreviousResponseId = isUtilConversation
+        ? null
+        : typeof task.payload.previousResponseIdOverride === "string" &&
+            task.payload.previousResponseIdOverride.trim().length > 0
+          ? task.payload.previousResponseIdOverride.trim()
+          : (task.payload.continuationIndex ?? 0) > 0
+            ? null
+            : (thread?.lmstudioResponseId ?? null);
 
       userInput = buildLmStudioInput({
         summary: thread?.conversationSummary ?? null,
@@ -2114,7 +2451,7 @@ export const executeQueuedChatTask = async (
           context_length: requestedContextLength,
           input,
           previous_response_id: previousResponseId,
-          ...((previousResponseId && !forceSystemPrompt)
+          ...(previousResponseId && !forceSystemPrompt
             ? {}
             : {
                 system_prompt:
@@ -2355,6 +2692,22 @@ export const executeQueuedChatTask = async (
         Array.isArray(task.payload.utilMcpServers)
           ? buildIntegrationsForServers(task.payload.utilMcpServers)
           : undefined;
+      if (
+        task.payload.kind === "conversation" &&
+        typeof task.payload.utilTaskName === "string" &&
+        task.payload.utilTaskName.trim().length > 0
+      ) {
+        console.info("[chat-runner] util-task:execute", {
+          taskGroupId: task.id,
+          threadId: task.payload.threadId ?? null,
+          utilTaskName: task.payload.utilTaskName,
+          utilCommandDepth: task.payload.utilCommandDepth ?? 0,
+          utilEnqueueCount: task.payload.utilEnqueueCount ?? 0,
+          hasSystemPromptExt:
+            typeof task.payload.utilSystemPromptExt === "string" &&
+            task.payload.utilSystemPromptExt.trim().length > 0,
+        });
+      }
       let stream: ReadableStream<Uint8Array>;
       try {
         if (task.payload.kind !== "conversation") {
@@ -2551,8 +2904,82 @@ export const executeQueuedChatTask = async (
       throw new Error("LM Studio did not return any output.");
     }
 
-    const parsedCommand = parseChatStreamCommand(text);
+    let parsedCommand = parseChatStreamCommandFromOutputs({
+      text,
+      reasoning,
+      allowReasoningFallback: !(
+        task.payload.kind === "conversation" &&
+        typeof task.payload.utilTaskName === "string" &&
+        task.payload.utilTaskName.trim().length > 0
+      ),
+    });
+    if (
+      task.payload.kind === "conversation" &&
+      parsedCommand.command &&
+      typeof task.payload.utilTaskName === "string" &&
+      task.payload.utilTaskName.trim().length > 0
+    ) {
+      const normalizedTransition = normalizeUtilStageForImageChain({
+        currentUtilTaskName: task.payload.utilTaskName.trim(),
+        parsedStage: parsedCommand.command.stage,
+        parsedContextText:
+          typeof parsedCommand.command.context_text === "string"
+            ? parsedCommand.command.context_text
+            : undefined,
+        currentSystemPromptExt:
+          typeof task.payload.utilSystemPromptExt === "string"
+            ? task.payload.utilSystemPromptExt
+            : undefined,
+        parsedPersistent: parsedCommand.command.persistent,
+      });
+
+      if (!normalizedTransition.accepted) {
+        console.info("[chat-runner] util-command:rejected-transition", {
+          taskGroupId: task.id,
+          threadId: task.payload.threadId ?? null,
+          currentUtilTaskName: task.payload.utilTaskName,
+          parsedStage: parsedCommand.command.stage,
+          reason: normalizedTransition.reason,
+          source: parsedCommand.source,
+        });
+        parsedCommand = {
+          ...parsedCommand,
+          command: null,
+        };
+      } else if (normalizedTransition.normalized) {
+        const previousStage = parsedCommand.command.stage;
+        parsedCommand = {
+          ...parsedCommand,
+          command: {
+            ...parsedCommand.command,
+            stage: normalizedTransition.stage,
+            ...(normalizedTransition.persistent === true
+              ? { persistent: true }
+              : {}),
+          },
+        };
+        console.info("[chat-runner] util-command:normalized-transition", {
+          taskGroupId: task.id,
+          threadId: task.payload.threadId ?? null,
+          currentUtilTaskName: task.payload.utilTaskName,
+          previousStage,
+          normalizedStage: normalizedTransition.stage,
+          reason: normalizedTransition.reason ?? null,
+          source: parsedCommand.source,
+        });
+      }
+    }
     if (task.payload.kind === "conversation" && parsedCommand.command) {
+      console.info("[chat-runner] util-command:parsed", {
+        taskGroupId: task.id,
+        threadId: task.payload.threadId ?? null,
+        stage: parsedCommand.command.stage,
+        source: parsedCommand.source,
+        persistent: parsedCommand.command.persistent === true,
+        hasContextText:
+          typeof parsedCommand.command.context_text === "string" &&
+          parsedCommand.command.context_text.trim().length > 0,
+      });
       const commandDepth = task.payload.utilCommandDepth ?? 0;
       const utilEnqueueCount = task.payload.utilEnqueueCount ?? 0;
       const commandNonce =
@@ -2606,13 +3033,13 @@ export const executeQueuedChatTask = async (
             typeof task.payload.utilChainBaseResponseId === "string" &&
             task.payload.utilChainBaseResponseId.trim().length > 0
               ? task.payload.utilChainBaseResponseId.trim()
-            : typeof task.payload.previousResponseIdOverride === "string" &&
-                task.payload.previousResponseIdOverride.trim().length > 0
-              ? task.payload.previousResponseIdOverride.trim()
-            : typeof finalResponse?.response_id === "string" &&
-                finalResponse.response_id.trim().length > 0
-              ? finalResponse.response_id.trim()
-              : (thread?.lmstudioResponseId ?? null);
+              : typeof task.payload.previousResponseIdOverride === "string" &&
+                  task.payload.previousResponseIdOverride.trim().length > 0
+                ? task.payload.previousResponseIdOverride.trim()
+                : typeof finalResponse?.response_id === "string" &&
+                    finalResponse.response_id.trim().length > 0
+                  ? finalResponse.response_id.trim()
+                  : (thread?.lmstudioResponseId ?? null);
 
           const delegatedText = applyCompactionMarkersToText(
             parsedCommand.cleanText,
@@ -2665,12 +3092,26 @@ export const executeQueuedChatTask = async (
           });
           return;
         }
-
         console.info("[chat-runner] util-command:unknown-task", {
           taskId: task.id,
           utilTaskName,
         });
       }
+    }
+
+    if (
+      task.payload.kind === "conversation" &&
+      typeof task.payload.utilTaskName === "string" &&
+      task.payload.utilTaskName.trim().length > 0 &&
+      !parsedCommand.command
+    ) {
+      console.info("[chat-runner] util-task:no-command-emitted", {
+        taskGroupId: task.id,
+        threadId: task.payload.threadId ?? null,
+        utilTaskName: task.payload.utilTaskName,
+        textPreview: truncateForLog(text, 320),
+        reasoningPreview: truncateForLog(reasoning, 320),
+      });
     }
 
     if (
