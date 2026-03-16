@@ -1,4 +1,4 @@
-﻿import Database from "better-sqlite3";
+import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -7,6 +7,45 @@ const DB_PATH = path.join(DB_DIR, "comfy-bridge.sqlite");
 
 type DbGlobal = typeof globalThis & {
   __comfyBridgeDb?: Database.Database;
+};
+
+const migrateLegacyStreamSignalText = (input: string) => {
+  let output = input;
+
+  const replacements: Array<[RegExp, string]> = [
+    [/"__type"\s*:\s*"chat\.stream_command"/g, '"__type":"chat.stream_signal"'],
+    [/'__type'\s*:\s*'chat\.stream_command'/g, "'__type':'chat.stream_signal'"],
+    [/"command"\s*:\s*"enqueue_util_task"/g, '"route":"util_task"'],
+    [/'command'\s*:\s*'enqueue_util_task'/g, "'route':'util_task'"],
+    [/"utilTask"\s*:/g, '"stage":'],
+    [/'utilTask'\s*:/g, "'stage':"],
+    [/"system_prompt_ext"\s*:/g, '"context_text":'],
+    [/'system_prompt_ext'\s*:/g, "'context_text':"],
+    [/\benqueue_util_task\b/g, "util_task"],
+    [/\bsystem_prompt_ext\b/g, "context_text"],
+    [/\butilTask\b/g, "stage"],
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    output = output.replace(pattern, replacement);
+  }
+
+  output = output.replace(
+    /\{"__type":"chat\.stream_signal","route":"util_task","stage":"([^"]+)","context_text":"([^"]*)"\}/g,
+    "[[util_task]]\nstage: $1\ncontext_text: $2\n[[/util_task]]",
+  );
+  output = output.replace(
+    /\{'__type':'chat\.stream_signal','route':'util_task','stage':'([^']+)','context_text':'([^']*)'\}/g,
+    "[[util_task]]\nstage: $1\ncontext_text: $2\n[[/util_task]]",
+  );
+  output = output.replace(
+    /Output only valid JSON with this exact shape:/gi,
+    "Output only this bracket command block:",
+  );
+  output = output.replace(/Do not output any text before or after the JSON\./gi, "Do not output any text before or after this block.");
+  output = output.replace(/Do not include markdown, code fences, or explanations\./gi, "Do not include markdown, code fences, JSON, or explanations.");
+
+  return output;
 };
 
 const buildDefaultGroupTasks = (
@@ -155,6 +194,14 @@ const ensureSchema = (db: Database.Database) => {
       label TEXT NOT NULL,
       prompt TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS util_task_settings (
+      name TEXT PRIMARY KEY,
+      prompt TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      mcp_servers_json TEXT NOT NULL DEFAULT '[]',
       updated_at TEXT NOT NULL
     );
   `);
@@ -311,6 +358,56 @@ const ensureSchema = (db: Database.Database) => {
       ALTER TABLE threads
       ADD COLUMN user_intent TEXT
     `);
+  }
+
+  const utilTaskColumns = db.prepare(`PRAGMA table_info(util_task_settings)`).all() as Array<{
+    name: string;
+  }>;
+  if (!utilTaskColumns.some((column) => column.name === "mcp_servers_json")) {
+    db.exec(`
+      ALTER TABLE util_task_settings
+      ADD COLUMN mcp_servers_json TEXT NOT NULL DEFAULT '[]'
+    `);
+    db.exec(`
+      UPDATE util_task_settings
+      SET mcp_servers_json = '[]'
+      WHERE mcp_servers_json IS NULL OR TRIM(COALESCE(mcp_servers_json, '')) = ''
+    `);
+  }
+
+  const migratePromptSetting = db.prepare(
+    `
+      UPDATE prompt_mode_settings
+      SET prompt = ?, updated_at = ?
+      WHERE mode = ?
+    `,
+  );
+  const promptSettingRows = db
+    .prepare(`SELECT mode, prompt FROM prompt_mode_settings`)
+    .all() as Array<{ mode: string; prompt: string }>;
+  const now = new Date().toISOString();
+  for (const row of promptSettingRows) {
+    const migratedPrompt = migrateLegacyStreamSignalText(row.prompt);
+    if (migratedPrompt !== row.prompt) {
+      migratePromptSetting.run(migratedPrompt, now, row.mode);
+    }
+  }
+
+  const migrateUtilTaskSetting = db.prepare(
+    `
+      UPDATE util_task_settings
+      SET prompt = ?, updated_at = ?
+      WHERE name = ?
+    `,
+  );
+  const utilTaskSettingRows = db
+    .prepare(`SELECT name, prompt FROM util_task_settings`)
+    .all() as Array<{ name: string; prompt: string }>;
+  for (const row of utilTaskSettingRows) {
+    const migratedPrompt = migrateLegacyStreamSignalText(row.prompt);
+    if (migratedPrompt !== row.prompt) {
+      migrateUtilTaskSetting.run(migratedPrompt, now, row.name);
+    }
   }
 
   const taskRows = db

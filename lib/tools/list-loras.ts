@@ -2,12 +2,12 @@ import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { listAvailableLoras } from "@/lib/comfy/loras";
+import { workflowNames } from "@/lib/comfy/workflows/types";
 
 export const listLorasToolName = "list_available_loras";
 
 const listLorasInputSchema = z.object({
-  query: z.string().optional(),
-  limit: z.number().int().positive().max(200).default(50),
+  workflowName: z.enum(workflowNames).optional(),
 });
 
 export const registerListLorasMcpTool = (server: McpServer) => {
@@ -16,7 +16,7 @@ export const registerListLorasMcpTool = (server: McpServer) => {
     {
       title: "List Available LoRAs",
       description:
-        "Scans configured LoRA subfolders and returns available LoRA names (including subfolder path and extension). Use this before the first image generation in a conversation so matching LoRAs can be preferred for the requested concept.",
+        "Lists available LoRA files from configured ComfyUI LoRA directories.",
       inputSchema: listLorasInputSchema,
     },
     async (input) => {
@@ -48,4 +48,3 @@ export const registerListLorasMcpTool = (server: McpServer) => {
     },
   );
 };
-

@@ -208,6 +208,24 @@ export const transferTaskByKind = ({
     : null;
 };
 
+export const updateChatTaskPayload = (
+  taskId: string,
+  payload: TaskGroupPayloadMap["chat"],
+) => {
+  const existing = getTask(taskId);
+  if (!existing || existing.type !== "chat") {
+    return null;
+  }
+
+  const updated = updateTaskPayload(taskId, payload);
+  if (!updated || updated.type !== "chat") {
+    return null;
+  }
+
+  emitUpdatedTask(updated);
+  emitSchedulerSnapshot();
+  return updated;
+};
 export const setGroupTaskStatusByKind = ({
   taskId,
   kind,
@@ -584,3 +602,4 @@ export const updateComfyTaskForJob = (
   emitSchedulerSnapshot();
   return task;
 };
+

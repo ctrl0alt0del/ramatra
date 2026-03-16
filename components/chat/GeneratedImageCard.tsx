@@ -7,6 +7,7 @@ import { ChevronDown, ChevronRight, MessageSquareText } from "lucide-react";
 import { useThreadRuntime } from "@assistant-ui/react";
 
 import { SkeletonBlock } from "./SkeletonBlock";
+import { useMood } from "./mood";
 import type { ThreadApiDetail } from "./types";
 
 type CompletedImage = {
@@ -95,6 +96,7 @@ export function GeneratedImageCard({
   const critiqueStreamsRef = useRef<Record<number, EventSource>>({});
   const followupStreamIdsRef = useRef<Record<number, string>>({});
   const threadRuntime = useThreadRuntime({ optional: true });
+  const { moodId } = useMood();
 
   useEffect(() => {
     if (!hasValidTaskId) return;
@@ -303,6 +305,7 @@ export function GeneratedImageCard({
           comfyTaskId: taskId,
           imageIndex,
           threadId,
+          moodId,
         }),
       });
 
@@ -537,15 +540,3 @@ export function GeneratedImageCard({
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-

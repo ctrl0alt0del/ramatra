@@ -203,6 +203,52 @@ export const forceResumeChatGpuMode = async () => {
   }
 };
 
+export const hardResetChatSystem = async () => {
+  try {
+    await runTransition(async () => {
+      setSchedulerGpuMode("switching");
+      setSchedulerLastError(null);
+
+      const client = await getClient();
+
+      try {
+        await client.interrupt();
+      } catch {
+        // Ignore if nothing is running.
+      }
+
+      try {
+        await client.clearItems("queue");
+      } catch {
+        // Ignore queue clear failures and continue recovery.
+      }
+
+      try {
+        await client.free({
+          unload_models: true,
+          free_memory: true,
+        });
+      } catch {
+        // Ignore Comfy free failures and continue reset.
+      }
+
+      try {
+        await unloadAllLmStudioModels();
+      } catch {
+        // Ignore LM unload failures and continue reset.
+      }
+
+      resetTaskStore();
+      setSchedulerGpuMode("chat");
+    });
+  } catch (error) {
+    setSchedulerLastError(
+      error instanceof Error ? error.message : "Failed to hard reset chat system.",
+    );
+    throw error;
+  }
+};
+
 export const getSchedulerSystemState = () => {
   const snapshot = getSchedulerState();
   const activeTask = getActiveTask();

@@ -51,14 +51,25 @@ export type TaskGroupPayloadMap = {
         persistent?: boolean;
         contextLength?: number;
         userMessage: MessagePart[];
+        regenerateOfLastAssistant?: boolean;
         continuationIndex?: number;
         carryoverText?: string;
         carryoverReasoning?: string;
+        systemPromptOverride?: string;
+        previousResponseIdOverride?: string | null;
+        utilChainBaseResponseId?: string | null;
+        utilTaskName?: string;
+        utilSystemPromptExt?: string;
+        utilMcpServers?: Array<"comfy" | "comfy_readonly" | "web_search" | "civitai">;
+        utilCommandDepth?: number;
+        utilEnqueueCount?: number;
+        utilCommandNonces?: string[];
         tasks?: Task[];
       }
     | {
         kind: "critique";
         threadId: string | null;
+        moodId?: string | null;
         comfyTaskId: string;
         imageIndex: number;
         contextLength?: number;
@@ -176,6 +187,4 @@ export type TaskEventMap = {
   "queue:changed": SchedulerSnapshot;
   "gpu:changed": SchedulerSnapshot;
 };
-
-
 
