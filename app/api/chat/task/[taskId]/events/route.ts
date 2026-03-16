@@ -19,7 +19,7 @@ const formatSseMessage = (event: string, data: unknown) => {
 
 export async function GET(req: Request, context: RouteContext) {
   const { taskId } = await context.params;
-  const ownerTaskId = resolveChatTaskGroupIdByStreamTaskId(taskId) ?? taskId;
+  let ownerTaskId = resolveChatTaskGroupIdByStreamTaskId(taskId) ?? taskId;
   const getView = () => {
     const view = getChatTaskView(ownerTaskId);
     if (!view) {
@@ -96,21 +96,35 @@ export async function GET(req: Request, context: RouteContext) {
       };
 
       const emitCurrentView = () => {
-        const view = getView();
-        if (!view) {
-          return;
-        }
+        let view = getView();
+        while (view) {
+          const delegatedToTaskGroupId =
+            view.status === "failed" ? undefined : view.delegatedToTaskGroupId;
+          if (
+            view.status === "completed" &&
+            typeof delegatedToTaskGroupId === "string" &&
+            delegatedToTaskGroupId.trim().length > 0 &&
+            delegatedToTaskGroupId !== ownerTaskId
+          ) {
+            // Do not emit intermediate "completed" snapshots for delegated tasks,
+            // otherwise clients can stop streaming too early.
+            ownerTaskId = delegatedToTaskGroupId;
+            view = getView();
+            continue;
+          }
 
-        if (!safeEnqueue(formatSseMessage("task", view))) {
-          return;
-        }
+          if (!safeEnqueue(formatSseMessage("task", view))) {
+            return;
+          }
 
-        if (view.status === "completed" || view.status === "failed") {
-          close();
+          if (view.status === "completed" || view.status === "failed") {
+            close();
+          }
+          return;
         }
       };
 
-      safeEnqueue(formatSseMessage("task", initialView));
+      emitCurrentView();
 
       unsubscribers.push(
         subscribeToTaskEvent("task:queued", ({ task }) => {
@@ -161,9 +175,6 @@ export async function GET(req: Request, context: RouteContext) {
 
       req.signal.addEventListener("abort", close, { once: true });
 
-      if (initialView.status === "completed" || initialView.status === "failed") {
-        close();
-      }
     },
   });
 

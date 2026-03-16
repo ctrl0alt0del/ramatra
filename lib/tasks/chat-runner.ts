@@ -1041,6 +1041,7 @@ type ChatStreamCommand = {
   stage: string;
   context_text?: string;
   nonce?: string;
+  persistent?: boolean;
 };
 
 const MAX_UTIL_COMMAND_DEPTH = 3;
@@ -1053,12 +1054,16 @@ const parseBracketUtilCommand = (text: string) => {
     return null as { command: ChatStreamCommand; cleanText: string } | null;
   }
 
-  const blockPattern = /\[\[util_task\]\]([\s\S]*?)\[\[\/util_task\]\]/gi;
+  const blockPattern = /\[\[util_task(?:@persistent)?\]\]([\s\S]*?)\[\[\/util_task\]\]/gi;
   const blockMatches = [...trimmed.matchAll(blockPattern)];
   for (let index = blockMatches.length - 1; index >= 0; index -= 1) {
     const match = blockMatches[index];
     const full = match[0] ?? "";
     const body = (match[1] ?? "").trim();
+    const isPersistent = full
+      .slice(0, full.indexOf("]]") + 2)
+      .toLowerCase()
+      .includes("@persistent");
     if (!full || !body) {
       continue;
     }
@@ -1091,6 +1096,7 @@ const parseBracketUtilCommand = (text: string) => {
       stage,
       ...(fields.context_text ? { context_text: fields.context_text.slice(0, 1000) } : {}),
       ...(fields.nonce ? { nonce: fields.nonce } : {}),
+      ...(isPersistent ? { persistent: true } : {}),
     };
 
     const cleanText = trimmed.replace(full, "").trim();
@@ -1132,6 +1138,9 @@ const parseBracketUtilCommand = (text: string) => {
       stage,
       ...(options.context_text ? { context_text: options.context_text.slice(0, 1000) } : {}),
       ...(options.nonce ? { nonce: options.nonce } : {}),
+      ...(options.persistent === "true" || options.persistent === "1"
+        ? { persistent: true }
+        : {}),
     };
     const cleanText = trimmed.replace(full, "").trim();
     return { command, cleanText };
@@ -1241,6 +1250,7 @@ const parseChatStreamCommand = (text: string) => {
       record.context_text.trim().length > 0
         ? record.context_text.trim().slice(0, 1000)
         : undefined;
+    const normalizedPersistent = record.persistent === true;
 
     const stage = record.stage.trim();
     if (!stage || stage.includes("<") || stage.includes(">")) {
@@ -1255,6 +1265,7 @@ const parseChatStreamCommand = (text: string) => {
       ...(normalizedContextText
         ? { context_text: normalizedContextText }
         : {}),
+      ...(normalizedPersistent ? { persistent: true } : {}),
     };
     selectedCommand = command;
     selectedRawCandidate = rawCandidate.trim();
@@ -2465,7 +2476,7 @@ export const executeQueuedChatTask = async (
             threadId: task.payload.threadId,
             promptMode,
             moodId,
-            persistent: false,
+            persistent: parsedCommand.command.persistent === true,
             contextLength: requestedContextLength,
             userMessage: [{ type: "text", text: " " }],
             systemPromptOverride: delegatedSystemPrompt,
@@ -2540,6 +2551,9 @@ export const executeQueuedChatTask = async (
         lastMessage.role !== "assistant" ||
         getTextFromMessageContent(lastMessage.content) !==
           textWithCompactionMarkers;
+      const isPersistentUtilConversation =
+        typeof task.payload.utilTaskName === "string" &&
+        task.payload.utilTaskName.trim().length > 0;
       const appendMessages = shouldAppendAssistantMessage
         ? [
             {
@@ -2552,8 +2566,12 @@ export const executeQueuedChatTask = async (
         : undefined;
 
       const updatedThread = updateThread(task.payload.threadId, {
-        lmstudioResponseId: finalResponse?.response_id ?? null,
-        lmstudioModelInstanceId: finalResponse?.model_instance_id ?? null,
+        lmstudioResponseId: isPersistentUtilConversation
+          ? (latestThread?.lmstudioResponseId ?? null)
+          : (finalResponse?.response_id ?? null),
+        lmstudioModelInstanceId: isPersistentUtilConversation
+          ? (latestThread?.lmstudioModelInstanceId ?? null)
+          : (finalResponse?.model_instance_id ?? null),
         lastPromptMode: promptMode,
         contextWindowUsedTokens: usedContextTokens,
         contextWindowTotalTokens: requestedContextLength,
