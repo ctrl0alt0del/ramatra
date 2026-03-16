@@ -2621,6 +2621,11 @@ export const executeQueuedChatTask = async (
             persistent: parsedCommand.command.persistent === true,
             contextLength: requestedContextLength,
             userMessage: [{ type: "text", text: " " }],
+            carryoverText: applyCompactionMarkersToText(
+              parsedCommand.cleanText,
+              inRequestCompactionBreakOffsets,
+            ),
+            carryoverReasoning: reasoning,
             systemPromptOverride: delegatedSystemPrompt,
             previousResponseIdOverride: utilChainBaseResponseId,
             utilChainBaseResponseId,
@@ -3239,4 +3244,6 @@ const maybeEnqueueTitleGenerationTask = (threadId: string) => {
     ),
   });
 };
+
+
 

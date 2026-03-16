@@ -143,6 +143,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
         const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
         let lastText = "";
         let lastReasoning = "";
+        let lastOwnerTaskGroupId: string | null = null;
         let done = false;
         const queue: Array<{
           content: Array<
@@ -191,6 +192,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
                 text: string;
                 reasoning?: string;
                 summaryCallsInCurrentRequest?: number;
+                ownerTaskGroupId?: string;
               }
             | {
                 status: "failed";
@@ -203,17 +205,48 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
             return;
           }
 
-          const nextReasoning = payload.reasoning ?? "";
+          const mergePrefixed = (prefix: string, value: string) => {
+            if (!prefix) {
+              return value;
+            }
+
+            return value.startsWith(prefix) ? value : `${prefix}${value}`;
+          };
+
+          const ownerTaskGroupId =
+            typeof payload.ownerTaskGroupId === "string" &&
+            payload.ownerTaskGroupId.trim().length > 0
+              ? payload.ownerTaskGroupId
+              : null;
+
+          const ownerChanged =
+            ownerTaskGroupId !== null &&
+            lastOwnerTaskGroupId !== null &&
+            ownerTaskGroupId !== lastOwnerTaskGroupId;
+
+          const rawText = payload.text ?? "";
+          const rawReasoning = payload.reasoning ?? "";
+
+          const nextText =
+            ownerChanged && !rawText.startsWith(lastText)
+              ? mergePrefixed(lastText, rawText)
+              : rawText;
+          const nextReasoning =
+            ownerChanged && !rawReasoning.startsWith(lastReasoning)
+              ? mergePrefixed(lastReasoning, rawReasoning)
+              : rawReasoning;
+
           if (
             nextReasoning === lastReasoning &&
-            payload.text === lastText &&
+            nextText === lastText &&
             payload.status !== "completed"
           ) {
             return;
           }
 
           lastReasoning = nextReasoning;
-          lastText = payload.text;
+          lastText = nextText;
+          lastOwnerTaskGroupId = ownerTaskGroupId;
 
           const content: Array<
             | { type: "text"; text: string }
@@ -227,10 +260,10 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
             });
           }
 
-          if (payload.text) {
+          if (nextText) {
             content.push({
               type: "text",
-              text: payload.text,
+              text: nextText,
             });
           }
 
@@ -480,7 +513,4 @@ export function usePersistedRuntime(
     adapter,
   });
 }
-
-
-
 

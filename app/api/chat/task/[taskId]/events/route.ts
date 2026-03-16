@@ -1,4 +1,4 @@
-﻿import {
+import {
   getChatTaskView,
   resolveChatTaskGroupIdByStreamTaskId,
 } from "@/lib/tasks/chat-task-view";
@@ -29,6 +29,7 @@ export async function GET(req: Request, context: RouteContext) {
     return {
       ...view,
       taskId,
+      ownerTaskGroupId: ownerTaskId,
     };
   };
   const initialView = getView();
@@ -186,3 +187,4 @@ export async function GET(req: Request, context: RouteContext) {
     },
   });
 }
+
