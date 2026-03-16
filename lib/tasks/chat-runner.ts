@@ -202,6 +202,15 @@ const getComfyMcpUrl = () => {
   return `http://127.0.0.1:${port}/mcp`;
 };
 
+const getComfyReadOnlyMcpUrl = () => {
+  const explicitUrl = process.env.COMFY_MCP_READONLY_URL;
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  const port = process.env.COMFY_MCP_READONLY_PORT ?? "4001";
+  return `http://127.0.0.1:${port}/mcp`;
+};
 const getChatModelKey = () => {
   const modelKey = process.env.LM_STUDIO_MODEL;
   if (!modelKey) {
@@ -1005,7 +1014,7 @@ const maybeAutoCompactThreadContext = async ({
   }
 };
 
-type IntegrationServerLabel = "comfy" | "web_search" | "civitai";
+type IntegrationServerLabel = "comfy" | "comfy_readonly" | "web_search" | "civitai";
 
 type EphemeralMcpIntegration = {
   type: "ephemeral_mcp";
@@ -1034,6 +1043,14 @@ const buildIntegrationsForServers = (
       type: "ephemeral_mcp",
       server_label: "comfy",
       server_url: getComfyMcpUrl(),
+    });
+  }
+
+  if (servers.includes("comfy_readonly")) {
+    integrations.push({
+      type: "ephemeral_mcp",
+      server_label: "comfy_readonly",
+      server_url: getComfyReadOnlyMcpUrl(),
     });
   }
 

@@ -33,15 +33,16 @@ type EditableUtilTask = {
   name: string;
   prompt: string;
   enabled: boolean;
-  mcpServers: Array<"comfy" | "web_search" | "civitai">;
+  mcpServers: Array<"comfy" | "comfy_readonly" | "web_search" | "civitai">;
 };
 
 
 const utilTaskMcpOptions: Array<{
-  value: "comfy" | "web_search" | "civitai";
+  value: "comfy" | "comfy_readonly" | "web_search" | "civitai";
   label: string;
 }> = [
-  { value: "comfy", label: "Comfy" },
+  { value: "comfy", label: "Comfy (Full)" },
+  { value: "comfy_readonly", label: "Comfy (No Generate)" },
   { value: "web_search", label: "Web Search" },
   { value: "civitai", label: "Civitai" },
 ];
@@ -938,8 +939,4 @@ export function PromptSettingsButton() {
     </>
   );
 }
-
-
-
-
 

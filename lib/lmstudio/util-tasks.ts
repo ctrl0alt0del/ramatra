@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 
 export const utilTaskMcpServerLabels = [
   "comfy",
+  "comfy_readonly",
   "web_search",
   "civitai",
 ] as const;
@@ -72,7 +73,7 @@ const defaultUtilTaskPrompts = {
 
 const defaultUtilTaskMcpServers: Record<string, UtilTaskMcpServerLabel[]> = {
   img_gen_workflow: [],
-  img_gen_loras: ["comfy"],
+  img_gen_loras: ["comfy_readonly"],
   img_gen_finalize: ["comfy"],
 };
 
@@ -113,6 +114,25 @@ const ensureUtilTaskSettingsSeeded = () => {
     `,
   );
 
+  const maybeLegacyLorasServers = db
+    .prepare(
+      `
+        SELECT mcp_servers_json
+        FROM util_task_settings
+        WHERE name = ?
+      `,
+    )
+    .get("img_gen_loras") as { mcp_servers_json: string } | undefined;
+
+  if (maybeLegacyLorasServers?.mcp_servers_json === JSON.stringify(["comfy"])) {
+    db.prepare(
+      `
+        UPDATE util_task_settings
+        SET mcp_servers_json = ?, updated_at = ?
+        WHERE name = ?
+      `,
+    ).run(JSON.stringify(["comfy_readonly"]), timestamp, "img_gen_loras");
+  }
   for (const [name, prompt] of Object.entries(defaultUtilTaskPrompts)) {
     insert.run(
       name,
@@ -226,3 +246,5 @@ export const replaceUtilTaskSettings = (
 
   return listUtilTaskSettings();
 };
+
+
