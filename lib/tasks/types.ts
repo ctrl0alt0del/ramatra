@@ -51,6 +51,7 @@ export type TaskGroupPayloadMap = {
         persistent?: boolean;
         contextLength?: number;
         userMessage: MessagePart[];
+        regenerateOfLastAssistant?: boolean;
         continuationIndex?: number;
         carryoverText?: string;
         carryoverReasoning?: string;

@@ -70,6 +70,7 @@ export async function POST(req: Request) {
   }
 
   const inputMessages = toChatMessages(parsed.data.messages);
+  const latestInputMessage = inputMessages.at(-1) ?? null;
   const promptMode =
     parsed.data.promptMode && isPromptMode(parsed.data.promptMode)
       ? parsed.data.promptMode
@@ -103,14 +104,22 @@ export async function POST(req: Request) {
       ],
     });
 
+  const latestUserMessageSerialized = serializeMessageContent(
+    latestUserMessage.content,
+  );
+  const isRegenerateRequest =
+    Boolean(existingThread) && latestInputMessage?.role !== "user";
+
   if (existingThread) {
     const lastMessage = existingThread.messages.at(-1);
-    if (
-      !lastMessage ||
-      lastMessage.role !== "user" ||
-      serializeMessageContent(lastMessage.content) !==
-        serializeMessageContent(latestUserMessage.content)
-    ) {
+    const shouldAppendUserMessage =
+      latestInputMessage?.role === "user" &&
+      (!lastMessage ||
+        lastMessage.role !== "user" ||
+        serializeMessageContent(lastMessage.content) !==
+          latestUserMessageSerialized);
+
+    if (shouldAppendUserMessage) {
       updateThread(existingThread.id, {
         appendMessages: [
           {
@@ -131,13 +140,16 @@ export async function POST(req: Request) {
     moodId,
     contextLength: getConfiguredContextLengthForMode(promptMode, process.env),
     userMessage: latestUserMessage.content,
+    regenerateOfLastAssistant: isRegenerateRequest,
   });
-  enqueueChatTask({
-    kind: "update_intent",
-    threadId: thread.id,
-    userMessage: latestUserMessage.content,
-    contextLength: getConfiguredContextLengthForMode(promptMode, process.env),
-  });
+  if (!isRegenerateRequest) {
+    enqueueChatTask({
+      kind: "update_intent",
+      threadId: thread.id,
+      userMessage: latestUserMessage.content,
+      contextLength: getConfiguredContextLengthForMode(promptMode, process.env),
+    });
+  }
   const streamTaskId =
     task.type === "chat"
       ? (task.payload.tasks ?? []).find(

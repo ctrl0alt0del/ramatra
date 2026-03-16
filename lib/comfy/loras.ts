@@ -42,7 +42,10 @@ const WORKFLOW_LORA_SUBFOLDERS: Record<WorkflowName, string[]> = {
 };
 
 const normalizeLoraPath = (value: string) => {
-  return value.trim().replace(/[\\/]+/g, "/").toLowerCase();
+  return value
+    .trim()
+    .replace(/[\\/]+/g, "/")
+    .toLowerCase();
 };
 
 const isAllowedForWorkflow = (
@@ -253,6 +256,7 @@ export const listAvailableLoras = async ({
     total: filtered.length,
     items: filtered.map((lora) => ({
       name: lora.name,
+      top_tag: lora.metadata?.topTag?.name ?? null,
     })),
   };
 };
@@ -372,8 +376,3 @@ export const validateRequestedLoras = async (
     resolved,
   };
 };
-
-
-
-
-

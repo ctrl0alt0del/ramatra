@@ -2685,15 +2685,33 @@ export const executeQueuedChatTask = async (
         text,
         inRequestCompactionBreakOffsets,
       );
+      const shouldReplaceLastAssistant =
+        task.payload.regenerateOfLastAssistant === true &&
+        !!latestThread &&
+        latestThread.messages.length > 0 &&
+        latestThread.messages.at(-1)?.role === "assistant";
 
       const shouldAppendAssistantMessage =
-        !lastMessage ||
-        lastMessage.role !== "assistant" ||
-        getTextFromMessageContent(lastMessage.content) !==
-          textWithCompactionMarkers;
+        !shouldReplaceLastAssistant &&
+        (!lastMessage ||
+          lastMessage.role !== "assistant" ||
+          getTextFromMessageContent(lastMessage.content) !==
+            textWithCompactionMarkers);
       const isPersistentUtilConversation =
         typeof task.payload.utilTaskName === "string" &&
         task.payload.utilTaskName.trim().length > 0;
+      const replaceMessages =
+        shouldReplaceLastAssistant && latestThread
+          ? [
+              ...latestThread.messages.slice(0, -1),
+              {
+                role: "assistant" as const,
+                content: [
+                  { type: "text" as const, text: textWithCompactionMarkers },
+                ],
+              },
+            ]
+          : undefined;
       const appendMessages = shouldAppendAssistantMessage
         ? [
             {
@@ -2715,6 +2733,7 @@ export const executeQueuedChatTask = async (
         lastPromptMode: promptMode,
         contextWindowUsedTokens: usedContextTokens,
         contextWindowTotalTokens: requestedContextLength,
+        replaceMessages,
         appendMessages,
       });
 
