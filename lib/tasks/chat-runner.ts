@@ -167,10 +167,13 @@ const biasedCritiqueSystemPrompt = `You are the final authority on image generat
 4. **STRICT LIMITATION:** Never propose changes to cfg, steps, sampler, scheduler, seed, or the lora list.
 
 ## OUTPUT RULES
-- **Output ONLY the [[util_task]] block.**
-- No introductory text, reasoning, or meta-commentary.
-- Stop immediately after the closing tag.
+- **Output ONLY the [[util_task]] block verbatim.**
 
+[[util_task@persistent@stateless]]
+stage: img_gen_plain_finalize
+context_text: Positive Prompt <POSITIVE_PROMPT_SUGGESTION>;Negative Prompt <NEGATIVE_PROMPT_SUGGESTION>;steps <ORIGINAL_STEPS>;cfg <ORIGINAL_CFG>;sampler <ORIGINAL_SAMPLER>;scheduler <ORIGINAL_SCHEDULER>;seed <ORIGINAL_SEED>;loras <ORIGINAL_LORAS>;workflow <ORIGINAL_WORKFLOW>;
+[[/util_task]]
+-DO NOT add any text before, after, or in between the [[util_task]] block.
 ## PLACEHOLDER DEFINITIONS
 - <POSITIVE_PROMPT_SUGGESTION>: your fully rewritten positive prompt based on intent + critique + setup.
 - <NEGATIVE_PROMPT_SUGGESTION>: your corrected negative prompt focused on observed artifacts/failures.
@@ -182,11 +185,7 @@ const biasedCritiqueSystemPrompt = `You are the final authority on image generat
 - <ORIGINAL_LORAS>: copy the exact loras value from Generation Setup (do not change).
 - <ORIGINAL_WORKFLOW>: copy the exact workflowName value from Generation Setup (do not change).
 
-## FINAL OUTPUT FORMAT
-[[util_task@persistent@stateless]]
-stage: img_gen_plain_finalize
-context_text: Positive Prompt <POSITIVE_PROMPT_SUGGESTION>;Negative Prompt <NEGATIVE_PROMPT_SUGGESTION>;steps <ORIGINAL_STEPS>;cfg <ORIGINAL_CFG>;sampler <ORIGINAL_SAMPLER>;scheduler <ORIGINAL_SCHEDULER>;seed <ORIGINAL_SEED>;loras <ORIGINAL_LORAS>;workflow <ORIGINAL_WORKFLOW>;
-[[/util_task]]`;
+`;
 const intentUpdateSystemPrompt = [
   "You maintain a compact persistent user intent profile for an ongoing conversation.",
   "Update intent using previous intent, previous assistant response, and latest user message.",
@@ -1284,9 +1283,7 @@ const parseBracketUtilCommand = (text: string) => {
       __type: "chat.stream_signal",
       route: "util_task",
       stage,
-      ...(fields.context_text
-        ? { context_text: fields.context_text }
-        : {}),
+      ...(fields.context_text ? { context_text: fields.context_text } : {}),
       ...(fields.nonce ? { nonce: fields.nonce } : {}),
       ...(isPersistent ? { persistent: true } : {}),
       ...(isStateless ? { stateless: true } : {}),
@@ -1329,9 +1326,7 @@ const parseBracketUtilCommand = (text: string) => {
       __type: "chat.stream_signal",
       route: "util_task",
       stage,
-      ...(options.context_text
-        ? { context_text: options.context_text }
-        : {}),
+      ...(options.context_text ? { context_text: options.context_text } : {}),
       ...(options.nonce ? { nonce: options.nonce } : {}),
       ...(options.persistent === "true" || options.persistent === "1"
         ? { persistent: true }
@@ -2274,8 +2269,8 @@ export const executeQueuedChatTask = async (
                 }
               : {
                   type: "image" as const,
-                dataUrl: item.data_url,
-              },
+                  dataUrl: item.data_url,
+                },
           );
           const utilUserMessageSeed = conversationUserMessage;
           const utilHistorySnapshot = buildUtilHistorySnapshot({
@@ -3174,32 +3169,32 @@ export const executeQueuedChatTask = async (
         });
       } else {
         const utilTaskName = parsedCommand.command.stage.trim();
-          const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
-          if (utilTaskSetting && utilTaskSetting.enabled) {
-            const utilSystemPromptExt =
-              typeof parsedCommand.command.context_text === "string"
-                ? parsedCommand.command.context_text.trim()
-                : "";
-            const utilPromptFlags = parseUtilPromptFlags(utilTaskSetting.prompt);
-            const utilUserMessageSeed =
-              task.payload.utilUserMessageSeed ?? task.payload.userMessage;
-            const utilHistorySnapshot = buildUtilHistorySnapshot({
-              thread,
-              currentUserMessage: utilUserMessageSeed,
-            });
-            const useStatelessContext =
-              parsedCommand.command.stateless === true ||
-              utilPromptFlags.isStateless;
-            const delegatedUserMessage = useStatelessContext
-              ? []
-              : utilUserMessageSeed;
-            const delegatedSystemPrompt = [
-              utilSystemPromptExt,
-              ...(useStatelessContext ? [] : [utilHistorySnapshot]),
-              utilPromptFlags.prompt,
-            ]
-              .filter((value) => value.length > 0)
-              .join("\n\n");
+        const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
+        if (utilTaskSetting && utilTaskSetting.enabled) {
+          const utilSystemPromptExt =
+            typeof parsedCommand.command.context_text === "string"
+              ? parsedCommand.command.context_text.trim()
+              : "";
+          const utilPromptFlags = parseUtilPromptFlags(utilTaskSetting.prompt);
+          const utilUserMessageSeed =
+            task.payload.utilUserMessageSeed ?? task.payload.userMessage;
+          const utilHistorySnapshot = buildUtilHistorySnapshot({
+            thread,
+            currentUserMessage: utilUserMessageSeed,
+          });
+          const useStatelessContext =
+            parsedCommand.command.stateless === true ||
+            utilPromptFlags.isStateless;
+          const delegatedUserMessage = useStatelessContext
+            ? []
+            : utilUserMessageSeed;
+          const delegatedSystemPrompt = [
+            utilSystemPromptExt,
+            ...(useStatelessContext ? [] : [utilHistorySnapshot]),
+            utilPromptFlags.prompt,
+          ]
+            .filter((value) => value.length > 0)
+            .join("\n\n");
 
           const nextNonces = appendUtilCommandNonce(
             knownNonces,
