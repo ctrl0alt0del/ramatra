@@ -1,0 +1,138 @@
+import { getUtilTaskSettingByName } from "@/lib/lmstudio/util-tasks";
+import { appendUtilCommandNonce } from "@/lib/tasks/chat/util-commands";
+import type { MessagePart } from "@/lib/chat/message-content";
+import type { TaskGroupPayloadMap } from "@/lib/tasks/types";
+import type { ParsedUtilCommandResult } from "@/lib/tasks/chat/util/command-chain-types";
+import { buildUtilDelegationContext } from "@/lib/tasks/chat/util/delegation-context";
+
+export const buildConversationUtilDelegation = ({
+  taskId,
+  conversationPayload,
+  parsedCommand,
+  thread,
+  finalResponseId,
+  reasoning,
+  inRequestCompactionBreakOffsets,
+  applyCompactionMarkersToText,
+  buildUtilHistorySnapshot,
+}: {
+  taskId: string;
+  conversationPayload: Extract<TaskGroupPayloadMap["chat"], { kind: "conversation" }>;
+  parsedCommand: ParsedUtilCommandResult;
+  thread: {
+    lmstudioResponseId: string | null;
+    messages: Array<{
+      role: "user" | "assistant" | "system";
+      content: MessagePart[];
+    }>;
+  } | null;
+  finalResponseId: string | null;
+  reasoning: string;
+  inRequestCompactionBreakOffsets: number[];
+  applyCompactionMarkersToText: (text: string, breakOffsets: number[]) => string;
+  buildUtilHistorySnapshot: (args: {
+    thread: {
+      messages: Array<{
+        role: "user" | "assistant" | "system";
+        content: MessagePart[];
+      }>;
+    } | null;
+    currentUserMessage: MessagePart[];
+  }) => string;
+}):
+  | {
+      accepted: false;
+      parsedCommand: ParsedUtilCommandResult;
+    }
+  | {
+      accepted: true;
+      parsedCommand: ParsedUtilCommandResult;
+      utilTaskName: string;
+      delegatedText: string;
+      updatedConversationPayload: TaskGroupPayloadMap["chat"];
+      utilEnqueueCount: number;
+    } => {
+  const nextParsedCommand = parsedCommand;
+  if (!nextParsedCommand.command) {
+    return { accepted: false, parsedCommand: nextParsedCommand };
+  }
+
+  const commandDepth = conversationPayload.utilCommandDepth ?? 0;
+  const utilEnqueueCount = conversationPayload.utilEnqueueCount ?? 0;
+  const commandNonce =
+    typeof nextParsedCommand.command.nonce === "string"
+      ? nextParsedCommand.command.nonce.trim()
+      : "";
+  const knownNonces = conversationPayload.utilCommandNonces ?? [];
+
+  const utilTaskName = nextParsedCommand.command.stage.trim();
+  const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
+  if (!utilTaskSetting || !utilTaskSetting.enabled) {
+    console.info("[chat-runner] util-command:unknown-task", {
+      taskId,
+      utilTaskName,
+    });
+    return { accepted: false, parsedCommand: nextParsedCommand };
+  }
+
+  const utilUserMessageSeed =
+    conversationPayload.utilUserMessageSeed ?? conversationPayload.userMessage;
+  const { delegatedUserMessage, delegatedSystemPrompt, utilSystemPromptExt } =
+    buildUtilDelegationContext({
+      utilPrompt: utilTaskSetting.prompt,
+      command: nextParsedCommand.command,
+      utilUserMessageSeed,
+      thread,
+      buildUtilHistorySnapshot,
+    });
+
+  const nextNonces = appendUtilCommandNonce(
+    knownNonces,
+    commandNonce || undefined,
+  );
+  const utilChainBaseResponseId =
+    typeof conversationPayload.utilChainBaseResponseId === "string" &&
+    conversationPayload.utilChainBaseResponseId.trim().length > 0
+      ? conversationPayload.utilChainBaseResponseId.trim()
+      : typeof conversationPayload.previousResponseIdOverride === "string" &&
+          conversationPayload.previousResponseIdOverride.trim().length > 0
+        ? conversationPayload.previousResponseIdOverride.trim()
+        : typeof finalResponseId === "string" && finalResponseId.trim().length > 0
+          ? finalResponseId.trim()
+          : (thread?.lmstudioResponseId ?? null);
+
+  const delegatedText = applyCompactionMarkersToText(
+    nextParsedCommand.cleanText,
+    inRequestCompactionBreakOffsets,
+  );
+
+  const updatedConversationPayload: TaskGroupPayloadMap["chat"] = {
+    ...conversationPayload,
+    kind: "conversation" as const,
+    disableMcpTools: false,
+    persistent: nextParsedCommand.command.persistent === true,
+    carryoverText: delegatedText,
+    carryoverReasoning: reasoning,
+    userMessage: delegatedUserMessage,
+    systemPromptOverride: delegatedSystemPrompt,
+    previousResponseIdOverride: utilChainBaseResponseId,
+    utilChainBaseResponseId,
+    utilUserMessageSeed,
+    utilTaskName,
+    utilSystemPromptExt: utilSystemPromptExt || undefined,
+    utilMcpServers:
+      conversationPayload.disableMcpTools === true ? [] : utilTaskSetting.mcpServers,
+    utilCommandDepth: commandDepth + 1,
+    utilEnqueueCount: utilEnqueueCount + 1,
+    utilCommandNonces: nextNonces,
+  };
+
+  return {
+    accepted: true,
+    parsedCommand: nextParsedCommand,
+    utilTaskName,
+    delegatedText,
+    updatedConversationPayload,
+    utilEnqueueCount: utilEnqueueCount + 1,
+  };
+};
