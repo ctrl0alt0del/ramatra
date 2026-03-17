@@ -52,6 +52,33 @@ const getLmStudioHeaders = () => ({
     : {}),
 });
 
+const getErrorMessage = (error: unknown) => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+};
+
+export const isTransientLmStudioFetchError = (error: unknown) => {
+  const message = getErrorMessage(error).toLowerCase();
+  const maybeCause =
+    error instanceof Error ? (error as { cause?: unknown }).cause : undefined;
+  const causeMessage =
+    typeof maybeCause === "object" &&
+    maybeCause !== null &&
+    "message" in (maybeCause as Record<string, unknown>)
+      ? String((maybeCause as { message?: unknown }).message ?? "").toLowerCase()
+      : "";
+
+  return (
+    message.includes("fetch failed") ||
+    message.includes("socket") ||
+    causeMessage.includes("other side closed") ||
+    causeMessage.includes("socket")
+  );
+};
+
 export const listLmStudioModels = async () => {
   const response = await fetch(getLmStudioApiUrl("/api/v1/models"), {
     method: "GET",
@@ -309,7 +336,20 @@ export const cleanupRedundantLmStudioModels = async ({
   });
 
   if (!redundantSelectors.length) {
-    const loadedModels = await listLoadedLmStudioModels();
+    let loadedModels: LoadedLmStudioModelInstance[] = [];
+    try {
+      loadedModels = await listLoadedLmStudioModels();
+    } catch (error) {
+      if (isTransientLmStudioFetchError(error)) {
+        logLmStudioModelDebug("cleanup:skip-list-failed", {
+          activeModelKey,
+          reason: getErrorMessage(error),
+        });
+        return [];
+      }
+
+      throw error;
+    }
     const duplicateActiveInstances = loadedModels.filter(
       (model) => model.modelKey === activeModelKey,
     );
@@ -328,7 +368,20 @@ export const cleanupRedundantLmStudioModels = async ({
     return toUnload;
   }
 
-  const loadedModels = await listLoadedLmStudioModels();
+  let loadedModels: LoadedLmStudioModelInstance[] = [];
+  try {
+    loadedModels = await listLoadedLmStudioModels();
+  } catch (error) {
+    if (isTransientLmStudioFetchError(error)) {
+      logLmStudioModelDebug("cleanup:skip-list-failed", {
+        activeModelKey,
+        reason: getErrorMessage(error),
+      });
+      return [];
+    }
+
+    throw error;
+  }
   const primaryActiveInstanceId =
     loadedModels.find((model) => model.modelKey === activeModelKey)?.instanceId ??
     null;
@@ -391,3 +444,8 @@ export const cleanupRedundantLmStudioModels = async ({
 
   return uniqueToUnload;
 };
+
+
+
+
+

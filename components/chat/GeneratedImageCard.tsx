@@ -4,7 +4,8 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { MessageSquareText } from "lucide-react";
-import { useThreadRuntime } from "@assistant-ui/react";
+import { useThread, useThreadRuntime } from "@assistant-ui/react";
+import { createCritiqueRequestMarker } from "@/lib/chat/critique-marker";
 
 import { SkeletonBlock } from "./SkeletonBlock";
 import { useMood } from "./mood";
@@ -54,6 +55,7 @@ type ChatTaskEvent =
       reasoning: string;
       responseId: string | null;
       summaryCallsInCurrentRequest: number;
+      delegatedToTaskGroupId?: string;
     }
   | {
       taskId: string;
@@ -69,7 +71,9 @@ type CritiqueState = {
 
 type RuntimeMessage = {
   role: "assistant" | "user" | "system";
-  content: Array<{ type: "text"; text: string }>;
+  content: Array<
+    { type: "text"; text: string } | { type: "reasoning"; text: string }
+  >;
 };
 
 const mapThreadToRuntimeMessages = (thread: ThreadApiDetail): RuntimeMessage[] =>
@@ -105,7 +109,10 @@ export function GeneratedImageCard({
   const [hasResolvedInitialFetch, setHasResolvedInitialFetch] = useState(false);
   const [critiques, setCritiques] = useState<Record<number, CritiqueState>>({});
   const critiqueStreamsRef = useRef<Record<number, EventSource>>({});
+  const followupStreamsRef = useRef<Record<number, EventSource>>({});
+  const followupStreamIdsRef = useRef<Record<number, string>>({});
   const threadRuntime = useThreadRuntime({ optional: true });
+  const isThreadRunning = useThread((state) => state.isRunning);
   const { moodId } = useMood();
 
   useEffect(() => {
@@ -177,9 +184,37 @@ export function GeneratedImageCard({
       for (const stream of Object.values(critiqueStreamsRef.current)) {
         stream.close();
       }
+      for (const stream of Object.values(followupStreamsRef.current)) {
+        stream.close();
+      }
       critiqueStreamsRef.current = {};
+      followupStreamsRef.current = {};
+      followupStreamIdsRef.current = {};
     };
-  }, []);
+  }, []);  useEffect(() => {
+    if (isThreadRunning) {
+      return;
+    }
+
+    setCritiques((previous) => {
+      let changed = false;
+      const next: Record<number, CritiqueState> = {};
+
+      for (const [key, value] of Object.entries(previous)) {
+        if (value.status === "queued" || value.status === "running") {
+          changed = true;
+          next[Number(key)] = {
+            ...value,
+            status: "completed",
+          };
+        } else {
+          next[Number(key)] = value;
+        }
+      }
+
+      return changed ? next : previous;
+    });
+  }, [isThreadRunning]);
 
   const loadThreadRuntimeMessages = async () => {
     if (!threadId) {
@@ -200,13 +235,39 @@ export function GeneratedImageCard({
 
     const source = new EventSource(`/api/chat/task/${critiqueTaskId}/events`);
     critiqueStreamsRef.current[imageIndex] = source;
-    let baseRuntimeMessages: RuntimeMessage[] | null = null;
+    let baseRuntimeMessages: any[] | null = null;
 
-    const ensureBaseRuntimeMessages = async () => {
+    if (threadRuntime) {
+      baseRuntimeMessages = threadRuntime
+        .getState()
+        .messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
+
+      threadRuntime.reset([
+        ...(baseRuntimeMessages as any),
+        {
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "Generating critique..." }],
+        },
+      ]);
+    }
+
+    const ensureBaseRuntimeMessages = () => {
       if (baseRuntimeMessages) {
         return baseRuntimeMessages;
       }
-      baseRuntimeMessages = await loadThreadRuntimeMessages();
+      if (threadRuntime) {
+        baseRuntimeMessages = threadRuntime
+          .getState()
+          .messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          }));
+      } else {
+        baseRuntimeMessages = [];
+      }
       return baseRuntimeMessages;
     };
 
@@ -217,25 +278,32 @@ export function GeneratedImageCard({
         return;
       }
 
-      const baseMessages = await ensureBaseRuntimeMessages();
-      if (!baseMessages) {
-        return;
-      }
+      const baseMessages = ensureBaseRuntimeMessages();
 
       const liveText = payload.text.trim();
+      const liveReasoning = payload.reasoning.trim();
       const fallbackText =
         payload.status === "completed" ? "" : "Generating critique...";
       const nextText = liveText || fallbackText;
-      if (!nextText) {
+      const nextContent: RuntimeMessage["content"] = [];
+
+      if (liveReasoning) {
+        nextContent.push({ type: "reasoning", text: liveReasoning });
+      }
+      if (nextText) {
+        nextContent.push({ type: "text", text: nextText });
+      }
+
+      if (nextContent.length === 0) {
         threadRuntime.reset(baseMessages);
         return;
       }
 
       threadRuntime.reset([
-        ...baseMessages,
+        ...(baseMessages as any),
         {
           role: "assistant" as const,
-          content: [{ type: "text" as const, text: nextText }],
+          content: nextContent,
         },
       ]);
     };
@@ -270,24 +338,78 @@ export function GeneratedImageCard({
           taskId: critiqueTaskId,
         },
       }));
-      void mirrorLiveCritiqueIntoChat(payload);
 
       if (payload.status === "completed") {
-        void (async () => {
-          if (!threadRuntime) {
-            return;
-          }
+        const delegatedTaskId =
+          typeof payload.delegatedToTaskGroupId === "string" &&
+          payload.delegatedToTaskGroupId.trim().length > 0
+            ? payload.delegatedToTaskGroupId
+            : null;
 
-          try {
-            const runtimeMessages = await loadThreadRuntimeMessages();
-            if (!runtimeMessages) {
-              return;
-            }
-            threadRuntime.reset(runtimeMessages);
-          } catch {
-            // Ignore refresh failures; persisted history still contains the message.
-          }
-        })();
+        if (
+          delegatedTaskId &&
+          followupStreamIdsRef.current[imageIndex] !== delegatedTaskId
+        ) {
+          followupStreamIdsRef.current[imageIndex] = delegatedTaskId;
+          const followupSource = new EventSource(
+            `/api/chat/task/${delegatedTaskId}/events`,
+          );
+          followupStreamsRef.current[imageIndex] = followupSource;
+
+          followupSource.addEventListener(
+            "task",
+            (followupEvent: MessageEvent<string>) => {
+              const followupPayload = JSON.parse(
+                followupEvent.data,
+              ) as ChatTaskEvent;
+
+              if (followupPayload.status === "failed") {
+                setCritiques((previous) => ({
+                  ...previous,
+                  [imageIndex]: {
+                    ...previous[imageIndex],
+                    status: "failed",
+                    taskId: critiqueTaskId,
+                    error: followupPayload.error || "Critique follow-up failed.",
+                  },
+                }));
+                followupSource.close();
+                delete followupStreamsRef.current[imageIndex];
+                return;
+              }
+
+              void mirrorLiveCritiqueIntoChat(followupPayload);
+
+              if (followupPayload.status !== "completed") {
+                return;
+              }
+
+              void (async () => {
+                if (!threadRuntime) {
+                  return;
+                }
+
+                try {
+                  const runtimeMessages = await loadThreadRuntimeMessages();
+                  if (!runtimeMessages) {
+                    return;
+                  }
+                  threadRuntime.reset(runtimeMessages);
+                } catch {
+                  // Ignore refresh failures; persisted history still contains the message.
+                }
+              })();
+
+              followupSource.close();
+              delete followupStreamsRef.current[imageIndex];
+            },
+          );
+
+          followupSource.onerror = () => {
+            followupSource.close();
+            delete followupStreamsRef.current[imageIndex];
+          };
+        }
 
         source.close();
         delete critiqueStreamsRef.current[imageIndex];
@@ -318,44 +440,28 @@ export function GeneratedImageCard({
     }));
 
     try {
-      const response = await fetch("/api/chat/critique", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          comfyTaskId: taskId,
-          imageIndex,
-          threadId,
-          moodId,
-        }),
+      if (!threadRuntime) {
+        throw new Error("Thread runtime is unavailable.");
+      }
+
+      const marker = createCritiqueRequestMarker({
+        comfyTaskId: taskId,
+        imageIndex,
       });
 
-      const data = (await response.json()) as
-        | CritiqueStartResponse
-        | {
-            error?: string;
-          };
-
-      if (!response.ok || !("taskId" in data)) {
-        throw new Error(
-          "error" in data && typeof data.error === "string"
-            ? data.error
-            : "Critique request failed.",
-        );
-      }
+      threadRuntime.append({
+        role: "user",
+        content: [{ type: "text", text: marker }],
+      });
 
       setCritiques((previous) => ({
         ...previous,
         [imageIndex]: {
           ...previous[imageIndex],
           status: "queued",
-          taskId: data.taskId,
           error: undefined,
         },
       }));
-
-      connectCritiqueStream(imageIndex, data.taskId);
     } catch (error) {
       setCritiques((previous) => ({
         ...previous,
@@ -510,3 +616,9 @@ export function GeneratedImageCard({
     </div>
   );
 }
+
+
+
+
+
+

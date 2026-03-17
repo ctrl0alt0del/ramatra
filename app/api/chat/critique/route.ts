@@ -66,7 +66,11 @@ export async function POST(req: Request) {
   });
 
   const streamTaskId =
-    critiqueTask.id;
+    critiqueTask.type === "chat"
+      ? (critiqueTask.payload.tasks ?? []).find(
+          (groupTask) => groupTask.kind === "chat.stream",
+        )?.id ?? critiqueTask.id
+      : critiqueTask.id;
 
   void processTaskQueues();
 

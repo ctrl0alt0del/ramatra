@@ -12,8 +12,10 @@ import {
   cleanupRedundantLmStudioModels,
   ensureLmStudioModelLoaded,
   formatLoadedLmStudioModelsForDebug,
+  isTransientLmStudioFetchError,
   listLoadedLmStudioModels,
   resolvePreferredLmStudioModelTarget,
+  type LoadedLmStudioModelInstance,
 } from "@/lib/lmstudio/models";
 import { generateThreadTitle } from "@/lib/lmstudio/title";
 import {
@@ -156,26 +158,35 @@ Analyze the provided image for structural failures, ignoring all artistic intent
 - Do not use "beautiful," "good," or "stylized." 
 - Use spatial cues (e.g., "In the bottom-right quadrant, the hand has six distinct phalanges").
 - List only the failures. If no flaws are detected, state: "Fidelity High: No structural artifacts detected."`;
-const biasedCritiqueSystemPrompt = `You are the final authority on image generation refinement. You bridge the gap between user intent and technical execution.
+const biasedCritiqueSystemPrompt = `You are the final authority on image generation refinement. Your role is to bridge the gap between [User Intent], [Unbiased Critique], and [Generation Setup] by producing a corrected technical brief.
 
-## INPUT PROCESSING
-Analyze the [User Intent], [Unbiased Critique], and [Generation Setup]. 
+## OPERATIONAL DIRECTIVES
+1. **INTENT ANALYSIS:** Compare the [User Intent] to the actual image. Identify missed lighting, composition, or subject actions.
+2. **FAILURE RESOLUTION:** Translate the [Unbiased Critique] artifacts into physical rendering instructions. 
+3. **PROMPT RECONSTRUCTION:** Rewrite the prompt using **Physicality over Labels** logic (describe light interaction, surface tension, and environmental synergy).
+4. **STRICT LIMITATION:** Never propose changes to cfg, steps, sampler, scheduler, seed, or the lora list.
 
-## CRITIQUE FRAMEWORK
-1. **Intent Mismatch:** Compare the original intent to the result. Did the model miss the lighting? The subject's action? 
-2. **Anatomical & Graphical Resolution:** Translate the Unbiased Auditor’s findings into actionable prompt corrections.
-3. **Prompt Engineering:** Rewrite the prompt using logic (Physicality over Labels) logic.
+## OUTPUT RULES
+- **Output ONLY the [[util_task]] block.**
+- No introductory text, reasoning, or meta-commentary.
+- Stop immediately after the closing tag.
 
-## OUTPUT FORMAT
-### TECHNICAL CRITIQUE
-- **Mismatch:** [Describe the gap between intent and result]
-- **Issues:** [Summary of anatomical/graphical failures]
+## PLACEHOLDER DEFINITIONS
+- <POSITIVE_PROMPT_SUGGESTION>: your fully rewritten positive prompt based on intent + critique + setup.
+- <NEGATIVE_PROMPT_SUGGESTION>: your corrected negative prompt focused on observed artifacts/failures.
+- <ORIGINAL_STEPS>: copy the exact steps value from Generation Setup (do not change).
+- <ORIGINAL_CFG>: copy the exact cfg value from Generation Setup (do not change).
+- <ORIGINAL_SAMPLER>: copy the exact samplerName value from Generation Setup (do not change).
+- <ORIGINAL_SCHEDULER>: copy the exact scheduler value from Generation Setup (do not change).
+- <ORIGINAL_SEED>: copy the exact seed value from Generation Setup (do not change).
+- <ORIGINAL_LORAS>: copy the exact loras value from Generation Setup (do not change).
+- <ORIGINAL_WORKFLOW>: copy the exact workflowName value from Generation Setup (do not change).
 
-### CORRECTED PROMPT SUGGESTION
-**Positive Prompt:** [Full rewritten prompt focusing on structural hierarchy, physical rendering, and environmental interaction.]
-**Negative Prompt:** [Targeted phrases to prevent the specific artifacts found.]
-
-**STRICT RULE:** Do not propose changes to cfg, steps, sampler, scheduler, seed, or lora list.`;
+## FINAL OUTPUT FORMAT
+[[util_task@persistent@stateless]]
+stage: img_gen_plain_finalize
+context_text: Positive Prompt <POSITIVE_PROMPT_SUGGESTION>;Negative Prompt <NEGATIVE_PROMPT_SUGGESTION>;steps <ORIGINAL_STEPS>;cfg <ORIGINAL_CFG>;sampler <ORIGINAL_SAMPLER>;scheduler <ORIGINAL_SCHEDULER>;seed <ORIGINAL_SEED>;loras <ORIGINAL_LORAS>;workflow <ORIGINAL_WORKFLOW>;
+[[/util_task]]`;
 const intentUpdateSystemPrompt = [
   "You maintain a compact persistent user intent profile for an ongoing conversation.",
   "Update intent using previous intent, previous assistant response, and latest user message.",
@@ -1112,7 +1123,6 @@ const buildIntegrations = (
 
   return [];
 };
-
 const parseSseEvents = async (
   stream: ReadableStream<Uint8Array>,
   onEvent: (event: ChatStreamEvent) => void,
@@ -1206,11 +1216,22 @@ type ChatStreamCommand = {
   context_text?: string;
   nonce?: string;
   persistent?: boolean;
+  stateless?: boolean;
 };
 
 const MAX_UTIL_COMMAND_DEPTH = 3;
 const MAX_UTIL_COMMAND_ENQUEUES = 3;
 const MAX_UTIL_NONCE_HISTORY = 24;
+
+const parseUtilPromptFlags = (prompt: string) => {
+  const isStateless = /(?:^|\s)@stateless\b/i.test(prompt);
+  const normalizedPrompt = prompt.replace(/(?:^|\s)@stateless\b/gi, " ").trim();
+
+  return {
+    isStateless,
+    prompt: normalizedPrompt,
+  };
+};
 
 const parseBracketUtilCommand = (text: string) => {
   const trimmed = text.trim();
@@ -1219,15 +1240,20 @@ const parseBracketUtilCommand = (text: string) => {
   }
 
   const blockPattern =
-    /\[\[util_task(?:@(persistent|persistant))?\]\]([\s\S]*?)(?:\[\[\/util_task\]\]|\[\/util_task\])/gi;
+    /\[\[util_task((?:@[a-zA-Z]+)*)\]\]([\s\S]*?)(?:\[\[\/util_task\]\]|\[\/util_task\])/gi;
   const blockMatches = [...trimmed.matchAll(blockPattern)];
   for (let index = blockMatches.length - 1; index >= 0; index -= 1) {
     const match = blockMatches[index];
     const full = match[0] ?? "";
-    const persistenceTag = (match[1] ?? "").toLowerCase();
+    const tagSegment = (match[1] ?? "").toLowerCase();
     const body = (match[2] ?? "").trim();
+    const tags = tagSegment
+      .split("@")
+      .map((tag) => tag.trim())
+      .filter((tag) => tag.length > 0);
     const isPersistent =
-      persistenceTag === "persistent" || persistenceTag === "persistant";
+      tags.includes("persistent") || tags.includes("persistant");
+    const isStateless = tags.includes("stateless");
     if (!full || !body) {
       continue;
     }
@@ -1259,10 +1285,11 @@ const parseBracketUtilCommand = (text: string) => {
       route: "util_task",
       stage,
       ...(fields.context_text
-        ? { context_text: fields.context_text.slice(0, 1000) }
+        ? { context_text: fields.context_text }
         : {}),
       ...(fields.nonce ? { nonce: fields.nonce } : {}),
       ...(isPersistent ? { persistent: true } : {}),
+      ...(isStateless ? { stateless: true } : {}),
     };
 
     const cleanText = trimmed.replace(full, "").trim();
@@ -1303,11 +1330,14 @@ const parseBracketUtilCommand = (text: string) => {
       route: "util_task",
       stage,
       ...(options.context_text
-        ? { context_text: options.context_text.slice(0, 1000) }
+        ? { context_text: options.context_text }
         : {}),
       ...(options.nonce ? { nonce: options.nonce } : {}),
       ...(options.persistent === "true" || options.persistent === "1"
         ? { persistent: true }
+        : {}),
+      ...(options.stateless === "true" || options.stateless === "1"
+        ? { stateless: true }
         : {}),
     };
     const cleanText = trimmed.replace(full, "").trim();
@@ -1511,7 +1541,9 @@ const extractWorkflowNameFromText = (
   if (!input) {
     return null;
   }
-  const match = input.match(/\bselected\s+workflow\s*:\s*(base|illustration|edit)\b/i);
+  const match = input.match(
+    /\bselected\s+workflow\s*:\s*(base|illustration|edit)\b/i,
+  );
   if (!match) {
     return null;
   }
@@ -1750,11 +1782,10 @@ export const executeQueuedChatTask = async (
       if (!hasTaskByKind(groupTasks, "chat.biased_critique")) {
         throw new Error("Missing chat.biased_critique task.");
       }
-      if (
-        taskKind === "chat.generate" ||
-        taskKind === "chat.stream" ||
-        taskKind === "chat.intent"
-      ) {
+      if (!hasTaskByKind(groupTasks, "chat.stream")) {
+        throw new Error("Missing chat.stream task.");
+      }
+      if (taskKind === "chat.generate" || taskKind === "chat.intent") {
         throw new Error("This task kind requires a different payload.");
       }
     } else {
@@ -1966,7 +1997,7 @@ export const executeQueuedChatTask = async (
           basePrompt: unbiasedCritiqueSystemPrompt,
           moodId,
         }),
-        integrations: buildIntegrationsForServers(["comfy"]),
+        integrations: [],
         stream: true,
       });
       if (!response.ok) {
@@ -1993,7 +2024,10 @@ export const executeQueuedChatTask = async (
       let finalResponseId: string | null = null;
 
       await parseSseEvents(response.body, (event) => {
-        if (event.type === "message.delta" && typeof event.content === "string") {
+        if (
+          event.type === "message.delta" &&
+          typeof event.content === "string"
+        ) {
           streamedText += event.content;
           updateRunningTask(task.id, {
             result: {
@@ -2054,6 +2088,7 @@ export const executeQueuedChatTask = async (
           responseId: finalResponseId,
           summaryCallsInCurrentRequest: 0,
           unbiasedCritique,
+          unbiasedReasoning: finalReasoning,
         },
       });
       setGroupTaskStatusByKind({
@@ -2069,6 +2104,30 @@ export const executeQueuedChatTask = async (
         throw new Error("chat.biased_critique task requires critique payload.");
       }
 
+      const savedIntent = task.payload.threadId
+        ? (getThread(task.payload.threadId)?.userIntent ?? "")
+        : "";
+      const biasedInputItems = buildBiasedCritiqueLmStudioInput({
+        comfyTaskId: task.payload.comfyTaskId,
+        imageIndex: task.payload.imageIndex,
+        savedIntent,
+        unbiasedCritique: task.result?.unbiasedCritique ?? "",
+      });
+      const biasedSystemPrompt = composeCritiqueSystemPrompt({
+        basePrompt: biasedCritiqueSystemPrompt,
+        moodId,
+      });
+      const conversationUserMessage = biasedInputItems.map((item) =>
+        item.type === "text"
+          ? {
+              type: "text" as const,
+              text: item.content,
+            }
+          : {
+              type: "image" as const,
+              dataUrl: item.data_url,
+            },
+      );
       const exactLoadedModel = await ensureLmStudioModelLoaded({
         modelKey: getChatModelKey(),
         contextLength: requestedContextLength,
@@ -2077,24 +2136,12 @@ export const executeQueuedChatTask = async (
         preferredInstanceId: exactLoadedModel.instanceId,
         modelKey: getChatModelKey(),
       });
-      const savedIntent = task.payload.threadId
-        ? (getThread(task.payload.threadId)?.userIntent ?? "")
-        : "";
-      const biasedInput = buildBiasedCritiqueLmStudioInput({
-        comfyTaskId: task.payload.comfyTaskId,
-        imageIndex: task.payload.imageIndex,
-        savedIntent,
-        unbiasedCritique: task.result?.unbiasedCritique ?? "",
-      });
       const response = await requestLmStudioChat({
         model: modelTarget,
         contextLength: requestedContextLength,
-        input: biasedInput,
-        systemPrompt: composeCritiqueSystemPrompt({
-          basePrompt: biasedCritiqueSystemPrompt,
-          moodId,
-        }),
-        integrations: buildIntegrationsForServers(["comfy"]),
+        input: biasedInputItems,
+        systemPrompt: biasedSystemPrompt,
+        integrations: [],
         stream: true,
       });
       if (!response.ok) {
@@ -2106,9 +2153,7 @@ export const executeQueuedChatTask = async (
           data = null;
         }
         throw new Error(
-          data?.error?.message ??
-            bodyText ??
-            "Biased critique request failed.",
+          data?.error?.message ?? bodyText ?? "Biased critique request failed.",
         );
       }
       if (!response.body) {
@@ -2121,7 +2166,10 @@ export const executeQueuedChatTask = async (
       let finalResponseId: string | null = null;
 
       await parseSseEvents(response.body, (event) => {
-        if (event.type === "message.delta" && typeof event.content === "string") {
+        if (
+          event.type === "message.delta" &&
+          typeof event.content === "string"
+        ) {
           streamedText += event.content;
           updateRunningTask(task.id, {
             result: {
@@ -2165,46 +2213,20 @@ export const executeQueuedChatTask = async (
         }
       });
 
-      const critiqueText =
+      const finalText =
         finalOutput.length > 0
           ? getAssistantText(finalOutput).trim()
           : streamedText.trim();
-      const critiqueReasoning =
+      const finalReasoning =
         finalOutput.length > 0
           ? getAssistantReasoning(finalOutput).trim()
           : streamedReasoning.trim();
 
-      if (task.payload.threadId && critiqueText.length > 0) {
-        const latestThread = getThread(task.payload.threadId);
-        const lastMessage = latestThread?.messages.at(-1);
-        const shouldAppendAssistantMessage =
-          !lastMessage ||
-          lastMessage.role !== "assistant" ||
-          getTextFromMessageContent(lastMessage.content) !== critiqueText;
-
-        updateThread(task.payload.threadId, {
-          ...(shouldAppendAssistantMessage
-            ? {
-                appendMessages: [
-                  {
-                    role: "assistant" as const,
-                    content: [{ type: "text" as const, text: critiqueText }],
-                  },
-                ],
-              }
-            : {}),
-          lmstudioResponseId: finalResponseId,
-          lmstudioModelInstanceId:
-            latestThread?.lmstudioModelInstanceId ?? null,
-          lastPromptMode: "artist",
-        });
-      }
-
       updateRunningTask(task.id, {
         result: {
           ...(task.result ?? {}),
-          text: critiqueText,
-          reasoning: critiqueReasoning,
+          text: finalText,
+          reasoning: finalReasoning,
           responseId: finalResponseId,
           summaryCallsInCurrentRequest: 0,
         },
@@ -2212,6 +2234,127 @@ export const executeQueuedChatTask = async (
       setGroupTaskStatusByKind({
         taskId: task.id,
         kind: "chat.biased_critique",
+        status: "completed",
+      });
+      return;
+    }
+
+    if (taskKind === "chat.stream" && task.payload.kind === "critique") {
+      const text = task.result?.text ?? "";
+      const reasoning = task.result?.reasoning ?? "";
+      const parsedCommand = parseChatStreamCommandFromOutputs({
+        text,
+        reasoning,
+        allowReasoningFallback: false,
+      });
+
+      if (parsedCommand.command) {
+        const utilTaskName = parsedCommand.command.stage.trim();
+        const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
+        if (utilTaskSetting && utilTaskSetting.enabled) {
+          const utilSystemPromptExt =
+            typeof parsedCommand.command.context_text === "string"
+              ? parsedCommand.command.context_text.trim()
+              : "";
+          const utilPromptFlags = parseUtilPromptFlags(utilTaskSetting.prompt);
+          const savedIntent = task.payload.threadId
+            ? (getThread(task.payload.threadId)?.userIntent ?? "")
+            : "";
+          const biasedInputItems = buildBiasedCritiqueLmStudioInput({
+            comfyTaskId: task.payload.comfyTaskId,
+            imageIndex: task.payload.imageIndex,
+            savedIntent,
+            unbiasedCritique: task.result?.unbiasedCritique ?? "",
+          });
+          const conversationUserMessage = biasedInputItems.map((item) =>
+            item.type === "text"
+              ? {
+                  type: "text" as const,
+                  text: item.content,
+                }
+              : {
+                  type: "image" as const,
+                dataUrl: item.data_url,
+              },
+          );
+          const utilUserMessageSeed = conversationUserMessage;
+          const utilHistorySnapshot = buildUtilHistorySnapshot({
+            thread,
+            currentUserMessage: utilUserMessageSeed,
+          });
+          const useStatelessContext =
+            parsedCommand.command.stateless === true ||
+            utilPromptFlags.isStateless;
+          const delegatedUserMessage = useStatelessContext
+            ? []
+            : utilUserMessageSeed;
+          const delegatedSystemPrompt = [
+            utilSystemPromptExt,
+            ...(useStatelessContext ? [] : [utilHistorySnapshot]),
+            utilPromptFlags.prompt,
+          ]
+            .filter((value) => value.length > 0)
+            .join("\n\n");
+
+          const existingStreamTaskId =
+            task.payload.tasks?.find(
+              (groupTask) =>
+                groupTask.kind === "chat.stream" &&
+                groupTask.status === "running",
+            )?.id ?? crypto.randomUUID();
+
+          updateChatTaskPayload(task.id, {
+            kind: "conversation",
+            threadId: task.payload.threadId ?? null,
+            promptMode: "artist",
+            moodId,
+            contextLength: requestedContextLength,
+            userMessage: delegatedUserMessage,
+            persistent: parsedCommand.command.persistent === true,
+            systemPromptOverride: delegatedSystemPrompt,
+            previousResponseIdOverride: null,
+            utilUserMessageSeed,
+            utilTaskName,
+            utilSystemPromptExt: utilSystemPromptExt || undefined,
+            utilMcpServers: utilTaskSetting.mcpServers,
+            utilCommandDepth: 1,
+            utilEnqueueCount: 1,
+            tasks: [
+              {
+                id: crypto.randomUUID(),
+                kind: "chat.generate",
+                status: "pending",
+              },
+              {
+                id: existingStreamTaskId,
+                kind: "chat.stream",
+                status: "pending",
+              },
+            ],
+          });
+
+          console.info("[chat-runner] util-command:continued-in-group", {
+            taskGroupId: task.id,
+            utilTaskName,
+            utilEnqueueCount: 1,
+            source: "critique-stream",
+          });
+          return;
+        }
+      }
+
+      updateRunningTask(task.id, {
+        result: {
+          ...(task.result ?? {}),
+          text,
+          reasoning,
+          responseId: task.result?.responseId ?? null,
+          summaryCallsInCurrentRequest: 0,
+        },
+      });
+      setGroupTaskStatusByKind({
+        taskId: task.id,
+        kind: "chat.stream",
         status: "completed",
       });
       return;
@@ -2354,11 +2497,20 @@ export const executeQueuedChatTask = async (
       const isUtilConversation =
         typeof task.payload.utilTaskName === "string" &&
         task.payload.utilTaskName.trim().length > 0;
+      const hasExplicitPreviousResponseIdOverride =
+        Object.prototype.hasOwnProperty.call(
+          task.payload,
+          "previousResponseIdOverride",
+        );
+      const normalizedPreviousResponseIdOverride =
+        typeof task.payload.previousResponseIdOverride === "string" &&
+        task.payload.previousResponseIdOverride.trim().length > 0
+          ? task.payload.previousResponseIdOverride.trim()
+          : null;
       effectivePreviousResponseId = isUtilConversation
         ? null
-        : typeof task.payload.previousResponseIdOverride === "string" &&
-            task.payload.previousResponseIdOverride.trim().length > 0
-          ? task.payload.previousResponseIdOverride.trim()
+        : hasExplicitPreviousResponseIdOverride
+          ? normalizedPreviousResponseIdOverride
           : (task.payload.continuationIndex ?? 0) > 0
             ? null
             : (thread?.lmstudioResponseId ?? null);
@@ -2383,7 +2535,22 @@ export const executeQueuedChatTask = async (
             : exactLoadedModel.instanceId,
         modelKey: getChatModelKey(),
       });
-      const loadedBeforeRequest = await listLoadedLmStudioModels();
+      let loadedBeforeRequest: LoadedLmStudioModelInstance[] = [];
+      try {
+        loadedBeforeRequest = await listLoadedLmStudioModels();
+      } catch (error) {
+        if (isTransientLmStudioFetchError(error)) {
+          console.warn(
+            "[chat-runner] LM Studio model list unavailable before request; continuing",
+            {
+              taskId: task.id,
+              reason: error instanceof Error ? error.message : String(error),
+            },
+          );
+        } else {
+          throw error;
+        }
+      }
 
       logChatModelDebug("request:start", {
         taskId: task.id,
@@ -2689,9 +2856,12 @@ export const executeQueuedChatTask = async (
           : userInput;
       const integrationOverride =
         task.payload.kind === "conversation" &&
-        Array.isArray(task.payload.utilMcpServers)
-          ? buildIntegrationsForServers(task.payload.utilMcpServers)
-          : undefined;
+        task.payload.disableMcpTools === true
+          ? []
+          : task.payload.kind === "conversation" &&
+              Array.isArray(task.payload.utilMcpServers)
+            ? buildIntegrationsForServers(task.payload.utilMcpServers)
+            : undefined;
       if (
         task.payload.kind === "conversation" &&
         typeof task.payload.utilTaskName === "string" &&
@@ -2907,11 +3077,7 @@ export const executeQueuedChatTask = async (
     let parsedCommand = parseChatStreamCommandFromOutputs({
       text,
       reasoning,
-      allowReasoningFallback: !(
-        task.payload.kind === "conversation" &&
-        typeof task.payload.utilTaskName === "string" &&
-        task.payload.utilTaskName.trim().length > 0
-      ),
+      allowReasoningFallback: false,
     });
     if (
       task.payload.kind === "conversation" &&
@@ -2976,6 +3142,7 @@ export const executeQueuedChatTask = async (
         stage: parsedCommand.command.stage,
         source: parsedCommand.source,
         persistent: parsedCommand.command.persistent === true,
+        stateless: parsedCommand.command.stateless === true,
         hasContextText:
           typeof parsedCommand.command.context_text === "string" &&
           parsedCommand.command.context_text.trim().length > 0,
@@ -3007,23 +3174,32 @@ export const executeQueuedChatTask = async (
         });
       } else {
         const utilTaskName = parsedCommand.command.stage.trim();
-        const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
-        if (utilTaskSetting && utilTaskSetting.enabled) {
-          const utilSystemPromptExt =
-            typeof parsedCommand.command.context_text === "string"
-              ? parsedCommand.command.context_text.trim()
-              : "";
-          const utilHistorySnapshot = buildUtilHistorySnapshot({
-            thread,
-            currentUserMessage: task.payload.userMessage,
-          });
-          const delegatedSystemPrompt = [
-            utilSystemPromptExt,
-            utilHistorySnapshot,
-            utilTaskSetting.prompt,
-          ]
-            .filter((value) => value.length > 0)
-            .join("\n\n");
+          const utilTaskSetting = getUtilTaskSettingByName(utilTaskName);
+          if (utilTaskSetting && utilTaskSetting.enabled) {
+            const utilSystemPromptExt =
+              typeof parsedCommand.command.context_text === "string"
+                ? parsedCommand.command.context_text.trim()
+                : "";
+            const utilPromptFlags = parseUtilPromptFlags(utilTaskSetting.prompt);
+            const utilUserMessageSeed =
+              task.payload.utilUserMessageSeed ?? task.payload.userMessage;
+            const utilHistorySnapshot = buildUtilHistorySnapshot({
+              thread,
+              currentUserMessage: utilUserMessageSeed,
+            });
+            const useStatelessContext =
+              parsedCommand.command.stateless === true ||
+              utilPromptFlags.isStateless;
+            const delegatedUserMessage = useStatelessContext
+              ? []
+              : utilUserMessageSeed;
+            const delegatedSystemPrompt = [
+              utilSystemPromptExt,
+              ...(useStatelessContext ? [] : [utilHistorySnapshot]),
+              utilPromptFlags.prompt,
+            ]
+              .filter((value) => value.length > 0)
+              .join("\n\n");
 
           const nextNonces = appendUtilCommandNonce(
             knownNonces,
@@ -3049,15 +3225,23 @@ export const executeQueuedChatTask = async (
           const updatedConversationPayload = {
             ...task.payload,
             kind: "conversation" as const,
+            // Critique routing turn is tool-free, but once a util task is entered
+            // we honor the util task MCP configuration.
+            disableMcpTools: false,
             persistent: parsedCommand.command.persistent === true,
             carryoverText: delegatedText,
             carryoverReasoning: reasoning,
+            userMessage: delegatedUserMessage,
             systemPromptOverride: delegatedSystemPrompt,
             previousResponseIdOverride: utilChainBaseResponseId,
             utilChainBaseResponseId,
+            utilUserMessageSeed,
             utilTaskName,
             utilSystemPromptExt: utilSystemPromptExt || undefined,
-            utilMcpServers: utilTaskSetting.mcpServers,
+            utilMcpServers:
+              task.payload.disableMcpTools === true
+                ? []
+                : utilTaskSetting.mcpServers,
             utilCommandDepth: commandDepth + 1,
             utilEnqueueCount: utilEnqueueCount + 1,
             utilCommandNonces: nextNonces,
@@ -3269,10 +3453,26 @@ export const executeQueuedChatTask = async (
           kind: "chat.biased_critique",
           status: "failed",
         });
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.stream",
+          status: "failed",
+        });
       } else if (taskKind === "chat.biased_critique") {
         setGroupTaskStatusByKind({
           taskId: task.id,
           kind: "chat.biased_critique",
+          status: "failed",
+        });
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.stream",
+          status: "failed",
+        });
+      } else if (taskKind === "chat.stream") {
+        setGroupTaskStatusByKind({
+          taskId: task.id,
+          kind: "chat.stream",
           status: "failed",
         });
       }
@@ -3316,7 +3516,22 @@ export const executeQueuedChatTask = async (
       const unloaded = await cleanupRedundantLmStudioModels({
         activeModelKey: getChatModelKey(),
       });
-      const loadedAfterCleanup = await listLoadedLmStudioModels();
+      let loadedAfterCleanup: LoadedLmStudioModelInstance[] = [];
+      try {
+        loadedAfterCleanup = await listLoadedLmStudioModels();
+      } catch (error) {
+        if (isTransientLmStudioFetchError(error)) {
+          console.warn(
+            "[chat-runner] LM Studio model list unavailable after cleanup; continuing",
+            {
+              taskId,
+              reason: error instanceof Error ? error.message : String(error),
+            },
+          );
+        } else {
+          throw error;
+        }
+      }
 
       logChatModelDebug("cleanup:after", {
         taskId,
@@ -3576,9 +3791,21 @@ const buildBiasedCritiqueLmStudioInput = ({
     "Generation setup to evaluate against:",
     JSON.stringify(
       {
+        workflowName: comfyTask.payload.workflowName,
         positivePrompt: comfyTask.payload.prompt,
         negativePrompt: comfyTask.payload.negativePrompt,
+        width: comfyTask.payload.width,
+        height: comfyTask.payload.height,
+        steps: comfyTask.payload.steps,
+        cfg: comfyTask.payload.cfg,
+        seed: comfyTask.payload.seed,
+        samplerName: comfyTask.payload.samplerName,
+        scheduler: comfyTask.payload.scheduler,
         loras: comfyTask.payload.loras,
+        inputImage: comfyTask.payload.inputImage,
+        sourceTaskId: comfyTask.id,
+        sourceJobId: comfyTask.result?.jobId ?? null,
+        selectedImageIndex: imageIndex,
       },
       null,
       2,
@@ -3591,8 +3818,6 @@ const buildBiasedCritiqueLmStudioInput = ({
     "4) Graphical issues bullets",
     "5) Corrected positivePrompt",
     "6) Corrected negativePrompt",
-    "7) LoRA concept match checks (strict equality only)",
-    "8) Suggested LoRA usage (optional)",
   ].join("\n");
 
   return [
@@ -3697,4 +3922,3 @@ const maybeEnqueueTitleGenerationTask = (threadId: string) => {
     ),
   });
 };
-

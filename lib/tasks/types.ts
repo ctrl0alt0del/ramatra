@@ -58,9 +58,11 @@ export type TaskGroupPayloadMap = {
         systemPromptOverride?: string;
         previousResponseIdOverride?: string | null;
         utilChainBaseResponseId?: string | null;
+        utilUserMessageSeed?: MessagePart[];
         utilTaskName?: string;
         utilSystemPromptExt?: string;
         utilMcpServers?: Array<"comfy" | "comfy_readonly" | "web_search" | "civitai">;
+        disableMcpTools?: boolean;
         utilCommandDepth?: number;
         utilEnqueueCount?: number;
         utilCommandNonces?: string[];
@@ -131,6 +133,7 @@ export type TaskGroupResultMap = {
     text?: string;
     reasoning?: string;
     unbiasedCritique?: string;
+    unbiasedReasoning?: string;
     responseId?: string | null;
     summaryCallsInCurrentRequest?: number;
     delegatedToTaskGroupId?: string;
@@ -187,4 +190,7 @@ export type TaskEventMap = {
   "queue:changed": SchedulerSnapshot;
   "gpu:changed": SchedulerSnapshot;
 };
+
+
+
 
