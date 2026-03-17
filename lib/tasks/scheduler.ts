@@ -76,6 +76,11 @@ const withDefaultTasks = <TType extends keyof TaskGroupPayloadMap>(
                 kind: "chat.biased_critique",
                 status: "pending",
               },
+              {
+                id: crypto.randomUUID(),
+                kind: "chat.stream",
+                status: "pending",
+              },
             ]
           : chatPayload.kind === "update_intent"
             ? [

@@ -65,6 +65,7 @@ const buildDefaultGroupTasks = (
       return [
         { id: crypto.randomUUID(), kind: "chat.unbiased_critique", status: "pending" },
         { id: crypto.randomUUID(), kind: "chat.biased_critique", status: "pending" },
+        { id: crypto.randomUUID(), kind: "chat.stream", status: "pending" },
       ];
     }
 

@@ -12,6 +12,7 @@ import {
 } from "@assistant-ui/react";
 import { createAssistantStream } from "assistant-stream";
 
+import { parseCritiqueRequestMarker } from "@/lib/chat/critique-marker";
 import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
 
 import { PersistedHistoryProvider } from "./history";
@@ -95,6 +96,28 @@ const waitForGeneratedThreadTitle = (
   });
 };
 
+
+const getLatestUserText = (
+  serializedMessages: Array<{
+    role: "system" | "user" | "assistant";
+    content: Array<{ type: string; text?: string }>;
+  }>,
+) => {
+  const latestUser = [...serializedMessages]
+    .reverse()
+    .find((message) => message.role === "user");
+
+  if (!latestUser) {
+    return "";
+  }
+
+  return latestUser.content
+    .flatMap((part) =>
+      part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+    )
+    .join("\n")
+    .trim();
+};
 function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) {
   const attachmentAdapter = useMemo(
     () => new SimpleImageAttachmentAdapter(),
@@ -112,18 +135,30 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
             content: await serializeMessageContent(message),
           })),
         );
+        const latestUserText = getLatestUserText(serializedMessages);
+        const critiqueMarker = parseCritiqueRequestMarker(latestUserText);
 
-        const response = await fetch("/api/chat", {
+        const queueUrl = critiqueMarker ? "/api/chat/critique" : "/api/chat";
+        const queuePayload = critiqueMarker
+          ? {
+              comfyTaskId: critiqueMarker.comfyTaskId,
+              imageIndex: critiqueMarker.imageIndex,
+              threadId: remoteThreadId,
+              moodId,
+            }
+          : {
+              messages: serializedMessages,
+              threadId: remoteThreadId,
+              promptMode,
+              moodId,
+            };
+
+        const response = await fetch(queueUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            messages: serializedMessages,
-            threadId: remoteThreadId,
-            promptMode,
-            moodId,
-          }),
+          body: JSON.stringify(queuePayload),
           signal: abortSignal,
         });
 
@@ -133,14 +168,16 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
 
         const data = (await response.json()) as {
           taskId: string;
-          threadId: string;
+          threadId?: string;
         };
 
-        if (data.threadId !== remoteThreadId) {
+        if (
+          typeof data.threadId === "string" &&
+          data.threadId !== remoteThreadId
+        ) {
           throw new Error("Thread identity mismatch while queueing assistant response.");
         }
-
-        const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
+const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
         let lastText = "";
         let lastReasoning = "";
         let lastOwnerTaskGroupId: string | null = null;
@@ -513,4 +550,11 @@ export function usePersistedRuntime(
     adapter,
   });
 }
+
+
+
+
+
+
+
 

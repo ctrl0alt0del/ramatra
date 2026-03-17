@@ -3,8 +3,9 @@
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronDown, ChevronRight, MessageSquareText } from "lucide-react";
-import { useThreadRuntime } from "@assistant-ui/react";
+import { MessageSquareText } from "lucide-react";
+import { useThread, useThreadRuntime } from "@assistant-ui/react";
+import { createCritiqueRequestMarker } from "@/lib/chat/critique-marker";
 
 import { SkeletonBlock } from "./SkeletonBlock";
 import { useMood } from "./mood";
@@ -64,12 +65,26 @@ type ChatTaskEvent =
 
 type CritiqueState = {
   status: "idle" | "queued" | "running" | "completed" | "failed";
-  expanded: boolean;
   taskId?: string;
-  text?: string;
-  reasoning?: string;
   error?: string;
 };
+
+type RuntimeMessage = {
+  role: "assistant" | "user" | "system";
+  content: Array<
+    { type: "text"; text: string } | { type: "reasoning"; text: string }
+  >;
+};
+
+const mapThreadToRuntimeMessages = (thread: ThreadApiDetail): RuntimeMessage[] =>
+  thread.messages.map((message) => ({
+    role: message.role,
+    content: message.content
+      .filter((part): part is Extract<typeof part, { type: "text" }> =>
+        part.type === "text",
+      )
+      .map((part) => ({ type: "text" as const, text: part.text })),
+  }));
 
 export function GeneratedImageCard({
   taskId: initialTaskId,
@@ -94,8 +109,10 @@ export function GeneratedImageCard({
   const [hasResolvedInitialFetch, setHasResolvedInitialFetch] = useState(false);
   const [critiques, setCritiques] = useState<Record<number, CritiqueState>>({});
   const critiqueStreamsRef = useRef<Record<number, EventSource>>({});
+  const followupStreamsRef = useRef<Record<number, EventSource>>({});
   const followupStreamIdsRef = useRef<Record<number, string>>({});
   const threadRuntime = useThreadRuntime({ optional: true });
+  const isThreadRunning = useThread((state) => state.isRunning);
   const { moodId } = useMood();
 
   useEffect(() => {
@@ -167,15 +184,129 @@ export function GeneratedImageCard({
       for (const stream of Object.values(critiqueStreamsRef.current)) {
         stream.close();
       }
+      for (const stream of Object.values(followupStreamsRef.current)) {
+        stream.close();
+      }
       critiqueStreamsRef.current = {};
+      followupStreamsRef.current = {};
+      followupStreamIdsRef.current = {};
     };
-  }, []);
+  }, []);  useEffect(() => {
+    if (isThreadRunning) {
+      return;
+    }
+
+    setCritiques((previous) => {
+      let changed = false;
+      const next: Record<number, CritiqueState> = {};
+
+      for (const [key, value] of Object.entries(previous)) {
+        if (value.status === "queued" || value.status === "running") {
+          changed = true;
+          next[Number(key)] = {
+            ...value,
+            status: "completed",
+          };
+        } else {
+          next[Number(key)] = value;
+        }
+      }
+
+      return changed ? next : previous;
+    });
+  }, [isThreadRunning]);
+
+  const loadThreadRuntimeMessages = async () => {
+    if (!threadId) {
+      return null;
+    }
+
+    const response = await fetch(`/api/threads/${threadId}`);
+    if (!response.ok) {
+      throw new Error("Failed to refresh thread.");
+    }
+
+    const data = (await response.json()) as { thread: ThreadApiDetail };
+    return mapThreadToRuntimeMessages(data.thread);
+  };
 
   const connectCritiqueStream = (imageIndex: number, critiqueTaskId: string) => {
     critiqueStreamsRef.current[imageIndex]?.close();
 
     const source = new EventSource(`/api/chat/task/${critiqueTaskId}/events`);
     critiqueStreamsRef.current[imageIndex] = source;
+    let baseRuntimeMessages: any[] | null = null;
+
+    if (threadRuntime) {
+      baseRuntimeMessages = threadRuntime
+        .getState()
+        .messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+        }));
+
+      threadRuntime.reset([
+        ...(baseRuntimeMessages as any),
+        {
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "Generating critique..." }],
+        },
+      ]);
+    }
+
+    const ensureBaseRuntimeMessages = () => {
+      if (baseRuntimeMessages) {
+        return baseRuntimeMessages;
+      }
+      if (threadRuntime) {
+        baseRuntimeMessages = threadRuntime
+          .getState()
+          .messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          }));
+      } else {
+        baseRuntimeMessages = [];
+      }
+      return baseRuntimeMessages;
+    };
+
+    const mirrorLiveCritiqueIntoChat = async (
+      payload: Extract<ChatTaskEvent, { status: "queued" | "running" | "completed" }>,
+    ) => {
+      if (!threadRuntime) {
+        return;
+      }
+
+      const baseMessages = ensureBaseRuntimeMessages();
+
+      const liveText = payload.text.trim();
+      const liveReasoning = payload.reasoning.trim();
+      const fallbackText =
+        payload.status === "completed" ? "" : "Generating critique...";
+      const nextText = liveText || fallbackText;
+      const nextContent: RuntimeMessage["content"] = [];
+
+      if (liveReasoning) {
+        nextContent.push({ type: "reasoning", text: liveReasoning });
+      }
+      if (nextText) {
+        nextContent.push({ type: "text", text: nextText });
+      }
+
+      if (nextContent.length === 0) {
+        threadRuntime.reset(baseMessages);
+        return;
+      }
+
+      threadRuntime.reset([
+        ...(baseMessages as any),
+        {
+          role: "assistant" as const,
+          content: nextContent,
+        },
+      ]);
+    };
 
     source.addEventListener("task", (event: MessageEvent<string>) => {
       const payload = JSON.parse(event.data) as ChatTaskEvent;
@@ -185,7 +316,6 @@ export function GeneratedImageCard({
           ...previous,
           [imageIndex]: {
             status: "failed",
-            expanded: true,
             taskId: critiqueTaskId,
             error: payload.error || "Critique failed.",
           },
@@ -205,63 +335,79 @@ export function GeneratedImageCard({
               : payload.status === "running"
                 ? "running"
                 : "queued",
-          expanded: true,
           taskId: critiqueTaskId,
-          text: payload.text,
-          reasoning: payload.reasoning,
         },
       }));
+
       if (payload.status === "completed") {
         const delegatedTaskId =
-          "delegatedToTaskGroupId" in payload &&
-          typeof payload.delegatedToTaskGroupId === "string"
+          typeof payload.delegatedToTaskGroupId === "string" &&
+          payload.delegatedToTaskGroupId.trim().length > 0
             ? payload.delegatedToTaskGroupId
             : null;
 
         if (
           delegatedTaskId &&
-          threadId &&
           followupStreamIdsRef.current[imageIndex] !== delegatedTaskId
         ) {
           followupStreamIdsRef.current[imageIndex] = delegatedTaskId;
           const followupSource = new EventSource(
-            "/api/chat/task/" + delegatedTaskId + "/events",
+            `/api/chat/task/${delegatedTaskId}/events`,
           );
+          followupStreamsRef.current[imageIndex] = followupSource;
 
-          followupSource.addEventListener("task", async (followupEvent: MessageEvent<string>) => {
-            const followupPayload = JSON.parse(followupEvent.data) as ChatTaskEvent;
-            if (followupPayload.status !== "completed") {
-              return;
-            }
+          followupSource.addEventListener(
+            "task",
+            (followupEvent: MessageEvent<string>) => {
+              const followupPayload = JSON.parse(
+                followupEvent.data,
+              ) as ChatTaskEvent;
 
-            followupSource.close();
-
-            if (!threadRuntime) {
-              return;
-            }
-
-            try {
-              const response = await fetch("/api/threads/" + threadId);
-              if (!response.ok) {
-                throw new Error("Failed to refresh thread after critique follow-up.");
+              if (followupPayload.status === "failed") {
+                setCritiques((previous) => ({
+                  ...previous,
+                  [imageIndex]: {
+                    ...previous[imageIndex],
+                    status: "failed",
+                    taskId: critiqueTaskId,
+                    error: followupPayload.error || "Critique follow-up failed.",
+                  },
+                }));
+                followupSource.close();
+                delete followupStreamsRef.current[imageIndex];
+                return;
               }
 
-              const data = (await response.json()) as { thread: ThreadApiDetail };
-              const runtimeMessages: Array<{ role: "assistant" | "user" | "system"; content: Array<{ type: "text"; text: string }> }> = data.thread.messages.map((message) => ({
-                role: message.role,
-                content: message.content
-                  .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
-                  .map((part) => ({ type: "text" as const, text: part.text })),
-              }));
+              void mirrorLiveCritiqueIntoChat(followupPayload);
 
-              threadRuntime.reset(runtimeMessages);
-            } catch {
-              // Ignore refresh failures; persisted history still contains the message.
-            }
-          });
+              if (followupPayload.status !== "completed") {
+                return;
+              }
+
+              void (async () => {
+                if (!threadRuntime) {
+                  return;
+                }
+
+                try {
+                  const runtimeMessages = await loadThreadRuntimeMessages();
+                  if (!runtimeMessages) {
+                    return;
+                  }
+                  threadRuntime.reset(runtimeMessages);
+                } catch {
+                  // Ignore refresh failures; persisted history still contains the message.
+                }
+              })();
+
+              followupSource.close();
+              delete followupStreamsRef.current[imageIndex];
+            },
+          );
 
           followupSource.onerror = () => {
             followupSource.close();
+            delete followupStreamsRef.current[imageIndex];
           };
         }
 
@@ -276,7 +422,6 @@ export function GeneratedImageCard({
         [imageIndex]: {
           ...previous[imageIndex],
           status: "failed",
-          expanded: true,
           taskId: critiqueTaskId,
           error: "Critique stream connection failed.",
         },
@@ -291,57 +436,38 @@ export function GeneratedImageCard({
       ...previous,
       [imageIndex]: {
         status: "running",
-        expanded: true,
       },
     }));
 
     try {
-      const response = await fetch("/api/chat/critique", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          comfyTaskId: taskId,
-          imageIndex,
-          threadId,
-          moodId,
-        }),
+      if (!threadRuntime) {
+        throw new Error("Thread runtime is unavailable.");
+      }
+
+      const marker = createCritiqueRequestMarker({
+        comfyTaskId: taskId,
+        imageIndex,
       });
 
-      const data = (await response.json()) as
-        | CritiqueStartResponse
-        | {
-            error?: string;
-          };
-
-      if (!response.ok || !("taskId" in data)) {
-        throw new Error(
-          "error" in data && typeof data.error === "string"
-            ? data.error
-            : "Critique request failed.",
-        );
-      }
+      threadRuntime.append({
+        role: "user",
+        content: [{ type: "text", text: marker }],
+      });
 
       setCritiques((previous) => ({
         ...previous,
         [imageIndex]: {
           ...previous[imageIndex],
           status: "queued",
-          expanded: true,
-          taskId: data.taskId,
           error: undefined,
         },
       }));
-
-      connectCritiqueStream(imageIndex, data.taskId);
     } catch (error) {
       setCritiques((previous) => ({
         ...previous,
         [imageIndex]: {
           ...previous[imageIndex],
           status: "failed",
-          expanded: true,
           error:
             error instanceof Error
               ? error.message
@@ -349,22 +475,6 @@ export function GeneratedImageCard({
         },
       }));
     }
-  };
-  const toggleCritiqueExpanded = (imageIndex: number) => {
-    setCritiques((previous) => {
-      const next = previous[imageIndex];
-      if (!next) {
-        return previous;
-      }
-
-      return {
-        ...previous,
-        [imageIndex]: {
-          ...next,
-          expanded: !next.expanded,
-        },
-      };
-    });
   };
 
   return (
@@ -497,40 +607,6 @@ export function GeneratedImageCard({
                       </p>
                     </div>
                   ) : null}
-
-                  {(critiqueState?.text || critiqueState?.reasoning || isCritiquing) &&
-                  critiqueState ? (
-                    <div className="border-t border-[hsl(var(--aui-border))] px-3 pb-3 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => toggleCritiqueExpanded(index)}
-                        className="flex items-center gap-1.5 text-xs font-medium text-[hsl(var(--aui-muted-foreground))]"
-                      >
-                        {critiqueState.expanded ? (
-                          <ChevronDown className="h-3.5 w-3.5" />
-                        ) : (
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        )}
-                        Critique reasoning
-                      </button>
-
-                      {critiqueState.expanded ? (
-                        <div className="mt-2 space-y-2 text-xs text-[hsl(var(--aui-foreground))]">
-                          {critiqueState.reasoning ? (
-                            <p className="whitespace-pre-wrap">{critiqueState.reasoning}</p>
-                          ) : null}
-                          {critiqueState.text ? (
-                            <p className="whitespace-pre-wrap">{critiqueState.text}</p>
-                          ) : null}
-                          {isCritiquing &&
-                          !critiqueState.reasoning &&
-                          !critiqueState.text ? (
-                            <p className="text-[hsl(var(--aui-muted-foreground))]">Generating critique...</p>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
                 </div>
               );
             })}
@@ -540,3 +616,9 @@ export function GeneratedImageCard({
     </div>
   );
 }
+
+
+
+
+
+
