@@ -8,6 +8,7 @@ export const listLorasToolName = "list_available_loras";
 
 const listLorasInputSchema = z.object({
   workflowName: z.enum(workflowNames).optional(),
+  concepts: z.array(z.string()).optional(),
 });
 
 export const registerListLorasMcpTool = (server: McpServer) => {

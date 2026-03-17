@@ -108,6 +108,16 @@ const getTopTag = (tagFrequency: Record<string, number>) => {
   return { name, count };
 };
 
+const normalizeConcept = (value: string) => {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+};
+
 const parseJsonMetadataField = (value: string | undefined) => {
   if (!value) return null;
 
@@ -146,12 +156,13 @@ const readSafetensorsMetadata = async (
     const tagFrequencyValue =
       parseJsonMetadataField(metadata.ss_tag_frequency) ??
       metadata.ss_tag_frequency;
+    const tagFrequency = flattenTagFrequency(tagFrequencyValue);
 
     return {
       name: metadata.name ?? null,
       outputName: metadata.ss_output_name ?? null,
       baseModelVersion: metadata.ss_base_model_version ?? null,
-      topTag: getTopTag(flattenTagFrequency(tagFrequencyValue)),
+      topTag: getTopTag(tagFrequency),
     };
   } finally {
     await handle.close();
@@ -234,14 +245,27 @@ const scanAvailableLoras = async () => {
 
 export const listAvailableLoras = async ({
   workflowName,
+  concepts,
 }: {
   workflowName?: WorkflowName;
+  concepts?: string[];
 }) => {
   const { loraDirectory, items } = await scanAvailableLoras();
+  const normalizedConcepts = new Set(
+    (concepts ?? []).map(normalizeConcept).filter((concept) => concept.length > 0),
+  );
 
   const filtered = items.filter((lora) => {
     if (!isAllowedForWorkflow(lora.name, workflowName)) {
       return false;
+    }
+
+    if (normalizedConcepts.size > 0) {
+      const topTag = normalizeConcept(lora.metadata?.topTag?.name ?? "");
+      const hasConceptMatch = topTag.length > 0 && normalizedConcepts.has(topTag);
+      if (!hasConceptMatch) {
+        return false;
+      }
     }
 
     return true;
@@ -250,6 +274,7 @@ export const listAvailableLoras = async ({
   return {
     loraDirectory,
     workflowName: workflowName ?? null,
+    concepts: concepts ?? [],
     allowedSubfolders: workflowName
       ? WORKFLOW_LORA_SUBFOLDERS[workflowName]
       : [...STATIC_LORA_SUBFOLDERS],
