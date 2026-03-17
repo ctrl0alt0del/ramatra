@@ -26,13 +26,11 @@ export const dispatchChatTaskHandlers = async ({
   } = createDispatchHandlers();
 
   const registry: Partial<Record<Task["kind"], DispatchHandler[]>> = {
-    "chat.generate": [intentHandler, critiqueHandler, conversationHandler],
-    "chat.stream": [
-      intentHandler,
-      critiqueHandler,
-      critiqueStreamHandler,
-      conversationHandler,
-    ],
+    "chat.generate": [conversationHandler],
+    "chat.stream": [critiqueStreamHandler, conversationHandler],
+    "chat.intent": [intentHandler],
+    "chat.unbiased_critique": [critiqueHandler],
+    "chat.biased_critique": [critiqueHandler],
   };
 
   const context: DispatchContext = {
