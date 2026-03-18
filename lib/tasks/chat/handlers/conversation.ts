@@ -42,7 +42,7 @@ export const persistConversationStreamResult = ({
 
   const latestThread = threadRepository.getById(task.payload.threadId);
   const usedContextTokens = getUsedContextTokens(finalResponse);
-  const { replaceMessages, appendMessages } = buildConversationAssistantMessagePlan({
+  const { appendMessages } = buildConversationAssistantMessagePlan({
     latestMessages: latestThread?.messages ?? null,
     textWithCompactionMarkers,
     regenerateOfLastAssistant: task.payload.regenerateOfLastAssistant === true,
@@ -61,8 +61,8 @@ export const persistConversationStreamResult = ({
     lastPromptMode: promptMode,
     contextWindowUsedTokens: usedContextTokens,
     contextWindowTotalTokens: requestedContextLength,
-    replaceMessages,
     appendMessages,
+    regenerateOfLastAssistant: task.payload.regenerateOfLastAssistant === true,
   });
 
   if (

@@ -552,10 +552,27 @@ export const updateComfyTaskForJob = (
   },
 ) => {
   const taskId = getTaskIdForComfyJob(jobId);
-  if (!taskId) return null;
+  if (!taskId) {
+    if (input.status === "failed") {
+      console.error("[comfy-runner] image.stream:failed-unmapped-job", {
+        jobId,
+        error: input.error ?? null,
+      });
+    }
+    return null;
+  }
 
   const existing = getTask(taskId);
-  if (!existing || existing.type !== "comfy") return null;
+  if (!existing || existing.type !== "comfy") {
+    if (input.status === "failed") {
+      console.error("[comfy-runner] image.stream:failed-noncomfy-task", {
+        jobId,
+        taskId,
+        error: input.error ?? null,
+      });
+    }
+    return null;
+  }
 
   const nextResult = {
     taskId,
@@ -585,6 +602,12 @@ export const updateComfyTaskForJob = (
     });
     clearPendingComfyStreamSession(taskId);
   } else if (input.status === "failed") {
+    console.error("[comfy-runner] image.stream:failed", {
+      taskGroupId: taskId,
+      jobId,
+      error: input.error ?? null,
+      previousResult: existing.result ?? null,
+    });
     setGroupTaskStatusByKind({
       taskId,
       kind: "image.stream",

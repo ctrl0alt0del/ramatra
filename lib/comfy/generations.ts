@@ -56,8 +56,20 @@ const ensureResultsDir = () => {
   fs.mkdirSync(RESULTS_DIR, { recursive: true });
 };
 
+const normalizeMimeType = (mimeType: string) => {
+  return mimeType.split(";")[0]?.trim() ?? mimeType;
+};
+
+const sanitizeFsSegment = (value: string) => {
+  const sanitized = value
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
+    .replace(/[. ]+$/g, "")
+    .trim();
+  return sanitized.length > 0 ? sanitized : "unknown";
+};
+
 const getExtensionForMimeType = (mimeType: string) => {
-  switch (mimeType) {
+  switch (normalizeMimeType(mimeType)) {
     case "image/png":
       return "png";
     case "image/jpeg":
@@ -138,7 +150,7 @@ export const storeCompletedGeneration = (input: {
 }) => {
   ensureResultsDir();
   const timestamp = new Date().toISOString();
-  const generationDir = path.join(RESULTS_DIR, input.jobId);
+  const generationDir = path.join(RESULTS_DIR, sanitizeFsSegment(input.jobId));
   fs.mkdirSync(generationDir, { recursive: true });
 
   const tx = db.transaction(() => {
@@ -172,7 +184,15 @@ export const storeCompletedGeneration = (input: {
     for (const [index, image] of input.images.entries()) {
       const extension = getExtensionForMimeType(image.mimeType);
       const filePath = path.join(generationDir, `${index}.${extension}`);
-      fs.writeFileSync(filePath, Buffer.from(image.data, "base64"));
+      try {
+        fs.writeFileSync(filePath, Buffer.from(image.data, "base64"));
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Failed to write generation image (jobId=${input.jobId}, index=${index}, mime=${image.mimeType}, path=${filePath}): ${message}`,
+        );
+      }
 
       db.prepare(
         `
@@ -225,10 +245,20 @@ export const getStoredGeneration = (jobId: string): StoredGeneration | null => {
       )
       .all(jobId) as GenerationImageRow[];
 
-    const images = imageRows.map((imageRow) => ({
-      mimeType: imageRow.mime_type,
-      data: fs.readFileSync(imageRow.file_path).toString("base64"),
-    }));
+    const images = imageRows.map((imageRow, index) => {
+      try {
+        return {
+          mimeType: imageRow.mime_type,
+          data: fs.readFileSync(imageRow.file_path).toString("base64"),
+        };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Failed to read stored generation image (jobId=${jobId}, index=${index}, path=${imageRow.file_path}): ${message}`,
+        );
+      }
+    });
 
     return {
       jobId,

@@ -102,6 +102,7 @@ const ensureSchema = (db: Database.Database) => {
       title TEXT NOT NULL,
       title_generated INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'regular' CHECK (status IN ('regular', 'archived')),
+      active_leaf_message_id TEXT,
       lmstudio_response_id TEXT,
       lmstudio_model_instance_id TEXT,
       last_prompt_mode TEXT,
@@ -120,8 +121,11 @@ const ensureSchema = (db: Database.Database) => {
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       thread_id TEXT NOT NULL,
+      parent_message_id TEXT,
+      message_ui_id TEXT,
       role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
       content TEXT NOT NULL,
+      token_load INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       position INTEGER NOT NULL,
       FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
@@ -271,6 +275,13 @@ const ensureSchema = (db: Database.Database) => {
     `);
   }
 
+  if (!columns.some((column) => column.name === "active_leaf_message_id")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN active_leaf_message_id TEXT
+    `);
+  }
+
   if (!columns.some((column) => column.name === "title_generated")) {
     db.exec(`
       ALTER TABLE threads
@@ -360,6 +371,95 @@ const ensureSchema = (db: Database.Database) => {
       ADD COLUMN user_intent TEXT
     `);
   }
+
+  const messageColumns = db.prepare(`PRAGMA table_info(messages)`).all() as Array<{
+    name: string;
+  }>;
+
+  if (!messageColumns.some((column) => column.name === "parent_message_id")) {
+    db.exec(`
+      ALTER TABLE messages
+      ADD COLUMN parent_message_id TEXT
+    `);
+  }
+
+  if (!messageColumns.some((column) => column.name === "token_load")) {
+    db.exec(`
+      ALTER TABLE messages
+      ADD COLUMN token_load INTEGER NOT NULL DEFAULT 0
+    `);
+  }
+
+  if (!messageColumns.some((column) => column.name === "message_ui_id")) {
+    db.exec(`
+      ALTER TABLE messages
+      ADD COLUMN message_ui_id TEXT
+    `);
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_messages_thread_parent
+      ON messages(thread_id, parent_message_id)
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_messages_thread_ui
+      ON messages(thread_id, message_ui_id)
+  `);
+
+  const linearBackfillThreads = db
+    .prepare(`SELECT id FROM threads`)
+    .all() as Array<{ id: string }>;
+
+  const backfillBranchShape = db.transaction(() => {
+    for (const thread of linearBackfillThreads) {
+      const rows = db
+        .prepare(
+          `
+            SELECT id, parent_message_id
+            FROM messages
+            WHERE thread_id = ?
+            ORDER BY position ASC
+          `,
+        )
+        .all(thread.id) as Array<{ id: string; parent_message_id: string | null }>;
+
+      let previousId: string | null = null;
+      for (const row of rows) {
+        if (row.parent_message_id === null) {
+          db.prepare(`UPDATE messages SET parent_message_id = ? WHERE id = ?`).run(
+            previousId,
+            row.id,
+          );
+        }
+        previousId = row.id;
+      }
+
+      const latestMessage = db
+        .prepare(
+          `
+            SELECT id
+            FROM messages
+            WHERE thread_id = ?
+            ORDER BY position DESC, created_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(thread.id) as { id: string } | undefined;
+
+      if (latestMessage) {
+        db.prepare(
+          `
+            UPDATE threads
+            SET active_leaf_message_id = COALESCE(active_leaf_message_id, ?)
+            WHERE id = ?
+          `,
+        ).run(latestMessage.id, thread.id);
+      }
+    }
+  });
+
+  backfillBranchShape();
 
   const utilTaskColumns = db.prepare(`PRAGMA table_info(util_task_settings)`).all() as Array<{
     name: string;
@@ -520,6 +620,8 @@ export const getDb = () => {
   ensureSchema(globalDb.__comfyBridgeDb);
   return globalDb.__comfyBridgeDb;
 };
+
+
 
 
 

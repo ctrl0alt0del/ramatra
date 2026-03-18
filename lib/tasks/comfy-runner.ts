@@ -33,6 +33,11 @@ export const executeQueuedComfyTask = async (
   if (taskKind === "image.stream") {
     const session = getPendingComfyStreamSession(task.id);
     if (!session) {
+      console.error("[comfy-runner] image.stream:no-pending-session", {
+        taskGroupId: task.id,
+        result: task.result ?? null,
+        error: task.error ?? null,
+      });
       throw new Error("image.stream task has no pending comfy stream session.");
     }
     setGroupTaskStatusByKind({

@@ -16,7 +16,7 @@ const imagePartSchema = z.object({
 
 import {
   deleteThread,
-  getThread,
+  getThreadWithAllMessages,
   updateThread,
 } from "@/lib/lmstudio/threads";
 
@@ -40,6 +40,7 @@ const updateThreadSchema = z.object({
   contextWindowTotalTokens: z.number().int().positive().nullable().optional(),
   appendMessages: z.array(messageSchema).optional(),
   replaceMessages: z.array(messageSchema).optional(),
+  regenerateOfLastAssistant: z.boolean().optional(),
 });
 
 type RouteContext = {
@@ -48,7 +49,7 @@ type RouteContext = {
 
 export async function GET(_req: Request, context: RouteContext) {
   const { threadId } = await context.params;
-  const thread = getThread(threadId);
+  const thread = getThreadWithAllMessages(threadId);
 
   if (!thread) {
     return NextResponse.json({ error: "Thread not found" }, { status: 404 });
@@ -98,3 +99,6 @@ export async function DELETE(_req: Request, context: RouteContext) {
 
   return new NextResponse(null, { status: 204 });
 }
+
+
+

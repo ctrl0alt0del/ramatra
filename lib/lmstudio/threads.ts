@@ -8,9 +8,17 @@ import {
 } from "@/lib/chat/message-content";
 import { getDb } from "@/lib/db";
 import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
+import {
+  estimateImageTokens,
+  estimateMessageTokens,
+} from "@/lib/tasks/chat/policies/context-budget";
 import { publishThreadChanged } from "@/lib/threads/event-bus";
 
 export type ThreadMessage = {
+  id?: string;
+  parentMessageId?: string | null;
+  messageUiId?: string | null;
+  tokenLoad?: number;
   role: Exclude<ChatMessageRoleData, "tool">;
   content: MessagePart[];
 };
@@ -37,6 +45,7 @@ export type ThreadSummary = {
 };
 
 export type ThreadDetail = ThreadSummary & {
+  activeLeafMessageId: string | null;
   messages: ThreadMessage[];
 };
 
@@ -45,6 +54,7 @@ type ThreadRow = {
   title: string;
   title_generated: number;
   status: ThreadSummary["status"];
+  active_leaf_message_id: string | null;
   user_intent: string | null;
   lmstudio_response_id: string | null;
   lmstudio_model_instance_id: string | null;
@@ -62,11 +72,130 @@ type ThreadRow = {
 };
 
 type MessageRow = {
+  id: string;
+  parent_message_id: string | null;
+  message_ui_id: string | null;
   role: ThreadMessage["role"];
   content: string;
+  token_load: number;
+  created_at: string;
 };
 
 const db = getDb();
+
+const computeMessageTokenLoad = (content: MessagePart[]) => {
+  return estimateMessageTokens(content) + estimateImageTokens(content);
+};
+
+const getLatestMessageIdForThread = (threadId: string) => {
+  const row = db
+    .prepare(
+      `
+        SELECT id
+        FROM messages
+        WHERE thread_id = ?
+        ORDER BY position DESC, created_at DESC
+        LIMIT 1
+      `,
+    )
+    .get(threadId) as { id: string } | undefined;
+  return row?.id ?? null;
+};
+
+const getMessageNodeById = (messageId: string, threadId?: string) => {
+  if (threadId) {
+    return db
+      .prepare(
+        `
+          SELECT id, parent_message_id, role
+          FROM messages
+          WHERE id = ?
+            AND thread_id = ?
+        `,
+      )
+      .get(messageId, threadId) as
+      | {
+          id: string;
+          parent_message_id: string | null;
+          role: ThreadMessage["role"];
+        }
+      | undefined;
+  }
+
+  return db
+    .prepare(
+      `
+        SELECT id, parent_message_id, role
+        FROM messages
+        WHERE id = ?
+      `,
+    )
+    .get(messageId) as
+    | {
+        id: string;
+        parent_message_id: string | null;
+        role: ThreadMessage["role"];
+      }
+    | undefined;
+};
+
+const getActiveBranchMessages = ({
+  threadId,
+  activeLeafMessageId,
+}: {
+  threadId: string;
+  activeLeafMessageId: string | null;
+}) => {
+  const leafMessageId = activeLeafMessageId ?? getLatestMessageIdForThread(threadId);
+  if (!leafMessageId) {
+    return {
+      messages: [] as MessageRow[],
+      activeLeafMessageId: null,
+    };
+  }
+
+  const rows = db
+    .prepare(
+      `
+        WITH RECURSIVE branch AS (
+          SELECT
+            id,
+            parent_message_id,
+            message_ui_id,
+            role,
+            content,
+            token_load,
+            created_at,
+            0 AS depth
+          FROM messages
+          WHERE id = ?
+
+          UNION ALL
+
+          SELECT
+            m.id,
+            m.parent_message_id,
+            m.message_ui_id,
+            m.role,
+            m.content,
+            m.token_load,
+            m.created_at,
+            branch.depth + 1 AS depth
+          FROM messages m
+          JOIN branch ON branch.parent_message_id = m.id
+        )
+        SELECT id, parent_message_id, message_ui_id, role, content, token_load, created_at
+        FROM branch
+        ORDER BY depth DESC
+      `,
+    )
+    .all(leafMessageId) as MessageRow[];
+
+  return {
+    messages: rows,
+    activeLeafMessageId: leafMessageId,
+  };
+};
 
 export const isPlaceholderThreadTitle = (title: string | null | undefined) => {
   const normalized = title?.trim().toLowerCase() ?? "";
@@ -113,6 +242,7 @@ export const listThreads = (): ThreadSummary[] => {
           t.title,
           t.title_generated,
           t.status,
+          t.active_leaf_message_id,
           t.user_intent,
           t.lmstudio_response_id,
           t.lmstudio_model_instance_id,
@@ -191,7 +321,8 @@ export const createThread = (input?: {
   const summaryCallCountTotal = input?.summaryCallCountTotal ?? 0;
   const summaryCallsInCurrentRequest =
     input?.summaryCallsInCurrentRequest ?? 0;
-  const contextWindowUsedTokens = input?.contextWindowUsedTokens ?? null;
+  const contextWindowUsedTokens =
+    input?.contextWindowUsedTokens ?? messages.reduce((sum, message) => sum + computeMessageTokenLoad(message.content), 0);
   const contextWindowTotalTokens = input?.contextWindowTotalTokens ?? null;
 
   const insert = db.transaction(() => {
@@ -202,6 +333,7 @@ export const createThread = (input?: {
           title,
           title_generated,
           status,
+          active_leaf_message_id,
           user_intent,
           lmstudio_response_id,
           lmstudio_model_instance_id,
@@ -216,13 +348,14 @@ export const createThread = (input?: {
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       threadId,
       title,
       titleGenerated ? 1 : 0,
       status,
+      null,
       userIntent,
       lmstudioResponseId,
       lmstudioModelInstanceId,
@@ -240,20 +373,39 @@ export const createThread = (input?: {
 
     const insertMessage = db.prepare(
       `
-        INSERT INTO messages (id, thread_id, role, content, created_at, position)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO messages (id, thread_id, parent_message_id, message_ui_id, role, content, token_load, created_at, position)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     );
 
+    let parentMessageId: string | null = null;
+    let activeLeafMessageId: string | null = null;
     for (const [index, message] of messages.entries()) {
+      const messageId = crypto.randomUUID();
+      const tokenLoad = computeMessageTokenLoad(message.content);
       insertMessage.run(
-        crypto.randomUUID(),
+        messageId,
         threadId,
+        parentMessageId,
+        message.messageUiId ?? null,
         message.role,
         serializeMessageContent(message.content),
+        tokenLoad,
         timestamp,
         index,
       );
+      parentMessageId = messageId;
+      activeLeafMessageId = messageId;
+    }
+
+    if (activeLeafMessageId) {
+      db.prepare(
+        `
+          UPDATE threads
+          SET active_leaf_message_id = ?
+          WHERE id = ?
+        `,
+      ).run(activeLeafMessageId, threadId);
     }
   });
 
@@ -267,6 +419,36 @@ export const createThread = (input?: {
   return createdThread;
 };
 
+
+export const getThreadMessageById = (threadId: string, messageId: string) => {
+  const row = db
+    .prepare(
+      `
+        SELECT id, parent_message_id, message_ui_id, role, content, token_load, created_at
+        FROM messages
+        WHERE thread_id = ? AND id = ?
+        LIMIT 1
+      `,
+    )
+    .get(threadId, messageId) as MessageRow | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  const content = parseStoredMessageContent(row.content);
+  const fallbackLoad = computeMessageTokenLoad(content);
+
+  return {
+    id: row.id,
+    parentMessageId: row.parent_message_id,
+    messageUiId: row.message_ui_id,
+    role: row.role,
+    content,
+    tokenLoad: row.token_load > 0 ? row.token_load : fallbackLoad,
+  } satisfies ThreadMessage;
+};
+
 export const getThread = (threadId: string) => {
   const thread = db
     .prepare(
@@ -276,6 +458,7 @@ export const getThread = (threadId: string) => {
           t.title,
           t.title_generated,
           t.status,
+          t.active_leaf_message_id,
           t.user_intent,
           t.lmstudio_response_id,
           t.lmstudio_model_instance_id,
@@ -300,22 +483,35 @@ export const getThread = (threadId: string) => {
 
   if (!thread) return null;
 
-  const messages = db
-    .prepare(
-      `
-        SELECT role, content
-        FROM messages
-        WHERE thread_id = ?
-        ORDER BY position ASC
-      `,
-    )
-    .all(threadId) as MessageRow[];
+  const branch = getActiveBranchMessages({
+    threadId,
+    activeLeafMessageId: thread.active_leaf_message_id,
+  });
+
+  const branchMessages = branch.messages.map((message) => {
+    const content = parseStoredMessageContent(message.content);
+    const fallbackLoad = computeMessageTokenLoad(content);
+    return {
+      id: message.id,
+      parentMessageId: message.parent_message_id,
+      messageUiId: message.message_ui_id,
+      role: message.role,
+      content,
+      tokenLoad: message.token_load > 0 ? message.token_load : fallbackLoad,
+    } satisfies ThreadMessage;
+  });
+
+  const branchTokenLoad = branchMessages.reduce(
+    (sum, message) => sum + (message.tokenLoad ?? 0),
+    0,
+  );
 
   return {
     id: thread.id,
     title: thread.title,
     titleGenerated: thread.title_generated !== 0,
     status: thread.status,
+    activeLeafMessageId: branch.activeLeafMessageId,
     userIntent: thread.user_intent,
     lmstudioResponseId: thread.lmstudio_response_id,
     lmstudioModelInstanceId: thread.lmstudio_model_instance_id,
@@ -325,15 +521,12 @@ export const getThread = (threadId: string) => {
     summaryMessageCount: thread.summary_message_count,
     summaryCallCountTotal: thread.summary_call_count_total,
     summaryCallsInCurrentRequest: thread.summary_calls_in_current_request,
-    contextWindowUsedTokens: thread.context_window_used_tokens,
+    contextWindowUsedTokens: branchTokenLoad,
     contextWindowTotalTokens: thread.context_window_total_tokens,
     createdAt: thread.created_at,
     updatedAt: thread.updated_at,
-    messageCount: thread.message_count,
-    messages: messages.map((message) => ({
-      role: message.role,
-      content: parseStoredMessageContent(message.content),
-    })),
+    messageCount: branchMessages.length,
+    messages: branchMessages,
   } satisfies ThreadDetail;
 };
 
@@ -355,7 +548,10 @@ export const updateThread = (
     contextWindowUsedTokens?: number | null;
     contextWindowTotalTokens?: number | null;
     appendMessages?: ThreadMessage[];
+    appendParentMessageId?: string | null;
     replaceMessages?: ThreadMessage[];
+    regenerateOfLastAssistant?: boolean;
+    activeLeafMessageId?: string | null;
   },
 ) => {
   const existing = getThread(threadId);
@@ -422,6 +618,100 @@ export const updateThread = (
   const timestamp = new Date().toISOString();
 
   const update = db.transaction(() => {
+    let nextActiveLeafMessageId = existing.activeLeafMessageId;
+
+    if (input.activeLeafMessageId !== undefined) {
+      if (input.activeLeafMessageId === null) {
+        nextActiveLeafMessageId = null;
+      } else {
+        const selectedLeaf = getMessageNodeById(input.activeLeafMessageId, threadId);
+        if (selectedLeaf) {
+          nextActiveLeafMessageId = selectedLeaf.id;
+        }
+      }
+    }
+
+    if (input.replaceMessages) {
+      db.prepare(`DELETE FROM messages WHERE thread_id = ?`).run(threadId);
+
+      const insertMessage = db.prepare(
+        `
+          INSERT INTO messages (id, thread_id, parent_message_id, message_ui_id, role, content, token_load, created_at, position)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      );
+
+      let parentMessageId: string | null = null;
+      nextActiveLeafMessageId = null;
+      for (const [index, message] of input.replaceMessages.entries()) {
+        const messageId = crypto.randomUUID();
+        const tokenLoad = computeMessageTokenLoad(message.content);
+        insertMessage.run(
+          messageId,
+          threadId,
+          parentMessageId,
+        message.messageUiId ?? null,
+        message.role,
+          serializeMessageContent(message.content),
+          tokenLoad,
+          timestamp,
+          index,
+        );
+        parentMessageId = messageId;
+        nextActiveLeafMessageId = messageId;
+      }
+    } else if (input.appendMessages?.length) {
+      const currentPosition = db
+        .prepare(
+          `SELECT COALESCE(MAX(position), -1) AS max_position FROM messages WHERE thread_id = ?`,
+        )
+        .get(threadId) as { max_position: number };
+
+      let parentCursor = nextActiveLeafMessageId;
+      if (input.appendParentMessageId !== undefined) {
+        if (input.appendParentMessageId === null) {
+          parentCursor = null;
+        } else {
+          const appendParentNode = getMessageNodeById(input.appendParentMessageId, threadId);
+          if (appendParentNode) {
+            parentCursor = appendParentNode.id;
+          }
+        }
+      }
+
+      if (input.regenerateOfLastAssistant === true && parentCursor) {
+        const activeLeafNode = getMessageNodeById(parentCursor, threadId);
+        if (activeLeafNode?.role === "assistant") {
+          parentCursor = activeLeafNode.parent_message_id;
+        }
+      }
+
+      const insertMessage = db.prepare(
+        `
+          INSERT INTO messages (id, thread_id, parent_message_id, message_ui_id, role, content, token_load, created_at, position)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      );
+
+      for (const [index, message] of input.appendMessages.entries()) {
+        const messageId = crypto.randomUUID();
+        const tokenLoad = computeMessageTokenLoad(message.content);
+        insertMessage.run(
+          messageId,
+          threadId,
+          parentCursor,
+          message.messageUiId ?? null,
+          message.role,
+          serializeMessageContent(message.content),
+          tokenLoad,
+          timestamp,
+          currentPosition.max_position + index + 1,
+        );
+        parentCursor = messageId;
+        nextActiveLeafMessageId = messageId;
+      }
+    }
+
     db.prepare(
       `
         UPDATE threads
@@ -429,6 +719,7 @@ export const updateThread = (
           title = ?,
           title_generated = ?,
           status = ?,
+          active_leaf_message_id = ?,
           user_intent = ?,
           lmstudio_response_id = ?,
           lmstudio_model_instance_id = ?,
@@ -447,6 +738,7 @@ export const updateThread = (
       nextTitle,
       nextTitleGenerated ? 1 : 0,
       nextStatus,
+      nextActiveLeafMessageId,
       nextUserIntent,
       nextLmstudioResponseId,
       nextLmstudioModelInstanceId,
@@ -461,57 +753,6 @@ export const updateThread = (
       timestamp,
       threadId,
     );
-
-    if (input.replaceMessages) {
-      db.prepare(`DELETE FROM messages WHERE thread_id = ?`).run(threadId);
-    }
-
-    if (input.replaceMessages) {
-      const insertMessage = db.prepare(
-        `
-          INSERT INTO messages (id, thread_id, role, content, created_at, position)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `,
-      );
-
-      for (const [index, message] of input.replaceMessages.entries()) {
-        insertMessage.run(
-          crypto.randomUUID(),
-          threadId,
-          message.role,
-          serializeMessageContent(message.content),
-          timestamp,
-          index,
-        );
-      }
-      return;
-    }
-
-    if (input.appendMessages?.length) {
-      const currentPosition = db
-        .prepare(
-          `SELECT COALESCE(MAX(position), -1) AS max_position FROM messages WHERE thread_id = ?`,
-        )
-        .get(threadId) as { max_position: number };
-
-      const insertMessage = db.prepare(
-        `
-          INSERT INTO messages (id, thread_id, role, content, created_at, position)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `,
-      );
-
-      for (const [index, message] of input.appendMessages.entries()) {
-        insertMessage.run(
-          crypto.randomUUID(),
-          threadId,
-          message.role,
-          serializeMessageContent(message.content),
-          timestamp,
-          currentPosition.max_position + index + 1,
-        );
-      }
-    }
   });
 
   update();
@@ -559,3 +800,57 @@ export const deleteAllThreads = () => {
 
   return { deletedCount: existingThreads.length };
 };
+
+
+
+export const getThreadWithAllMessages = (threadId: string) => {
+  const thread = getThread(threadId);
+  if (!thread) {
+    return null;
+  }
+
+  const rows = db
+    .prepare(
+      `
+        SELECT id, parent_message_id, message_ui_id, role, content, token_load, created_at
+        FROM messages
+        WHERE thread_id = ?
+        ORDER BY position ASC, created_at ASC
+      `,
+    )
+    .all(threadId) as MessageRow[];
+
+  const messages = rows.map((row) => {
+    const content = parseStoredMessageContent(row.content);
+    const fallbackLoad = computeMessageTokenLoad(content);
+    return {
+      id: row.id,
+      parentMessageId: row.parent_message_id,
+    messageUiId: row.message_ui_id,
+    role: row.role,
+      content,
+      tokenLoad: row.token_load > 0 ? row.token_load : fallbackLoad,
+    } satisfies ThreadMessage;
+  });
+
+  return {
+    ...thread,
+    messageCount: messages.length,
+    messages,
+  } satisfies ThreadDetail;
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

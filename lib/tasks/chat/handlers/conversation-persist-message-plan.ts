@@ -15,42 +15,31 @@ export const buildConversationAssistantMessagePlan = ({
   textWithCompactionMarkers: string;
   regenerateOfLastAssistant: boolean;
 }) => {
-  const lastMessage = latestMessages?.at(-1);
-  const shouldReplaceLastAssistant =
-    regenerateOfLastAssistant &&
-    !!latestMessages &&
-    latestMessages.length > 0 &&
-    latestMessages.at(-1)?.role === "assistant";
-
-  const shouldAppendAssistantMessage =
-    !shouldReplaceLastAssistant &&
-    (!lastMessage ||
-      lastMessage.role !== "assistant" ||
-      getTextFromMessageContent(lastMessage.content) !== textWithCompactionMarkers);
-
-  const replaceMessages =
-    shouldReplaceLastAssistant && latestMessages
-      ? [
-          ...latestMessages.slice(0, -1),
-          {
-            role: "assistant" as const,
-            content: [
-              { type: "text" as const, text: textWithCompactionMarkers },
-            ],
-          },
-        ]
-      : undefined;
-  const appendMessages = shouldAppendAssistantMessage
-    ? [
+  if (regenerateOfLastAssistant) {
+    return {
+      appendMessages: [
         {
           role: "assistant" as const,
           content: [{ type: "text" as const, text: textWithCompactionMarkers }],
         },
-      ]
-    : undefined;
+      ],
+    };
+  }
+
+  const lastMessage = latestMessages?.at(-1);
+  const shouldAppendAssistantMessage =
+    !lastMessage ||
+    lastMessage.role !== "assistant" ||
+    getTextFromMessageContent(lastMessage.content) !== textWithCompactionMarkers;
 
   return {
-    replaceMessages,
-    appendMessages,
+    appendMessages: shouldAppendAssistantMessage
+      ? [
+          {
+            role: "assistant" as const,
+            content: [{ type: "text" as const, text: textWithCompactionMarkers }],
+          },
+        ]
+      : undefined,
   };
 };

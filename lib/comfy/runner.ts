@@ -417,6 +417,11 @@ export async function runWorkflow({
         status: ComfyJobStatus.Completed,
       });
     } catch (error) {
+      console.error("[comfy-runner] failed to persist completed generation", {
+        jobId: job.task_id,
+        workflowName,
+        error,
+      });
       const message =
         error instanceof Error
           ? error.message

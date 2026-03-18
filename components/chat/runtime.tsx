@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 
 import {
   SimpleImageAttachmentAdapter,
@@ -118,19 +118,171 @@ const getLatestUserText = (
     .join("\n")
     .trim();
 };
+
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+};
+
+const getNestedString = (root: unknown, path: string[]): string | null => {
+  let cursor: unknown = root;
+  for (const segment of path) {
+    const record = asRecord(cursor);
+    if (!record || !(segment in record)) {
+      return null;
+    }
+    cursor = record[segment];
+  }
+
+  return typeof cursor === "string" && cursor.trim().length > 0
+    ? cursor.trim()
+    : null;
+};
+
+const looksLikeDbMessageId = (value: string | null): value is string => {
+  if (!value) {
+    return false;
+  }
+
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+};
+
+const getLatestUserMessageObject = (
+  messages: ReadonlyArray<unknown>,
+): Record<string, unknown> | null => {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => getNestedString(message, ["role"]) === "user");
+
+  return asRecord(latestUserMessage);
+};
+
+const resolveStableMessageIdFromMessage = (message: unknown): string | null => {
+  const directCandidates = [
+    getNestedString(message, ["id"]),
+    getNestedString(message, ["messageId"]),
+    getNestedString(message, ["remoteId"]),
+  ];
+
+  for (const candidate of directCandidates) {
+    if (looksLikeDbMessageId(candidate)) {
+      return candidate;
+    }
+  }
+
+  const metadataCandidates = [
+    getNestedString(message, ["metadata", "custom", "dbMessageId"]),
+    getNestedString(message, ["metadata", "custom", "messageId"]),
+    getNestedString(message, ["metadata", "custom", "originalMessageId"]),
+    getNestedString(message, ["metadata", "custom", "sourceMessageId"]),
+  ];
+
+  for (const candidate of metadataCandidates) {
+    if (looksLikeDbMessageId(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
+const getLatestUserLocalMessageId = (
+  messages: ReadonlyArray<unknown>,
+): string | null => {
+  const latestUserMessage = getLatestUserMessageObject(messages);
+  const localCandidates = [
+    getNestedString(latestUserMessage, ["id"]),
+    getNestedString(latestUserMessage, ["messageId"]),
+    getNestedString(latestUserMessage, ["remoteId"]),
+  ];
+
+  for (const candidate of localCandidates) {
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
+const getLatestUserEditingMessageId = (
+  messages: ReadonlyArray<unknown>,
+  localToDbMap: Map<string, string>,
+): string | null => {
+  const latestUserMessage = getLatestUserMessageObject(messages);
+  return (
+    resolveStableMessageIdFromMessage(latestUserMessage) ??
+    (() => {
+      const localId = getLatestUserLocalMessageId(messages);
+      if (!localId) {
+        return null;
+      }
+
+      const cached = localToDbMap.get(localId) ?? null;
+      return looksLikeDbMessageId(cached) ? cached : null;
+    })()
+  );
+};
+
+
+const seedLocalToDbMapFromMessages = (
+  messages: ReadonlyArray<unknown>,
+  localToDbMap: Map<string, string>,
+) => {
+  for (const message of messages) {
+    const dbId = resolveStableMessageIdFromMessage(message);
+    if (!dbId) {
+      continue;
+    }
+
+    const localCandidates = [
+      getNestedString(message, ["id"]),
+      getNestedString(message, ["messageId"]),
+      getNestedString(message, ["remoteId"]),
+    ];
+
+    for (const localId of localCandidates) {
+      if (!localId || localId === dbId) {
+        continue;
+      }
+      localToDbMap.set(localId, dbId);
+    }
+  }
+};
 function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) {
   const attachmentAdapter = useMemo(
     () => new SimpleImageAttachmentAdapter(),
     [],
   );
   const threadListItem = useThreadListItemRuntime();
+  const localToDbMessageIdRef = useRef<Map<string, string>>(new Map());
 
   const modelAdapter = useMemo<ChatModelAdapter>(
     () => ({
-      async *run({ messages, abortSignal }) {
+      async *run({ messages, abortSignal, unstable_parentId }) {
         const remoteThreadId = await resolveThreadRemoteId(threadListItem);
+        seedLocalToDbMapFromMessages(messages, localToDbMessageIdRef.current);
+        const latestUserLocalMessageId = getLatestUserLocalMessageId(messages);
+        const parentMessageIdForRequest = unstable_parentId ?? null;
+        const editingMessageIdForRequest =
+          latestUserLocalMessageId ??
+          getLatestUserEditingMessageId(
+            messages,
+            localToDbMessageIdRef.current,
+          ) ??
+          null;
         const serializedMessages = await Promise.all(
           messages.map(async (message) => ({
+            id:
+              getNestedString(message, ["id"]) ??
+              getNestedString(message, ["messageId"]) ??
+              getNestedString(message, ["remoteId"]) ??
+              undefined,
             role: message.role,
             content: await serializeMessageContent(message),
           })),
@@ -145,12 +297,15 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
               imageIndex: critiqueMarker.imageIndex,
               threadId: remoteThreadId,
               moodId,
+              parentMessageId: parentMessageIdForRequest,
             }
           : {
               messages: serializedMessages,
               threadId: remoteThreadId,
               promptMode,
               moodId,
+              parentMessageId: parentMessageIdForRequest,
+              editingMessageId: editingMessageIdForRequest,
             };
 
         const response = await fetch(queueUrl, {
@@ -169,7 +324,19 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
         const data = (await response.json()) as {
           taskId: string;
           threadId?: string;
+          userMessageId?: string | null;
         };
+
+        if (
+          latestUserLocalMessageId &&
+          typeof data.userMessageId === "string" &&
+          data.userMessageId.trim().length > 0
+        ) {
+          localToDbMessageIdRef.current.set(
+            latestUserLocalMessageId,
+            data.userMessageId.trim(),
+          );
+        }
 
         if (
           typeof data.threadId === "string" &&
@@ -177,7 +344,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
         ) {
           throw new Error("Thread identity mismatch while queueing assistant response.");
         }
-const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
+        const eventSource = new EventSource(`/api/chat/task/${data.taskId}/events`);
         let lastText = "";
         let lastReasoning = "";
         let lastOwnerTaskGroupId: string | null = null;
@@ -540,7 +707,7 @@ export function usePersistedRuntime(
       },
       unstable_Provider: PersistedHistoryProvider,
     }),
-    [moodId, promptMode],
+    [],
   );
 
   return useRemoteThreadListRuntime({
@@ -550,6 +717,24 @@ export function usePersistedRuntime(
     adapter,
   });
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -1,6 +1,10 @@
 import type { MessagePart } from "@/lib/chat/message-content";
 
 export type StoredThreadMessage = {
+  id: string;
+  parentMessageId?: string | null;
+  messageUiId?: string | null;
+  tokenLoad?: number;
   role: "system" | "user" | "assistant";
   content: MessagePart[];
 };
@@ -23,6 +27,7 @@ export type ThreadApiSummary = {
 };
 
 export type ThreadApiDetail = ThreadApiSummary & {
+  activeLeafMessageId: string | null;
   messages: StoredThreadMessage[];
 };
 
@@ -32,3 +37,5 @@ export type ExportedHistoryItem = {
     content?: readonly { type: string; text?: string }[];
   };
 };
+
+

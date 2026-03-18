@@ -2,22 +2,48 @@
 
 import { useMemo } from "react";
 
-import { RuntimeAdapterProvider, useThreadListItemRuntime } from "@assistant-ui/react";
+import {
+  RuntimeAdapterProvider,
+  useThreadListItemRuntime,
+  type ThreadHistoryAdapter,
+} from "@assistant-ui/react";
 
 import type { MessagePart } from "@/lib/chat/message-content";
 
-import type {
-  ThreadApiDetail,
-  StoredThreadMessage,
-} from "./types";
+import type { ThreadApiDetail, StoredThreadMessage } from "./types";
 
-const toExportedMessage = (
-  remoteId: string,
-  storedMessage: StoredThreadMessage,
-  index: number,
+const toImageAttachment = (
+  messageId: string,
+  part: MessagePart,
+  partIndex: number,
 ) => {
-  const id = `${remoteId}-${index}`;
-  const parentId = index === 0 ? null : `${remoteId}-${index - 1}`;
+  if (part.type !== "image") {
+    return [];
+  }
+
+  return [
+    {
+      id: `${messageId}-image-${partIndex}`,
+      type: "image" as const,
+      name: part.name ?? `image-${partIndex + 1}`,
+      contentType: part.mimeType ?? "image/*",
+      content: [
+        {
+          type: "image" as const,
+          image: part.dataUrl,
+        },
+      ],
+      status: {
+        type: "complete" as const,
+      },
+      source: "message" as const,
+    },
+  ];
+};
+
+const toExportedMessage = (storedMessage: StoredThreadMessage) => {
+  const id = storedMessage.id;
+  const parentId = storedMessage.parentMessageId ?? null;
   const textParts = storedMessage.content.flatMap((part) =>
     part.type === "text"
       ? [
@@ -30,7 +56,7 @@ const toExportedMessage = (
   );
 
   const imageAttachments = storedMessage.content.flatMap((part, partIndex) =>
-    toImageAttachment(remoteId, index, part, partIndex),
+    toImageAttachment(id, part, partIndex),
   );
 
   if (storedMessage.role === "assistant") {
@@ -49,7 +75,7 @@ const toExportedMessage = (
           unstable_annotations: [],
           unstable_data: [],
           steps: [],
-          custom: {},
+          custom: { dbMessageId: id },
         },
       },
       parentId,
@@ -65,7 +91,7 @@ const toExportedMessage = (
         createdAt: new Date(),
         attachments: imageAttachments,
         metadata: {
-          custom: {},
+          custom: { dbMessageId: id },
         },
       },
       parentId,
@@ -84,36 +110,6 @@ const toExportedMessage = (
     },
     parentId,
   };
-};
-
-const toImageAttachment = (
-  remoteId: string,
-  messageIndex: number,
-  part: MessagePart,
-  partIndex: number,
-) => {
-  if (part.type !== "image") {
-    return [];
-  }
-
-  return [
-    {
-      id: `${remoteId}-${messageIndex}-image-${partIndex}`,
-      type: "image" as const,
-      name: part.name ?? `image-${partIndex + 1}`,
-      contentType: part.mimeType ?? "image/*",
-      content: [
-        {
-          type: "image" as const,
-          image: part.dataUrl,
-        },
-      ],
-      status: {
-        type: "complete" as const,
-      },
-      source: "message" as const,
-    },
-  ];
 };
 
 export function PersistedHistoryProvider({
@@ -138,8 +134,8 @@ export function PersistedHistoryProvider({
         const data = (await response.json()) as { thread: ThreadApiDetail };
 
         return {
-          messages: data.thread.messages.map((storedMessage, index) =>
-            toExportedMessage(remoteId, storedMessage, index),
+          messages: data.thread.messages.map((storedMessage) =>
+            toExportedMessage(storedMessage),
           ),
         };
       },
@@ -151,8 +147,11 @@ export function PersistedHistoryProvider({
   );
 
   return (
-    <RuntimeAdapterProvider adapters={{ history: history as any }}>
+    <RuntimeAdapterProvider
+      adapters={{ history: history as unknown as ThreadHistoryAdapter }}
+    >
       {children}
     </RuntimeAdapterProvider>
   );
 }
+
