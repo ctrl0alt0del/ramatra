@@ -49,6 +49,11 @@ export const processTaskQueues = async () => {
         );
         const pendingStreamSession = getPendingComfyStreamSession(activeTask.id);
         if (streamTask?.status === "running" && pendingStreamSession) {
+          console.info("[comfy-debug] processor:waiting-on-image-stream", {
+            taskGroupId: activeTask.id,
+            jobId: activeTask.result?.jobId ?? null,
+            streamTaskId: streamTask.id,
+          });
           break;
         }
       }
@@ -96,6 +101,11 @@ export const processTaskQueues = async () => {
       }
 
       const { executeQueuedComfyTask } = await import("@/lib/tasks/comfy-runner");
+      console.info("[comfy-debug] processor:execute-comfy-step", {
+        taskGroupId: task.id,
+        groupTaskId: groupTask.id,
+        kind: groupTask.kind,
+      });
       await executeQueuedComfyTask(task.id, groupTask.kind);
       break;
     }

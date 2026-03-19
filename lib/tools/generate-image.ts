@@ -273,6 +273,13 @@ export const executeGenerateImage = async (
   } = input;
 
   try {
+    console.info("[comfy-debug] generate_image:received", {
+      workflowName,
+      imageRefsCount: imageRefs.length,
+      inputImageCount: inputImage.length,
+      promptLength: prompt.length,
+    });
+
     const validatedLoras = await validateRequestedLoras(loras);
     if (!validatedLoras.ok) {
       return {
@@ -297,6 +304,12 @@ export const executeGenerateImage = async (
       };
     }
 
+    console.info("[comfy-debug] generate_image:enqueue-task", {
+      workflowName,
+      resolvedInputImageCount: resolvedInputImage.length,
+      lorasCount: validatedLoras.resolved.length,
+    });
+
     const task = enqueueComfyTask({
       ...getActiveConversationSourceContext(),
       workflowName,
@@ -313,6 +326,7 @@ export const executeGenerateImage = async (
       loras: validatedLoras.resolved,
     });
     ensureComfyQueueListeners();
+    console.info("[comfy-debug] generate_image:enqueued", { taskId: task.id, workflowName });
 
     return {
       ok: true,

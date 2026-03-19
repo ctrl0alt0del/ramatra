@@ -376,7 +376,11 @@ const ensureSchema = (db: Database.Database) => {
     name: string;
   }>;
 
-  if (!messageColumns.some((column) => column.name === "parent_message_id")) {
+  const didAddParentMessageIdColumn = !messageColumns.some(
+    (column) => column.name === "parent_message_id",
+  );
+
+  if (didAddParentMessageIdColumn) {
     db.exec(`
       ALTER TABLE messages
       ADD COLUMN parent_message_id TEXT
@@ -411,30 +415,38 @@ const ensureSchema = (db: Database.Database) => {
     .prepare(`SELECT id FROM threads`)
     .all() as Array<{ id: string }>;
 
-  const backfillBranchShape = db.transaction(() => {
-    for (const thread of linearBackfillThreads) {
-      const rows = db
-        .prepare(
-          `
-            SELECT id, parent_message_id
-            FROM messages
-            WHERE thread_id = ?
-            ORDER BY position ASC
-          `,
-        )
-        .all(thread.id) as Array<{ id: string; parent_message_id: string | null }>;
+  if (didAddParentMessageIdColumn) {
+    const backfillBranchShape = db.transaction(() => {
+      for (const thread of linearBackfillThreads) {
+        const rows = db
+          .prepare(
+            `
+              SELECT id, parent_message_id
+              FROM messages
+              WHERE thread_id = ?
+              ORDER BY position ASC
+            `,
+          )
+          .all(thread.id) as Array<{ id: string; parent_message_id: string | null }>;
 
-      let previousId: string | null = null;
-      for (const row of rows) {
-        if (row.parent_message_id === null) {
-          db.prepare(`UPDATE messages SET parent_message_id = ? WHERE id = ?`).run(
-            previousId,
-            row.id,
-          );
+        let previousId: string | null = null;
+        for (const row of rows) {
+          if (row.parent_message_id === null) {
+            db.prepare(`UPDATE messages SET parent_message_id = ? WHERE id = ?`).run(
+              previousId,
+              row.id,
+            );
+          }
+          previousId = row.id;
         }
-        previousId = row.id;
       }
+    });
 
+    backfillBranchShape();
+  }
+
+  const backfillActiveLeaf = db.transaction(() => {
+    for (const thread of linearBackfillThreads) {
       const latestMessage = db
         .prepare(
           `
@@ -459,7 +471,7 @@ const ensureSchema = (db: Database.Database) => {
     }
   });
 
-  backfillBranchShape();
+  backfillActiveLeaf();
 
   const utilTaskColumns = db.prepare(`PRAGMA table_info(util_task_settings)`).all() as Array<{
     name: string;

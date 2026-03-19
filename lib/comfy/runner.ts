@@ -379,6 +379,11 @@ export async function runWorkflow({
 
   const removeExecutionError = client.on("execution_error", (event) => {
     if (event.prompt_id !== job.task_id) return;
+    console.error("[comfy-debug] execution_error", {
+      jobId: job.task_id,
+      workflowName,
+      event,
+    });
     markGenerationFailed(job.task_id!, event.exception_message);
     updateComfyTaskForJob(job.task_id!, {
       status: ComfyJobStatus.Failed,
@@ -392,6 +397,11 @@ export async function runWorkflow({
     "execution_interrupted",
     (event) => {
       if (event.prompt_id !== job.task_id) return;
+      console.error("[comfy-debug] execution_interrupted", {
+        jobId: job.task_id,
+        workflowName,
+        event,
+      });
       markGenerationFailed(job.task_id!, "Generation was interrupted");
       updateComfyTaskForJob(job.task_id!, {
         status: ComfyJobStatus.Failed,

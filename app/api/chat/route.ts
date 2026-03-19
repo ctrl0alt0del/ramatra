@@ -217,6 +217,16 @@ export async function POST(req: Request) {
     fullThread,
     selectedEditingMessageId,
   );
+  const hasExplicitParentSelection = parsed.data.parentMessageId !== undefined;
+
+  const parentEqualsEditingMessage =
+    selectedParentMessageIdIfExists !== null &&
+    selectedEditingMessageIdIfExists !== null &&
+    selectedParentMessageIdIfExists === selectedEditingMessageIdIfExists;
+
+  const normalizedSelectedParentMessageId = parentEqualsEditingMessage
+    ? null
+    : selectedParentMessageIdIfExists;
 
   const inferredParentMessageId =
     fullThread && inputMessages.length > 1
@@ -232,11 +242,13 @@ export async function POST(req: Request) {
         )?.parentMessageId ?? null)
       : null;
 
-  const resolvedParentMessageId =
-    selectedParentMessageIdIfExists ??
-    inferredParentFromEditingMessageId ??
-    inferredParentMessageId ??
-    null;
+  const hasExplicitEditingTarget = selectedEditingMessageId !== null;
+
+  const resolvedParentMessageId = hasExplicitEditingTarget
+    ? (hasExplicitParentSelection
+        ? normalizedSelectedParentMessageId
+        : inferredParentFromEditingMessageId)
+    : (normalizedSelectedParentMessageId ?? inferredParentMessageId ?? null);
 
   const selectedParentMessage =
     existingThread && resolvedParentMessageId
@@ -267,8 +279,11 @@ export async function POST(req: Request) {
     serializeMessageContent(activeLeafParentUser.content) ===
       latestUserMessageSerialized;
 
+  const isExplicitEditRequest =
+    hasExplicitEditingTarget && latestInputMessage?.role === "user";
   const isRegenerateRequest =
     Boolean(existingThread) &&
+    !isExplicitEditRequest &&
     (latestInputMessage?.role !== "user" ||
       isReplayOfSelectedParentUser ||
       isReplayOfActiveLeafUser);
@@ -280,23 +295,9 @@ export async function POST(req: Request) {
       .find((message) => message.role === "user")?.id ?? null;
 
   if (existingThread) {
-    const lastMessage = existingThread.messages.at(-1);
-    const parentDiffersFromActiveLeaf =
-      resolvedParentMessageId !== null &&
-      resolvedParentMessageId !== existingThread.activeLeafMessageId;
-
-    const shouldAppendUserMessage =
-      latestInputMessage?.role === "user" &&
-      !isReplayOfSelectedParentUser &&
-      !isReplayOfActiveLeafUser &&
-      (parentDiffersFromActiveLeaf ||
-        !lastMessage ||
-        lastMessage.role !== "user" ||
-        serializeMessageContent(lastMessage.content) !== latestUserMessageSerialized);
-
-    if (shouldAppendUserMessage) {
+    if (isExplicitEditRequest) {
       const updatedThreadAfterAppend = updateThread(existingThread.id, {
-        appendParentMessageId: resolvedParentMessageId,
+        appendParentMessageId: resolvedParentMessageId ?? null,
         appendMessages: [
           {
             role: "user",
@@ -307,17 +308,46 @@ export async function POST(req: Request) {
       });
       persistedUserMessageId =
         updatedThreadAfterAppend?.activeLeafMessageId ?? persistedUserMessageId;
-    } else if (parentDiffersFromActiveLeaf) {
-      const updatedThreadAfterLeafSwitch = updateThread(existingThread.id, {
-        activeLeafMessageId: resolvedParentMessageId,
-      });
-      if (updatedThreadAfterLeafSwitch?.activeLeafMessageId) {
-        const activeLeaf = getThreadMessageById(
-          existingThread.id,
-          updatedThreadAfterLeafSwitch.activeLeafMessageId,
-        );
-        if (activeLeaf?.role === "user") {
-          persistedUserMessageId = activeLeaf.id ?? persistedUserMessageId;
+    } else {
+      const lastMessage = existingThread.messages.at(-1);
+      const parentDiffersFromActiveLeaf =
+        resolvedParentMessageId !== null &&
+        resolvedParentMessageId !== existingThread.activeLeafMessageId;
+
+      const shouldAppendUserMessage =
+        latestInputMessage?.role === "user" &&
+        !isReplayOfSelectedParentUser &&
+        !isReplayOfActiveLeafUser &&
+        (parentDiffersFromActiveLeaf ||
+          !lastMessage ||
+          lastMessage.role !== "user" ||
+          serializeMessageContent(lastMessage.content) !== latestUserMessageSerialized);
+
+      if (shouldAppendUserMessage) {
+        const updatedThreadAfterAppend = updateThread(existingThread.id, {
+          appendParentMessageId: resolvedParentMessageId,
+          appendMessages: [
+            {
+              role: "user",
+              content: latestUserMessage.content,
+              messageUiId: latestUserMessage.messageUiId,
+            },
+          ],
+        });
+        persistedUserMessageId =
+          updatedThreadAfterAppend?.activeLeafMessageId ?? persistedUserMessageId;
+      } else if (parentDiffersFromActiveLeaf) {
+        const updatedThreadAfterLeafSwitch = updateThread(existingThread.id, {
+          activeLeafMessageId: resolvedParentMessageId,
+        });
+        if (updatedThreadAfterLeafSwitch?.activeLeafMessageId) {
+          const activeLeaf = getThreadMessageById(
+            existingThread.id,
+            updatedThreadAfterLeafSwitch.activeLeafMessageId,
+          );
+          if (activeLeaf?.role === "user") {
+            persistedUserMessageId = activeLeaf.id ?? persistedUserMessageId;
+          }
         }
       }
     }
@@ -363,6 +393,9 @@ export async function POST(req: Request) {
     { status: 202 },
   );
 }
+
+
+
 
 
 

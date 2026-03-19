@@ -57,9 +57,22 @@ export const executeQueuedComfyTask = async (
     status: "running",
   });
 
+  console.info("[comfy-debug] image.generate:start", {
+    taskGroupId: task.id,
+    workflowName: task.payload.workflowName,
+    width: task.payload.width,
+    height: task.payload.height,
+    steps: task.payload.steps,
+    cfg: task.payload.cfg,
+  });
+
   await switchToComfyGpuMode();
 
   try {
+    console.info("[comfy-debug] image.generate:calling-runWorkflow", {
+      taskGroupId: task.id,
+      workflowName: task.payload.workflowName,
+    });
     const result = await runWorkflow({
       client: await getClient(),
       workflowName: task.payload.workflowName as WorkflowName,
@@ -82,6 +95,12 @@ export const executeQueuedComfyTask = async (
       "jobId" in result && typeof result.jobId === "string"
         ? result.jobId
         : null;
+
+    console.info("[comfy-debug] image.generate:runWorkflow-result", {
+      taskGroupId: task.id,
+      status: result.status,
+      jobId,
+    });
     if (!jobId) {
       const errorMessage = "Image generation failed before queueing.";
       setGroupTaskStatusByKind({
@@ -111,6 +130,10 @@ export const executeQueuedComfyTask = async (
       jobId,
     });
     bindComfyJobToTask(task.id, jobId);
+    console.info("[comfy-debug] image.generate:session-bound", {
+      taskGroupId: task.id,
+      jobId,
+    });
     const progress =
       "progress" in result && result.progress
         ? result.progress
@@ -129,6 +152,10 @@ export const executeQueuedComfyTask = async (
       },
     });
   } catch (error) {
+    console.error("[comfy-debug] image.generate:failed", {
+      taskGroupId: task.id,
+      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? null } : String(error),
+    });
     const errorMessage =
       error instanceof Error ? error.message : "Failed to start Comfy task.";
     setGroupTaskStatusByKind({
