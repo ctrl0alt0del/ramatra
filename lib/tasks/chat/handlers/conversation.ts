@@ -61,6 +61,10 @@ export const persistConversationStreamResult = ({
     lastPromptMode: promptMode,
     contextWindowUsedTokens: usedContextTokens,
     contextWindowTotalTokens: requestedContextLength,
+    appendParentMessageId:
+      task.payload.appendParentMessageId !== undefined
+        ? task.payload.appendParentMessageId
+        : undefined,
     appendMessages,
     regenerateOfLastAssistant: task.payload.regenerateOfLastAssistant === true,
   });

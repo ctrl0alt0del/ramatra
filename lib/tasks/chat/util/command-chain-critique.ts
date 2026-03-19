@@ -92,6 +92,10 @@ export const continueCritiqueUtilCommandInGroup = ({
     threadId: task.payload.threadId ?? null,
     promptMode: "artist",
     moodId,
+    appendParentMessageId:
+      task.payload.parentMessageId !== undefined
+        ? task.payload.parentMessageId
+        : null,
     contextLength: requestedContextLength,
     userMessage: delegatedUserMessage,
     persistent: parsedCommand.command.persistent === true,

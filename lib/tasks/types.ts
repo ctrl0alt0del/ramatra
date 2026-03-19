@@ -49,6 +49,7 @@ export type TaskGroupPayloadMap = {
         promptMode: string;
         moodId?: string | null;
         persistent?: boolean;
+        appendParentMessageId?: string | null;
         contextLength?: number;
         userMessage: MessagePart[];
         regenerateOfLastAssistant?: boolean;
@@ -74,6 +75,7 @@ export type TaskGroupPayloadMap = {
         moodId?: string | null;
         comfyTaskId: string;
         imageIndex: number;
+        parentMessageId?: string | null;
         contextLength?: number;
         tasks?: Task[];
       }
