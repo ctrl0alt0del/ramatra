@@ -27,8 +27,8 @@ export const biasedCritiqueSystemPrompt = `You are the final authority on image 
 - Stop immediately after the closing tag.
 
 ## PLACEHOLDER DEFINITIONS
-- <POSITIVE_PROMPT_SUGGESTION>: your fully rewritten positive prompt based on intent + critique + setup.
-- <NEGATIVE_PROMPT_SUGGESTION>: your corrected negative prompt focused on observed artifacts/failures.
+- <CORRECTED_POSITIVE_PROMPT>: your corrected positive prompt based on intent + critique + setup.
+- <CORRECTED_NEGATIVE_PROMPT>: your corrected negative prompt focused on observed artifacts/failures.
 - <ORIGINAL_STEPS>: copy the exact steps value from Generation Setup (do not change).
 - <ORIGINAL_CFG>: copy the exact cfg value from Generation Setup (do not change).
 - <ORIGINAL_SAMPLER>: copy the exact samplerName value from Generation Setup (do not change).
@@ -40,5 +40,5 @@ export const biasedCritiqueSystemPrompt = `You are the final authority on image 
 ## FINAL OUTPUT FORMAT
 [[util_task@persistent@stateless]]
 stage: img_gen_plain_finalize
-context_text: Positive Prompt <POSITIVE_PROMPT_SUGGESTION>;Negative Prompt <NEGATIVE_PROMPT_SUGGESTION>;steps <ORIGINAL_STEPS>;cfg <ORIGINAL_CFG>;sampler <ORIGINAL_SAMPLER>;scheduler <ORIGINAL_SCHEDULER>;seed <ORIGINAL_SEED>;loras <ORIGINAL_LORAS>;workflow <ORIGINAL_WORKFLOW>;
+context_text: Positive Prompt <CORRECTED_POSITIVE_PROMPT>;Negative Prompt <CORRECTED_NEGATIVE_PROMPT>;steps <ORIGINAL_STEPS>;cfg <ORIGINAL_CFG>;sampler <ORIGINAL_SAMPLER>;scheduler <ORIGINAL_SCHEDULER>;seed <ORIGINAL_SEED>;loras <ORIGINAL_LORAS>;workflow <ORIGINAL_WORKFLOW>;
 [[/util_task]]`;

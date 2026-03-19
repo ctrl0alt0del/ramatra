@@ -391,11 +391,14 @@ const sliceMessagesUntil = (messages: readonly ThreadMessage[], parentId: string
   return index === -1 ? [...messages] : messages.slice(0, index + 1);
 };
 
-const withAssistantPlaceholder = (messages: readonly ThreadMessage[]) => {
+const withAssistantPlaceholder = (
+  messages: readonly ThreadMessage[],
+  placeholderId = createClientMessageId(),
+) => {
   return [
     ...messages,
     {
-      id: createClientMessageId(),
+      id: placeholderId,
       role: "assistant",
       content: [],
       createdAt: new Date(),
@@ -857,6 +860,13 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
       hasOptimisticUser &&
       hydratedMessages.length === 0;
 
+    // Cache hydrated reasoning first so repository rebuild can resolve it by DB ids.
+    persistTransientReasoningToCache(
+      remoteId,
+      hydratedMessages,
+      transientReasoningCacheRef.current,
+    );
+
     if (!shouldPreserveOptimisticState) {
       setMessages(hydratedMessages);
       setMessageRepository(
@@ -878,11 +888,6 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
     }
     localToDbMessageIdRef.current = nextMap;
 
-    persistTransientReasoningToCache(
-      remoteId,
-      hydratedMessages,
-      transientReasoningCacheRef.current,
-    );
   } finally {
     setIsLoading(false);
   }
@@ -907,10 +912,13 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
       requestAbortRef.current?.abort();
       const abortController = new AbortController();
       requestAbortRef.current = abortController;
+      const assistantPlaceholderId = createClientMessageId();
 
       hasPendingOptimisticRequestRef.current = true;
       setIsRunning(true);
-      applyLocalMessages(withAssistantPlaceholder(sourceMessages));
+      applyLocalMessages(
+        withAssistantPlaceholder(sourceMessages, assistantPlaceholderId),
+      );
 
       let eventSource: EventSource | null = null;
 
@@ -1072,6 +1080,13 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
           lastReasoning = nextReasoning;
           lastText = nextText;
           lastOwnerTaskGroupId = ownerTaskGroupId;
+
+          if (nextReasoning) {
+            transientReasoningCacheRef.current.set(
+              `${remoteThreadId}:${assistantPlaceholderId}`,
+              nextReasoning,
+            );
+          }
 
           const content: Array<{ type: "text"; text: string } | { type: "reasoning"; text: string }> = [];
           if (nextReasoning) {
@@ -1326,41 +1341,3 @@ export function usePersistedRuntime(promptMode: PromptMode, moodId: string | nul
     adapter,
   });
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
