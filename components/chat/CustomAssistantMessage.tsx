@@ -33,6 +33,22 @@ const ReasoningMarkdown = makeMarkdownText({
 function AssistantReasoningOutside() {
   const [open, setOpen] = useState(false);
   const reasoningText = useMessage((state) => {
+    const metadata =
+      state.metadata && typeof state.metadata === "object"
+        ? (state.metadata as Record<string, unknown>)
+        : {};
+    const custom =
+      metadata.custom && typeof metadata.custom === "object"
+        ? (metadata.custom as Record<string, unknown>)
+        : {};
+    const transientReasoning =
+      typeof custom.transientReasoning === "string"
+        ? custom.transientReasoning.trim()
+        : "";
+    if (transientReasoning) {
+      return transientReasoning;
+    }
+
     const content = state.content;
     if (!Array.isArray(content)) {
       return "";
@@ -159,3 +175,4 @@ export function CustomAssistantMessage() {
     </AssistantMessage.Root>
   );
 }
+

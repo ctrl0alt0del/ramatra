@@ -41,6 +41,22 @@ const assistantMetadataBase = {
   steps: [],
 };
 
+const createClientMessageId = () => {
+  if (typeof globalThis !== "undefined") {
+    const maybeCrypto = globalThis.crypto as Crypto | undefined;
+    if (maybeCrypto && typeof maybeCrypto.randomUUID === "function") {
+      try {
+        return maybeCrypto.randomUUID();
+      } catch {
+        // Some mobile browsers expose randomUUID but fail in insecure contexts.
+      }
+    }
+  }
+
+  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+
 const resolveThreadRemoteId = async (threadListItem: ThreadListItemRuntime) => {
   const { remoteId } = threadListItem.getState();
   if (remoteId) {
@@ -209,12 +225,45 @@ const storedMessageToThreadMessage = (
   } as unknown as ThreadMessage;
 };
 
-const toRepository = (thread: ThreadApiDetail): ThreadMessageRepository => {
+const toRepository = (
+  thread: ThreadApiDetail,
+  transientReasoningCache?: Map<string, string>,
+): ThreadMessageRepository => {
+  const runtimeIdByDbId = new Map<string, string>();
+  const threadId = thread.id;
+  for (const storedMessage of thread.messages) {
+    const runtimeId =
+      storedMessage.role === "user" && storedMessage.messageUiId
+        ? storedMessage.messageUiId
+        : storedMessage.id;
+    runtimeIdByDbId.set(storedMessage.id, runtimeId);
+  }
+
+  const fallbackHeadDbId = thread.messages.at(-1)?.id ?? null;
+  const headDbId = thread.activeLeafMessageId ?? fallbackHeadDbId;
+  const headId = headDbId ? (runtimeIdByDbId.get(headDbId) ?? null) : null;
+
   return {
-    headId: thread.activeLeafMessageId ?? thread.messages.at(-1)?.id ?? null,
+    headId,
     messages: thread.messages.map((message) => ({
-      message: storedMessageToThreadMessage(message),
-      parentId: message.parentMessageId ?? null,
+      message: (() => {
+        const runtimeMessage = storedMessageToThreadMessage(message);
+        if (!transientReasoningCache) {
+          return runtimeMessage;
+        }
+
+        for (const key of getReasoningCacheKeys(threadId, runtimeMessage)) {
+          const cached = transientReasoningCache.get(key);
+          if (cached && cached.trim().length > 0) {
+            return withTransientReasoning(runtimeMessage, cached.trim());
+          }
+        }
+
+        return runtimeMessage;
+      })(),
+      parentId: message.parentMessageId
+        ? (runtimeIdByDbId.get(message.parentMessageId) ?? null)
+        : null,
     })),
   };
 };
@@ -346,7 +395,7 @@ const withAssistantPlaceholder = (messages: readonly ThreadMessage[]) => {
   return [
     ...messages,
     {
-      id: crypto.randomUUID(),
+      id: createClientMessageId(),
       role: "assistant",
       content: [],
       createdAt: new Date(),
@@ -376,14 +425,42 @@ const setAssistantContent = (
     return [...messages];
   }
 
+  const reasoningText = content
+    .flatMap((part) => (part.type === "reasoning" ? [part.text] : []))
+    .join("\n\n")
+    .trim();
+  const textContent = content.flatMap((part) =>
+    part.type === "text" ? [{ type: "text" as const, text: part.text }] : [],
+  );
+  const metadata =
+    last.metadata && typeof last.metadata === "object"
+      ? (last.metadata as Record<string, unknown>)
+      : {};
+  const custom =
+    metadata.custom && typeof metadata.custom === "object"
+      ? (metadata.custom as Record<string, unknown>)
+      : {};
+  const nextCustom = { ...custom };
+  if (reasoningText) {
+    nextCustom.transientReasoning = reasoningText;
+  } else {
+    delete nextCustom.transientReasoning;
+  }
+
   next[next.length - 1] = {
     ...last,
-    content,
+    content: textContent,
     status: isComplete ? { type: "complete", reason: "stop" } : { type: "running" },
+    metadata: {
+      ...assistantMetadataBase,
+      ...metadata,
+      custom: nextCustom,
+    },
   } as ThreadMessage;
 
   return next;
 };
+
 const reconcileLatestAssistantAfterReload = (
   previousMessages: readonly ThreadMessage[],
   reloadedMessages: readonly ThreadMessage[],
@@ -414,6 +491,14 @@ const reconcileLatestAssistantAfterReload = (
   const preservedContent =
     previousLast.content.length > 0 ? previousLast.content : reloadedLast.content;
 
+  const previousMetadata =
+    previousLast.metadata && typeof previousLast.metadata === "object"
+      ? (previousLast.metadata as Record<string, unknown>)
+      : {};
+  const previousCustom =
+    previousMetadata.custom && typeof previousMetadata.custom === "object"
+      ? (previousMetadata.custom as Record<string, unknown>)
+      : {};
   const reloadedMetadata =
     reloadedLast.metadata && typeof reloadedLast.metadata === "object"
       ? (reloadedLast.metadata as Record<string, unknown>)
@@ -433,8 +518,10 @@ const reconcileLatestAssistantAfterReload = (
       reason: "stop",
     },
     metadata: {
+      ...assistantMetadataBase,
       ...reloadedMetadata,
       custom: {
+        ...previousCustom,
         ...reloadedCustom,
         ...(reloadedDbId && looksLikeDbMessageId(reloadedDbId)
           ? { dbMessageId: reloadedDbId }
@@ -446,6 +533,104 @@ const reconcileLatestAssistantAfterReload = (
   return next;
 };
 
+const getTransientReasoningFromMessage = (message: ThreadMessage) => {
+  const metadata =
+    message.metadata && typeof message.metadata === "object"
+      ? (message.metadata as Record<string, unknown>)
+      : {};
+  const custom =
+    metadata.custom && typeof metadata.custom === "object"
+      ? (metadata.custom as Record<string, unknown>)
+      : {};
+
+  return typeof custom.transientReasoning === "string"
+    ? custom.transientReasoning.trim()
+    : "";
+};
+
+const withTransientReasoning = (message: ThreadMessage, reasoning: string) => {
+  const metadata =
+    message.metadata && typeof message.metadata === "object"
+      ? (message.metadata as Record<string, unknown>)
+      : {};
+  const custom =
+    metadata.custom && typeof metadata.custom === "object"
+      ? (metadata.custom as Record<string, unknown>)
+      : {};
+
+  return {
+    ...message,
+    metadata: {
+      ...assistantMetadataBase,
+      ...metadata,
+      custom: {
+        ...custom,
+        transientReasoning: reasoning,
+      },
+    },
+  } as ThreadMessage;
+};
+
+const getReasoningCacheKeys = (threadId: string, message: ThreadMessage) => {
+  const keys = new Set<string>();
+  if (typeof message.id === "string" && message.id.trim().length > 0) {
+    keys.add(`${threadId}:${message.id.trim()}`);
+  }
+
+  const dbId = getMessageDbIdCandidate(message);
+  if (dbId && dbId.trim().length > 0) {
+    keys.add(`${threadId}:${dbId.trim()}`);
+  }
+
+  return [...keys];
+};
+
+const persistTransientReasoningToCache = (
+  threadId: string,
+  messages: readonly ThreadMessage[],
+  cache: Map<string, string>,
+) => {
+  for (const message of messages) {
+    if (message.role !== "assistant") {
+      continue;
+    }
+
+    const reasoning = getTransientReasoningFromMessage(message);
+    if (!reasoning) {
+      continue;
+    }
+
+    for (const key of getReasoningCacheKeys(threadId, message)) {
+      cache.set(key, reasoning);
+    }
+  }
+};
+
+const applyTransientReasoningFromCache = (
+  threadId: string,
+  messages: readonly ThreadMessage[],
+  cache: Map<string, string>,
+) => {
+  return messages.map((message) => {
+    if (message.role !== "assistant") {
+      return message;
+    }
+
+    const currentReasoning = getTransientReasoningFromMessage(message);
+    if (currentReasoning) {
+      return message;
+    }
+
+    for (const key of getReasoningCacheKeys(threadId, message)) {
+      const cached = cache.get(key);
+      if (cached && cached.trim().length > 0) {
+        return withTransientReasoning(message, cached.trim());
+      }
+    }
+
+    return message;
+  });
+};
 const fileToDataUrl = async (file: File) => {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -568,10 +753,14 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
   const threadListItem = useThreadListItemRuntime();
 
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
+  const [messageRepository, setMessageRepository] = useState<ThreadMessageRepository>(
+    () => toLinearRepository([]),
+  );
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const localToDbMessageIdRef = useRef<Map<string, string>>(new Map());
+  const transientReasoningCacheRef = useRef<Map<string, string>>(new Map());
   const requestAbortRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
   const hasPendingOptimisticRequestRef = useRef(false);
@@ -583,11 +772,14 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
         | ThreadMessage[]
         | ((previous: ThreadMessage[]) => ThreadMessage[]),
     ) => {
-      setMessages((previous) =>
-        typeof next === "function"
-          ? (next as (previous: ThreadMessage[]) => ThreadMessage[])(previous)
-          : next,
-      );
+      setMessages((previous) => {
+        const resolved =
+          typeof next === "function"
+            ? (next as (previous: ThreadMessage[]) => ThreadMessage[])(previous)
+            : next;
+        setMessageRepository(toLinearRepository(resolved));
+        return resolved;
+      });
     },
     [],
   );
@@ -626,53 +818,75 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
   );
 
   const loadThread = useCallback(async () => {
-    const remoteId = threadListItem.getState().remoteId;
-    if (!remoteId) {
-      setMessages([]);
-      return;
+  const remoteId = threadListItem.getState().remoteId;
+  if (!remoteId) {
+    setMessages([]);
+    setMessageRepository(toLinearRepository([]));
+    transientReasoningCacheRef.current.clear();
+    return;
+  }
+
+  persistTransientReasoningToCache(
+    remoteId,
+    messagesRef.current,
+    transientReasoningCacheRef.current,
+  );
+
+  setIsLoading(true);
+  try {
+    const response = await fetch(`/api/threads/${remoteId}`, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("Failed to load thread history");
     }
 
-    setIsLoading(true);
-    try {
-      const response = await fetch(`/api/threads/${remoteId}`, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error("Failed to load thread history");
-      }
+    const data = (await response.json()) as { thread: ThreadApiDetail };
+    const nextMessages = toActivePathMessages(data.thread);
+    const reconciledMessages = reconcileLatestAssistantAfterReload(
+      messagesRef.current,
+      nextMessages,
+      localToDbMessageIdRef.current,
+    );
+    const hydratedMessages = applyTransientReasoningFromCache(
+      remoteId,
+      reconciledMessages,
+      transientReasoningCacheRef.current,
+    );
+    const hasOptimisticUser = messagesRef.current.some((message) => message.role === "user");
+    const shouldPreserveOptimisticState =
+      hasPendingOptimisticRequestRef.current &&
+      hasOptimisticUser &&
+      hydratedMessages.length === 0;
 
-      const data = (await response.json()) as { thread: ThreadApiDetail };
-      const nextMessages = toActivePathMessages(data.thread);
-      const reconciledMessages = reconcileLatestAssistantAfterReload(
-        messagesRef.current,
-        nextMessages,
-        localToDbMessageIdRef.current,
+    if (!shouldPreserveOptimisticState) {
+      setMessages(hydratedMessages);
+      setMessageRepository(
+        toRepository(data.thread, transientReasoningCacheRef.current),
       );
-      const hasOptimisticUser = messagesRef.current.some((message) => message.role === "user");
-      const shouldPreserveOptimisticState =
-        hasPendingOptimisticRequestRef.current &&
-        hasOptimisticUser &&
-        reconciledMessages.length === 0;
-
-      if (!shouldPreserveOptimisticState) {
-        applyLocalMessages(reconciledMessages);
-      }
-
-      const nextMap = new Map<string, string>();
-      for (const message of reconciledMessages) {
-        const idCandidate = getMessageDbIdCandidate(message);
-        if (
-          typeof message.id === "string" &&
-          message.id.trim().length > 0 &&
-          idCandidate &&
-          looksLikeDbMessageId(idCandidate)
-        ) {
-          nextMap.set(message.id, idCandidate);
-        }
-      }
-      localToDbMessageIdRef.current = nextMap;
-    } finally {
-      setIsLoading(false);
     }
-  }, [applyLocalMessages, threadListItem]);
+
+    const nextMap = new Map<string, string>();
+    for (const message of hydratedMessages) {
+      const idCandidate = getMessageDbIdCandidate(message);
+      if (
+        typeof message.id === "string" &&
+        message.id.trim().length > 0 &&
+        idCandidate &&
+        looksLikeDbMessageId(idCandidate)
+      ) {
+        nextMap.set(message.id, idCandidate);
+      }
+    }
+    localToDbMessageIdRef.current = nextMap;
+
+    persistTransientReasoningToCache(
+      remoteId,
+      hydratedMessages,
+      transientReasoningCacheRef.current,
+    );
+  } finally {
+    setIsLoading(false);
+  }
+}, [threadListItem]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -826,6 +1040,9 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
 
           const rawText = payload.text ?? "";
           const rawReasoning = payload.reasoning ?? "";
+          const resolvedRawText = rawText.length > 0 ? rawText : lastText;
+          const resolvedRawReasoning =
+            rawReasoning.length > 0 ? rawReasoning : lastReasoning;
 
           const mergePrefixed = (prefix: string, value: string) => {
             if (!prefix) {
@@ -836,11 +1053,13 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
           };
 
           const nextText =
-            ownerChanged && !rawText.startsWith(lastText) ? mergePrefixed(lastText, rawText) : rawText;
+            ownerChanged && !resolvedRawText.startsWith(lastText)
+              ? mergePrefixed(lastText, resolvedRawText)
+              : resolvedRawText;
           const nextReasoning =
-            ownerChanged && !rawReasoning.startsWith(lastReasoning)
-              ? mergePrefixed(lastReasoning, rawReasoning)
-              : rawReasoning;
+            ownerChanged && !resolvedRawReasoning.startsWith(lastReasoning)
+              ? mergePrefixed(lastReasoning, resolvedRawReasoning)
+              : resolvedRawReasoning;
 
           if (
             nextReasoning === lastReasoning &&
@@ -904,6 +1123,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
       isRunning,
       isLoading,
       messages,
+      messageRepository,
       setMessages: (nextMessages) => {
         applyLocalMessages([...nextMessages]);
       },
@@ -912,7 +1132,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
       },
       onNew: async (message) => {
         const nextUserMessage = {
-          id: crypto.randomUUID(),
+          id: createClientMessageId(),
           role: "user",
           content: toUserTextParts(message.content),
           attachments: message.attachments,
@@ -938,7 +1158,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
       onEdit: async (message) => {
         const base = sliceMessagesUntil(messages, message.parentId ?? null);
         const editedMessage = {
-          id: crypto.randomUUID(),
+          id: createClientMessageId(),
           role: "user",
           content: toUserTextParts(message.content),
           attachments: message.attachments,
@@ -1004,7 +1224,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
         attachments: attachmentAdapter,
       },
     }),
-    [applyLocalMessages, attachmentAdapter, isLoading, isRunning, messages, queueAndStream],
+    [applyLocalMessages, attachmentAdapter, isLoading, isRunning, messageRepository, messages, queueAndStream],
   );
 
   return useExternalStoreRuntime(adapter);
@@ -1106,6 +1326,26 @@ export function usePersistedRuntime(promptMode: PromptMode, moodId: string | nul
     adapter,
   });
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

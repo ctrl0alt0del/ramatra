@@ -5,6 +5,7 @@ import {
   serializeMessageContent,
   type MessagePart,
 } from "@/lib/chat/message-content";
+import { resolveConversationParentMessageId } from "@/lib/chat/branch-resolution";
 import {
   createThread,
   getThread,
@@ -69,84 +70,6 @@ const toChatMessages = (messages: Array<z.infer<typeof messageSchema>>) => {
     );
 };
 
-const findParentByPayloadChain = (
-  fullThreadMessages: Array<{
-    id?: string;
-    messageUiId?: string | null;
-    role: "system" | "user" | "assistant";
-    content: MessagePart[];
-  }>,
-  payloadMessages: Array<{
-    role: "system" | "user" | "assistant";
-    content: MessagePart[];
-    messageUiId?: string | null;
-  }>,
-) => {
-  if (payloadMessages.length < 2) {
-    return null;
-  }
-
-  const parentCandidate = payloadMessages[payloadMessages.length - 2];
-  if (!parentCandidate) {
-    return null;
-  }
-
-  const serializedCandidate = serializeMessageContent(parentCandidate.content);
-
-  for (let index = fullThreadMessages.length - 1; index >= 0; index -= 1) {
-    const message = fullThreadMessages[index];
-    if (!message?.id) {
-      continue;
-    }
-
-    if (message.role !== parentCandidate.role) {
-      continue;
-    }
-
-    if (
-      parentCandidate.messageUiId &&
-      message.messageUiId === parentCandidate.messageUiId
-    ) {
-      return message.id;
-    }
-
-    if (serializeMessageContent(message.content) === serializedCandidate) {
-      return message.id;
-    }
-  }
-
-  return null;
-};
-
-
-const resolveMessageIdFromThread = (
-  fullThread:
-    | {
-        messages: Array<{ id?: string; messageUiId?: string | null }>;
-      }
-    | null,
-  candidateIdOrUiId: string | null,
-) => {
-  if (!fullThread || !candidateIdOrUiId) {
-    return null;
-  }
-
-  const needle = candidateIdOrUiId.trim();
-  if (!needle) {
-    return null;
-  }
-
-  const byId = fullThread.messages.find((message) => message.id === needle);
-  if (byId?.id) {
-    return byId.id;
-  }
-
-  const byUiId = fullThread.messages.find(
-    (message) => message.messageUiId === needle,
-  );
-
-  return byUiId?.id ?? null;
-};
 
 export async function POST(req: Request) {
   const json = await req.json();
@@ -209,46 +132,15 @@ export async function POST(req: Request) {
     latestUserMessage.content,
   );
 
-  const selectedParentMessageIdIfExists = resolveMessageIdFromThread(
-    fullThread,
-    selectedParentMessageId,
-  );
-  const selectedEditingMessageIdIfExists = resolveMessageIdFromThread(
-    fullThread,
-    selectedEditingMessageId,
-  );
   const hasExplicitParentSelection = parsed.data.parentMessageId !== undefined;
-
-  const parentEqualsEditingMessage =
-    selectedParentMessageIdIfExists !== null &&
-    selectedEditingMessageIdIfExists !== null &&
-    selectedParentMessageIdIfExists === selectedEditingMessageIdIfExists;
-
-  const normalizedSelectedParentMessageId = parentEqualsEditingMessage
-    ? null
-    : selectedParentMessageIdIfExists;
-
-  const inferredParentMessageId =
-    fullThread && inputMessages.length > 1
-      ? findParentByPayloadChain(fullThread.messages, inputMessages)
-      : null;
-
-  const inferredParentFromEditingMessageId =
-    fullThread && selectedEditingMessageIdIfExists
-      ? (fullThread.messages.find(
-          (message) =>
-            message.id === selectedEditingMessageIdIfExists &&
-            message.role === "user",
-        )?.parentMessageId ?? null)
-      : null;
-
+  const resolvedParentMessageId = resolveConversationParentMessageId({
+    fullThread,
+    inputMessages,
+    selectedParentMessageId,
+    selectedEditingMessageId,
+    hasExplicitParentSelection,
+  });
   const hasExplicitEditingTarget = selectedEditingMessageId !== null;
-
-  const resolvedParentMessageId = hasExplicitEditingTarget
-    ? (hasExplicitParentSelection
-        ? normalizedSelectedParentMessageId
-        : inferredParentFromEditingMessageId)
-    : (normalizedSelectedParentMessageId ?? inferredParentMessageId ?? null);
 
   const selectedParentMessage =
     existingThread && resolvedParentMessageId
