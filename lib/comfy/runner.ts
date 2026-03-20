@@ -169,7 +169,13 @@ const extractImagesFromPromptResult = async (result: Awaited<ReturnType<Client["
 
 const finalizeComfyTaskCycle = async () => {
   const snapshot = getSchedulerState();
-  const hasQueuedChatTasks = snapshot.queues.chat.some((task) => task.status === "queued");
+  const hasQueuedChatTasks = snapshot.queues.chat.some(
+    (task) =>
+      task.type === "chat" &&
+      task.status === "queued" &&
+      task.payload.kind !== "generate_title" &&
+      task.payload.kind !== "update_intent",
+  );
   const hasQueuedComfyTasks = snapshot.queues.comfy.some((task) => task.status === "queued");
 
   if (hasQueuedChatTasks || !hasQueuedComfyTasks) {

@@ -40,6 +40,10 @@ const emitSchedulerSnapshot = () => {
   return snapshot;
 };
 
+const isBackgroundChatTaskKind = (kind: TaskGroupPayloadMap["chat"]["kind"]) => {
+  return kind === "generate_title" || kind === "update_intent";
+};
+
 const withDefaultTasks = <TType extends keyof TaskGroupPayloadMap>(
   type: TType,
   payload: TaskGroupPayloadMap[TType],
@@ -349,7 +353,7 @@ export const getNextSchedulableTask = () => {
     (task) => task.status === "queued",
   );
   const foregroundChatQueue = chatQueue.filter(
-    (task) => task.payload.kind !== "generate_title",
+    (task) => !isBackgroundChatTaskKind(task.payload.kind),
   );
   if (foregroundChatQueue.length > 0) {
     return foregroundChatQueue[0];
@@ -362,10 +366,10 @@ export const getNextSchedulableTask = () => {
     return comfyQueue[0];
   }
 
-  const backgroundTitleQueue = chatQueue.filter(
-    (task) => task.payload.kind === "generate_title",
+  const backgroundChatQueue = chatQueue.filter(
+    (task) => isBackgroundChatTaskKind(task.payload.kind),
   );
-  return backgroundTitleQueue[0] ?? null;
+  return backgroundChatQueue[0] ?? null;
 };
 
 export const markTaskStarted = (taskId: string) => {
@@ -526,9 +530,15 @@ export const hasPendingTitleGenerationTask = (threadId: string) => {
 
 export const canRunComfyQueue = () => {
   const snapshot = getSchedulerSnapshot();
+  const hasQueuedForegroundChatTasks = snapshot.queues.chat.some(
+    (task) =>
+      task.type === "chat" &&
+      task.status === "queued" &&
+      !isBackgroundChatTaskKind(task.payload.kind),
+  );
   return (
     snapshot.activeTaskId === null &&
-    snapshot.queues.chat.every((task) => task.status !== "queued")
+    !hasQueuedForegroundChatTasks
   );
 };
 

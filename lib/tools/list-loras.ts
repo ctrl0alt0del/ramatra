@@ -23,12 +23,13 @@ export const registerListLorasMcpTool = (server: McpServer) => {
     async (input) => {
       try {
         const result = await listAvailableLoras(input);
+        const loraNames = result.items.map((item) => item.name);
 
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(loraNames),
             },
           ],
         };
