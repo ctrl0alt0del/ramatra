@@ -6,6 +6,7 @@ export type ChatStreamCommand = {
   nonce?: string;
   persistent?: boolean;
   stateless?: boolean;
+  visualonly?: boolean;
 };
 
 export type ParsedChatStreamCommand = {

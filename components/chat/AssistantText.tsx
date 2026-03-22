@@ -60,6 +60,7 @@ export function AssistantText() {
                     jobId={marker.jobId ?? null}
                     initialStatus={marker.status}
                     threadId={threadId}
+                    markerParams={marker.params ?? null}
                   />
                 ) : null}
                 {chunk.markerCountAfter !== null ? (
@@ -88,6 +89,7 @@ export function AssistantText() {
                     jobId={marker.jobId ?? null}
                     initialStatus={marker.status}
                     threadId={threadId}
+                    markerParams={marker.params ?? null}
                   />
                 ) : null}
                 {!cleanText && !marker ? (
@@ -99,5 +101,10 @@ export function AssistantText() {
     </>
   );
 }
+
+
+
+
+
 
 

@@ -6,6 +6,7 @@ export type ComfyJobMarker = {
   jobId?: string | null;
   status: "queued" | "running";
   workflowName: string;
+  params?: Record<string, unknown> | null;
 };
 
 const unwrapNestedValue = (value: unknown): unknown => {
@@ -69,6 +70,10 @@ const normalizeMarker = (marker: Record<string, unknown>): ComfyJobMarker | null
   const status = marker.status;
   const workflowName =
     typeof marker.workflowName === "string" ? marker.workflowName.trim() : null;
+  const params =
+    marker.params && typeof marker.params === "object"
+      ? (marker.params as Record<string, unknown>)
+      : null;
 
   if (!taskId) {
     return null;
@@ -87,6 +92,7 @@ const normalizeMarker = (marker: Record<string, unknown>): ComfyJobMarker | null
     jobId,
     status,
     workflowName,
+    params,
   };
 };
 

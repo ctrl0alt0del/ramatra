@@ -28,6 +28,7 @@ export const validateAndLogConversationUtilCommand = ({
     source: parsedCommand.source,
     persistent: parsedCommand.command.persistent === true,
     stateless: parsedCommand.command.stateless === true,
+    visualonly: parsedCommand.command.visualonly === true,
     hasContextText:
       typeof parsedCommand.command.context_text === "string" &&
       parsedCommand.command.context_text.trim().length > 0,

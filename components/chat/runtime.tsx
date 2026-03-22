@@ -16,6 +16,10 @@ import { createAssistantStream } from "assistant-stream";
 import { parseCritiqueRequestMarker } from "@/lib/chat/critique-marker";
 import type { MessagePart } from "@/lib/chat/message-content";
 import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
+import {
+  getMessageReasoning,
+  setMessageReasoning,
+} from "@/lib/state/reasoning-stream-repository";
 
 import type { ThreadApiDetail, ThreadApiSummary } from "./types";
 
@@ -634,6 +638,28 @@ const applyTransientReasoningFromCache = (
     return message;
   });
 };
+const syncReasoningRepositoryFromMessages = (messages: readonly ThreadMessage[]) => {
+  for (const message of messages) {
+    if (message.role !== "assistant") {
+      continue;
+    }
+
+    const reasoning = getTransientReasoningFromMessage(message);
+    if (!reasoning) {
+      continue;
+    }
+
+    const dbMessageId = getMessageDbIdCandidate(message);
+    setMessageReasoning(
+      {
+        messageId: message.id,
+        dbMessageId,
+      },
+      reasoning,
+    );
+  }
+};
+
 const fileToDataUrl = async (file: File) => {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -789,6 +815,19 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
 
   const applyDbMessageIdToLocalModel = useCallback(
     (localMessageId: string, dbMessageId: string) => {
+      const cachedReasoning = getMessageReasoning({
+        messageId: localMessageId,
+      });
+      if (cachedReasoning) {
+        setMessageReasoning(
+          {
+            messageId: localMessageId,
+            dbMessageId,
+          },
+          cachedReasoning,
+        );
+      }
+
       applyLocalMessages((previous) =>
         previous.map((message) => {
           if (message.id !== localMessageId) {
@@ -866,6 +905,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
       hydratedMessages,
       transientReasoningCacheRef.current,
     );
+    syncReasoningRepositoryFromMessages(hydratedMessages);
 
     if (!shouldPreserveOptimisticState) {
       setMessages(hydratedMessages);
@@ -1084,6 +1124,13 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
           if (nextReasoning) {
             transientReasoningCacheRef.current.set(
               `${remoteThreadId}:${assistantPlaceholderId}`,
+              nextReasoning,
+            );
+            setMessageReasoning(
+              {
+                messageId: assistantPlaceholderId,
+                dbMessageId: localToDbMessageIdRef.current.get(assistantPlaceholderId) ?? null,
+              },
               nextReasoning,
             );
           }
@@ -1341,3 +1388,17 @@ export function usePersistedRuntime(promptMode: PromptMode, moodId: string | nul
     adapter,
   });
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+

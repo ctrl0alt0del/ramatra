@@ -238,6 +238,7 @@ External wrappers:
 
 - `mcp/external/web-search.ts`
 - `mcp/external/civitai.ts`
+- `mcp/memory/server.ts`
 
 ## Data Model
 
@@ -291,6 +292,11 @@ Optional:
 - `LM_STUDIO_KEEP_MODELS`
 - `LM_STUDIO_DEBUG_MODEL_ROUTING`
 - MCP wrapper envs for web search / Civitai
+- MCP wrapper envs for memory server:
+  - `MEMORY_MCP_ENABLED=true`
+  - `MEMORY_MCP_URL=http://127.0.0.1:9558/mcp`
+  - `MEMORY_MCP_PORT=9558`
+  - `MEMORY_FILE_PATH=.data/memory/memory.jsonl`
 
 ## Setup and Run
 
@@ -318,6 +324,7 @@ Individual MCP:
 pnpm run mcp:comfy
 pnpm run mcp:web-search
 pnpm run mcp:civitai
+pnpm run mcp:memory
 ```
 
 ## API Surface
@@ -381,6 +388,9 @@ If image progress is missing:
   "mcp:comfy": "tsx mcp/comfy/index.ts",
   "mcp:web-search": "tsx mcp/external/web-search.ts",
   "mcp:civitai": "tsx mcp/external/civitai.ts",
-  "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run mcp:web-search\" \"pnpm run mcp:civitai\" \"pnpm run dev\""
+  "mcp:memory": "tsx mcp/memory/index.ts",
+  "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run mcp:web-search\" \"pnpm run mcp:civitai\" \"pnpm run mcp:memory\" \"pnpm run dev\""
 }
 ```
+
+

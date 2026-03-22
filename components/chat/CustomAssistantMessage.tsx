@@ -8,11 +8,15 @@ import {
   makeMarkdownText,
 } from "@assistant-ui/react-ui";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { parseContextCompactionDuringRequestMarker } from "@/lib/chat/context-compaction-marker";
+import {
+  getMessageReasoning,
+  subscribeToMessageReasoning,
+} from "@/lib/state/reasoning-stream-repository";
 
 import { AssistantText } from "./AssistantText";
 import { ContextCompactionInline } from "./ContextCompactionInline";
@@ -32,7 +36,15 @@ const ReasoningMarkdown = makeMarkdownText({
 
 function AssistantReasoningOutside() {
   const [open, setOpen] = useState(false);
-  const reasoningText = useMessage((state) => {
+  const [displayReasoning, setDisplayReasoning] = useState("");
+
+  const messageId = useMessage((state) =>
+    typeof state.id === "string" && state.id.trim().length > 0
+      ? state.id.trim()
+      : null,
+  );
+
+  const dbMessageId = useMessage((state) => {
     const metadata =
       state.metadata && typeof state.metadata === "object"
         ? (state.metadata as Record<string, unknown>)
@@ -41,6 +53,22 @@ function AssistantReasoningOutside() {
       metadata.custom && typeof metadata.custom === "object"
         ? (metadata.custom as Record<string, unknown>)
         : {};
+
+    return typeof custom.dbMessageId === "string" && custom.dbMessageId.trim().length > 0
+      ? custom.dbMessageId.trim()
+      : null;
+  });
+
+  const fallbackReasoning = useMessage((state) => {
+    const metadata =
+      state.metadata && typeof state.metadata === "object"
+        ? (state.metadata as Record<string, unknown>)
+        : {};
+    const custom =
+      metadata.custom && typeof metadata.custom === "object"
+        ? (metadata.custom as Record<string, unknown>)
+        : {};
+
     const transientReasoning =
       typeof custom.transientReasoning === "string"
         ? custom.transientReasoning.trim()
@@ -63,6 +91,41 @@ function AssistantReasoningOutside() {
       .join("\n\n")
       .trim();
   });
+
+  const cachedReasoning = getMessageReasoning({
+    messageId,
+    dbMessageId,
+  });
+
+  useEffect(() => {
+    if (!open) {
+      setDisplayReasoning("");
+      return;
+    }
+
+    const currentReasoning =
+      getMessageReasoning({
+        messageId,
+        dbMessageId,
+      }) || fallbackReasoning;
+    setDisplayReasoning(currentReasoning);
+
+    return subscribeToMessageReasoning(
+      {
+        messageId,
+        dbMessageId,
+      },
+      (reasoning) => {
+        setDisplayReasoning((previous) =>
+          previous === reasoning ? previous : reasoning,
+        );
+      },
+    );
+  }, [dbMessageId, fallbackReasoning, messageId, open]);
+
+  const reasoningText = open
+    ? displayReasoning
+    : cachedReasoning || fallbackReasoning;
 
   if (!reasoningText) {
     return null;
@@ -175,4 +238,3 @@ export function CustomAssistantMessage() {
     </AssistantMessage.Root>
   );
 }
-

@@ -62,7 +62,9 @@ export type TaskGroupPayloadMap = {
         utilUserMessageSeed?: MessagePart[];
         utilTaskName?: string;
         utilSystemPromptExt?: string;
-        utilMcpServers?: Array<"comfy" | "comfy_readonly" | "web_search" | "civitai">;
+        utilMcpServers?: Array<
+          "comfy" | "comfy_readonly" | "web_search" | "civitai" | "memory"
+        >;
         disableMcpTools?: boolean;
         utilCommandDepth?: number;
         utilEnqueueCount?: number;

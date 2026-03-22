@@ -7,10 +7,15 @@ import type {
 
 export const parseUtilPromptFlags = (prompt: string) => {
   const isStateless = /(?:^|\s)@stateless\b/i.test(prompt);
-  const normalizedPrompt = prompt.replace(/(?:^|\s)@stateless\b/gi, " ").trim();
+  const isVisualOnly = /(?:^|\s)@visualonly\b/i.test(prompt);
+  const normalizedPrompt = prompt
+    .replace(/(?:^|\s)@stateless\b/gi, " ")
+    .replace(/(?:^|\s)@visualonly\b/gi, " ")
+    .trim();
 
   return {
     isStateless,
+    isVisualOnly,
     prompt: normalizedPrompt,
   };
 };

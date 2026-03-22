@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { MessageSquareText } from "lucide-react";
+import { Info, MessageSquareText } from "lucide-react";
 import { useThread, useThreadRuntime } from "@assistant-ui/react";
 import { createCritiqueRequestMarker } from "@/lib/chat/critique-marker";
 
@@ -76,6 +76,46 @@ type RuntimeMessage = {
   >;
 };
 
+function GenerateParamsTooltip({
+  params,
+}: Readonly<{ params: Record<string, unknown> | null }>) {
+  const [open, setOpen] = useState(false);
+  if (!params) {
+    return null;
+  }
+
+  const json = JSON.stringify(params, null, 2);
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((previous) => !previous)}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))] text-[hsl(var(--aui-muted-foreground))] transition hover:text-[hsl(var(--aui-foreground))]"
+        aria-label="Show generate image parameters"
+        title="Show generate image parameters"
+      >
+        <Info className="h-3.5 w-3.5" />
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 top-9 z-20 w-[min(90vw,560px)] rounded-xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-background))] p-3 shadow-lg">
+          <p className="mb-2 text-xs font-medium text-[hsl(var(--aui-foreground))]">
+            `generate_image` parameters
+          </p>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[hsl(var(--aui-muted))] p-2 text-[11px] leading-5 text-[hsl(var(--aui-muted-foreground))]">
+            {json}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const mapThreadToRuntimeMessages = (thread: ThreadApiDetail): RuntimeMessage[] =>
   thread.messages.map((message) => ({
     role: message.role,
@@ -91,11 +131,13 @@ export function GeneratedImageCard({
   jobId: initialJobId,
   initialStatus,
   threadId,
+  markerParams,
 }: Readonly<{
   taskId: string | null | undefined;
   jobId: string | null | undefined;
   initialStatus: "queued" | "running";
   threadId: string | null;
+  markerParams: Record<string, unknown> | null;
 }>) {
   const taskId = typeof initialTaskId === "string" ? initialTaskId : "";
   const jobId = typeof initialJobId === "string" ? initialJobId : "";
@@ -512,9 +554,12 @@ export function GeneratedImageCard({
             </div>
             <div className="border-t border-[hsl(var(--aui-border))] p-4">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium">
-                  {hasResolvedInitialFetch ? "Generating image" : "Loading image"}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium">
+                    {hasResolvedInitialFetch ? "Generating image" : "Loading image"}
+                  </p>
+                  <GenerateParamsTooltip params={markerParams} />
+                </div>
                 <span className="rounded-full border border-[hsl(var(--aui-border))] px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-[hsl(var(--aui-muted-foreground))]">
                   {hasResolvedInitialFetch
                     ? result.progress?.percentage !== null &&
@@ -540,7 +585,10 @@ export function GeneratedImageCard({
       {hasValidTaskId && result.status === "completed" && (
         <div className="space-y-3 p-4">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">Generated image</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium">Generated image</p>
+              <GenerateParamsTooltip params={markerParams} />
+            </div>
             <span className="rounded-full border border-[hsl(var(--aui-border))] px-2 py-0.5 text-xs uppercase tracking-[0.18em] text-[hsl(var(--aui-muted-foreground))]">
               done
             </span>
@@ -616,6 +664,11 @@ export function GeneratedImageCard({
     </div>
   );
 }
+
+
+
+
+
 
 
 

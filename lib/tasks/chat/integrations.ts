@@ -4,7 +4,8 @@ export type IntegrationServerLabel =
   | "comfy"
   | "comfy_readonly"
   | "web_search"
-  | "civitai";
+  | "civitai"
+  | "memory";
 
 export type EphemeralMcpIntegration = {
   type: "ephemeral_mcp";
@@ -33,8 +34,25 @@ const getComfyReadOnlyMcpUrl = () => {
   return `http://127.0.0.1:${port}/mcp`;
 };
 
+const canUseMemoryForMode = (promptMode: PromptMode | string | null | undefined) => {
+  return promptMode === "writer" || promptMode === "roleplay";
+};
+
+const getMemoryMcpUrl = () => {
+  const explicitUrl = process.env.MEMORY_MCP_URL;
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  const port = process.env.MEMORY_MCP_PORT ?? "9558";
+  return `http://127.0.0.1:${port}/mcp`;
+};
+
 export const buildIntegrationsForServers = (
   servers: IntegrationServerLabel[],
+  options?: {
+    promptMode?: PromptMode | string | null;
+  },
 ): EphemeralMcpIntegration[] => {
   const integrations: EphemeralMcpIntegration[] = [];
 
@@ -82,14 +100,36 @@ export const buildIntegrationsForServers = (
     }
   }
 
+  if (
+    servers.includes("memory") &&
+    process.env.MEMORY_MCP_ENABLED === "true" &&
+    canUseMemoryForMode(options?.promptMode)
+  ) {
+    integrations.push({
+      type: "ephemeral_mcp",
+      server_label: "memory",
+      server_url: getMemoryMcpUrl(),
+    });
+  }
+
   return integrations;
 };
 
 export const buildIntegrations = (
   promptMode: PromptMode,
 ): EphemeralMcpIntegration[] => {
-  if (promptMode === "regular" || promptMode === "writer") {
-    return buildIntegrationsForServers(["web_search"]);
+  if (promptMode === "regular") {
+    return buildIntegrationsForServers(["web_search"], { promptMode });
+  }
+
+  if (promptMode === "writer") {
+    return buildIntegrationsForServers(["web_search", "memory"], {
+      promptMode,
+    });
+  }
+
+  if (promptMode === "roleplay") {
+    return buildIntegrationsForServers(["memory"], { promptMode });
   }
 
   if (promptMode === "artist") {

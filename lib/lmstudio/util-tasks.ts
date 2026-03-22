@@ -7,6 +7,7 @@ export const utilTaskMcpServerLabels = [
   "comfy_readonly",
   "web_search",
   "civitai",
+  "memory",
 ] as const;
 export type UtilTaskMcpServerLabel = (typeof utilTaskMcpServerLabels)[number];
 
@@ -246,5 +247,7 @@ export const replaceUtilTaskSettings = (
 
   return listUtilTaskSettings();
 };
+
+
 
 

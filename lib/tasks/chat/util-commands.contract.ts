@@ -7,7 +7,7 @@ import {
 const run = () => {
   {
     const parsed = parseChatStreamCommandFromOutputs({
-      text: `[[util_task@persistent@stateless]]
+      text: `[[util_task@persistent@stateless@visualonly]]
 stage: img_gen_plain_finalize
 context_text: Positive Prompt: X; Negative Prompt: Y
 [[/util_task]]`,
@@ -18,6 +18,7 @@ context_text: Positive Prompt: X; Negative Prompt: Y
     assert.equal(parsed.command?.stage, "img_gen_plain_finalize");
     assert.equal(parsed.command?.persistent, true);
     assert.equal(parsed.command?.stateless, true);
+    assert.equal(parsed.command?.visualonly, true);
     assert.equal(
       parsed.command?.context_text,
       "Positive Prompt: X; Negative Prompt: Y",
@@ -52,10 +53,12 @@ context_text: Improved visual brief is test
 
   {
     const result = parseUtilPromptFlags(
-      "You finalize image generation @stateless",
+      "You finalize image generation @stateless @visualonly",
     );
     assert.equal(result.isStateless, true);
+    assert.equal(result.isVisualOnly, true);
     assert.equal(result.prompt.includes("@stateless"), false);
+    assert.equal(result.prompt.includes("@visualonly"), false);
   }
 
   {
@@ -67,12 +70,14 @@ context_text: Improved visual brief is test
         stage: "img_gen_workflow",
         context_text: longContext,
         persistent: true,
+        visualonly: true,
       }),
       reasoning: "",
       allowReasoningFallback: false,
     });
     assert.equal(parsed.command?.stage, "img_gen_workflow");
     assert.equal(parsed.command?.persistent, true);
+    assert.equal(parsed.command?.visualonly, true);
     assert.equal(parsed.command?.context_text?.length, 1000);
   }
 };

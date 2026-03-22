@@ -339,6 +339,21 @@ export const executeGenerateImage = async (
         jobId: null,
         status: "queued",
         workflowName,
+        params: {
+          workflowName,
+          prompt,
+          negativePrompt,
+          imageRefs,
+          inputImage,
+          steps,
+          width,
+          height,
+          cfg,
+          seed,
+          samplerName,
+          scheduler,
+          loras,
+        },
       }),
     };
   } catch (error) {
@@ -412,4 +427,7 @@ export const registerGenerateImageMcpTool = (server: McpServer) => {
     },
   );
 };
+
+
+
 

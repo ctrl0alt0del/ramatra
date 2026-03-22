@@ -29,6 +29,9 @@ dependencies:
   '@modelcontextprotocol/sdk':
     specifier: ^1.27.1
     version: 1.27.1(zod@4.3.6)
+  '@modelcontextprotocol/server-memory':
+    specifier: ^2026.1.26
+    version: 2026.1.26(zod@4.3.6)
   '@radix-ui/react-dialog':
     specifier: ^1.1.15
     version: 1.1.15(@types/react-dom@19.2.3)(@types/react@19.2.14)(react-dom@19.2.3)(react@19.2.3)
@@ -1220,6 +1223,17 @@ packages:
       zod-to-json-schema: 3.25.1(zod@4.3.6)
     transitivePeerDependencies:
       - supports-color
+    dev: false
+
+  /@modelcontextprotocol/server-memory@2026.1.26(zod@4.3.6):
+    resolution: {integrity: sha512-7F0hbaEB4lVqkYhNWmrC5jJjEWPCofgXd7OIk3h97HyvJL6aTAhlUNYaH8lCDxAzlK9sr2pLCkZEYI+m4HSOiA==}
+    hasBin: true
+    dependencies:
+      '@modelcontextprotocol/sdk': 1.27.1(zod@4.3.6)
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - supports-color
+      - zod
     dev: false
 
   /@napi-rs/wasm-runtime@0.2.12:

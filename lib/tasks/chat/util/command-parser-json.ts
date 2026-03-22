@@ -96,6 +96,9 @@ export const parseJsonUtilCommand = (trimmed: string) => {
         ? record.context_text.trim()
         : undefined;
     const normalizedPersistent = record.persistent === true;
+    const normalizedStateless = record.stateless === true;
+    const normalizedVisualOnly =
+      record.visualonly === true || record.visual_only === true;
 
     const stage = record.stage.trim();
     if (!stage || stage.includes("<") || stage.includes(">")) {
@@ -109,6 +112,8 @@ export const parseJsonUtilCommand = (trimmed: string) => {
       ...(normalizedNonce ? { nonce: normalizedNonce } : {}),
       ...(normalizedContextText ? { context_text: normalizedContextText } : {}),
       ...(normalizedPersistent ? { persistent: true } : {}),
+      ...(normalizedStateless ? { stateless: true } : {}),
+      ...(normalizedVisualOnly ? { visualonly: true } : {}),
     };
 
     selectedCommand = command;

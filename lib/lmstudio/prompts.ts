@@ -1,4 +1,4 @@
-﻿import "server-only";
+import "server-only";
 
 import { getDb } from "@/lib/db";
 
@@ -51,6 +51,10 @@ Rules:
 - Never use image tools.
 - Never generate image prompts.
 - If the user asks for image generation, say this mode is for writing and tell them to switch to Artist mode.
+- Use memory tools to maintain long-running character continuity:
+  - Keep character motivations, goals, and thoughts about other characters up to date, including the user's character.
+  - Use update observation tools to record new or changed character state.
+  - If current context is insufficient, retrieve memory info before making character-driven decisions.
 - Do not mention internal tools or implementation details unless the user asks.
 - For non-writing questions, still answer well, but retain a thoughtful and articulate style.`;
 
@@ -83,7 +87,12 @@ Safety and scope:
 - Never use image tools.
 - Never generate image prompts.
 - If the user asks for image generation, say this mode is roleplay/text-only and tell them to switch to Artist mode.
+- Use memory tools to maintain roleplay continuity:
+  - Keep character motivations, goals, and thoughts about other characters up to date, including the user's character.
+  - Use update observation tools to record newly revealed or changed character state.
+  - If scene context is missing important continuity, retrieve memory info before responding.
 - Do not mention internal tools or implementation details unless the user asks.`;
+
 const artistPrompt = `You are an image-generation assistant.
 
 Primary purpose
@@ -128,6 +137,37 @@ type PromptSettingsRow = {
 const db = getDb();
 let promptSettingsSeeded = false;
 
+const memoryPromptMarker = "Memory continuity tools:";
+
+const appendMemoryGuidanceIfMissing = (prompt: string, mode: PromptMode) => {
+  if (mode !== "writer" && mode !== "roleplay") {
+    return prompt;
+  }
+
+  if (prompt.includes(memoryPromptMarker)) {
+    return prompt;
+  }
+
+  const addition =
+    mode === "writer"
+      ? [
+          "",
+          "Memory continuity tools:",
+          "- Use memory tools to keep character motivations, goals, and thoughts about other characters updated, including the user's character.",
+          "- Use update observation tools when this information changes.",
+          "- Retrieve memory information when current context is insufficient.",
+        ].join("\n")
+      : [
+          "",
+          "Memory continuity tools:",
+          "- Use memory tools to keep roleplay character motivations, goals, and thoughts about other characters updated, including the user's character.",
+          "- Use update observation tools when this information changes.",
+          "- Retrieve memory information when current scene context is insufficient.",
+        ].join("\n");
+
+  return `${prompt.trim()}\n${addition}`.trim();
+};
+
 const ensurePromptSettingsSeeded = () => {
   if (promptSettingsSeeded) {
     return;
@@ -144,6 +184,30 @@ const ensurePromptSettingsSeeded = () => {
 
   for (const mode of promptModes) {
     insert.run(mode, promptsByMode[mode], timestamp);
+  }
+
+  const selectPromptByMode = db.prepare(
+    `
+      SELECT prompt
+      FROM prompt_mode_settings
+      WHERE mode = ?
+    `,
+  );
+  const updatePromptByMode = db.prepare(
+    `
+      UPDATE prompt_mode_settings
+      SET prompt = ?, updated_at = ?
+      WHERE mode = ?
+    `,
+  );
+
+  for (const mode of ["writer", "roleplay"] as const) {
+    const row = selectPromptByMode.get(mode) as { prompt: string } | undefined;
+    const currentPrompt = row?.prompt ?? promptsByMode[mode];
+    const nextPrompt = appendMemoryGuidanceIfMissing(currentPrompt, mode);
+    if (nextPrompt !== currentPrompt) {
+      updatePromptByMode.run(nextPrompt, timestamp, mode);
+    }
   }
 
   promptSettingsSeeded = true;

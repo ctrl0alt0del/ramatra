@@ -21,6 +21,8 @@ export const parseBracketUtilCommand = (text: string) => {
     const isPersistent =
       tags.includes("persistent") || tags.includes("persistant");
     const isStateless = tags.includes("stateless");
+    const isVisualOnly =
+      tags.includes("visualonly") || tags.includes("visual_only");
     if (!full || !body) {
       continue;
     }
@@ -55,6 +57,7 @@ export const parseBracketUtilCommand = (text: string) => {
       ...(fields.nonce ? { nonce: fields.nonce } : {}),
       ...(isPersistent ? { persistent: true } : {}),
       ...(isStateless ? { stateless: true } : {}),
+      ...(isVisualOnly ? { visualonly: true } : {}),
     };
 
     const cleanText = trimmed.replace(full, "").trim();
@@ -101,6 +104,12 @@ export const parseBracketUtilCommand = (text: string) => {
         : {}),
       ...(options.stateless === "true" || options.stateless === "1"
         ? { stateless: true }
+        : {}),
+      ...(options.visualonly === "true" ||
+      options.visualonly === "1" ||
+      options.visual_only === "true" ||
+      options.visual_only === "1"
+        ? { visualonly: true }
         : {}),
     };
     const cleanText = trimmed.replace(full, "").trim();

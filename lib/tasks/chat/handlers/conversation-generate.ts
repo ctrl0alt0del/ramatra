@@ -47,7 +47,9 @@ export const executeConversationGenerateStage = async ({
       ? []
       : task.payload.kind === "conversation" &&
           Array.isArray(task.payload.utilMcpServers)
-        ? buildIntegrationsForServers(task.payload.utilMcpServers)
+        ? buildIntegrationsForServers(task.payload.utilMcpServers, {
+            promptMode: task.payload.promptMode,
+          })
         : undefined;
 
   if (

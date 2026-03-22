@@ -10,7 +10,8 @@
     "mcp:comfy": "tsx mcp/comfy/index.ts",
     "mcp:web-search": "tsx mcp/external/web-search.ts",
     "mcp:civitai": "tsx mcp/external/civitai.ts",
-    "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run mcp:web-search\" \"pnpm run mcp:civitai\" \"pnpm run dev\""
+    "mcp:memory": "tsx mcp/memory/index.ts",
+    "dev:all": "concurrently \"pnpm run mcp:comfy\" \"pnpm run mcp:web-search\" \"pnpm run mcp:civitai\" \"pnpm run mcp:memory\" \"pnpm run dev\""
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.41",
@@ -21,6 +22,7 @@
     "@babel/runtime": "^7.29.2",
     "@lmstudio/sdk": "^1.5.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/server-memory": "^2026.1.26",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-tabs": "^1.1.13",
@@ -57,3 +59,4 @@
     "typescript": "^5"
   }
 }
+

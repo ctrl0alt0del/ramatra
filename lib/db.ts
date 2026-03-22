@@ -7,6 +7,7 @@ const DB_PATH = path.join(DB_DIR, "comfy-bridge.sqlite");
 
 type DbGlobal = typeof globalThis & {
   __comfyBridgeDb?: Database.Database;
+  __comfyBridgeSchemaEnsured?: boolean;
 };
 
 const migrateLegacyStreamSignalText = (input: string) => {
@@ -93,6 +94,7 @@ const buildDefaultGroupTasks = (
 };
 
 const ensureSchema = (db: Database.Database) => {
+  db.pragma("busy_timeout = 5000");
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
 
@@ -275,7 +277,11 @@ const ensureSchema = (db: Database.Database) => {
     `);
   }
 
-  if (!columns.some((column) => column.name === "active_leaf_message_id")) {
+  const didAddActiveLeafMessageIdColumn = !columns.some(
+    (column) => column.name === "active_leaf_message_id",
+  );
+
+  if (didAddActiveLeafMessageIdColumn) {
     db.exec(`
       ALTER TABLE threads
       ADD COLUMN active_leaf_message_id TEXT
@@ -445,33 +451,50 @@ const ensureSchema = (db: Database.Database) => {
     backfillBranchShape();
   }
 
-  const backfillActiveLeaf = db.transaction(() => {
-    for (const thread of linearBackfillThreads) {
-      const latestMessage = db
+  const needsActiveLeafBackfill =
+    didAddActiveLeafMessageIdColumn ||
+    Boolean(
+      db
         .prepare(
           `
-            SELECT id
-            FROM messages
-            WHERE thread_id = ?
-            ORDER BY position DESC, created_at DESC
+            SELECT 1
+            FROM threads
+            WHERE active_leaf_message_id IS NULL
             LIMIT 1
           `,
         )
-        .get(thread.id) as { id: string } | undefined;
+        .get(),
+    );
 
-      if (latestMessage) {
-        db.prepare(
-          `
-            UPDATE threads
-            SET active_leaf_message_id = COALESCE(active_leaf_message_id, ?)
-            WHERE id = ?
-          `,
-        ).run(latestMessage.id, thread.id);
+  if (needsActiveLeafBackfill) {
+    const backfillActiveLeaf = db.transaction(() => {
+      for (const thread of linearBackfillThreads) {
+        const latestMessage = db
+          .prepare(
+            `
+              SELECT id
+              FROM messages
+              WHERE thread_id = ?
+              ORDER BY position DESC, created_at DESC
+              LIMIT 1
+            `,
+          )
+          .get(thread.id) as { id: string } | undefined;
+
+        if (latestMessage) {
+          db.prepare(
+            `
+              UPDATE threads
+              SET active_leaf_message_id = ?
+              WHERE id = ? AND active_leaf_message_id IS NULL
+            `,
+          ).run(latestMessage.id, thread.id);
+        }
       }
-    }
-  });
+    });
 
-  backfillActiveLeaf();
+    backfillActiveLeaf();
+  }
 
   const utilTaskColumns = db.prepare(`PRAGMA table_info(util_task_settings)`).all() as Array<{
     name: string;
@@ -629,7 +652,11 @@ export const getDb = () => {
     globalDb.__comfyBridgeDb = new Database(DB_PATH);
   }
 
-  ensureSchema(globalDb.__comfyBridgeDb);
+  if (!globalDb.__comfyBridgeSchemaEnsured) {
+    ensureSchema(globalDb.__comfyBridgeDb);
+    globalDb.__comfyBridgeSchemaEnsured = true;
+  }
+
   return globalDb.__comfyBridgeDb;
 };
 
