@@ -848,6 +848,7 @@ function usePersistedChatRuntime(
   const requestAbortRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
   const hasPendingOptimisticRequestRef = useRef(false);
+  const loadThreadRequestIdRef = useRef(0);
   const messagesRef = useRef<ThreadMessage[]>([]);
 
   const applyLocalMessages = useCallback(
@@ -916,6 +917,9 @@ function usePersistedChatRuntime(
 
   const loadThread = useCallback(async () => {
   const remoteId = threadListItem.getState().remoteId;
+  const loadRequestId = loadThreadRequestIdRef.current + 1;
+  loadThreadRequestIdRef.current = loadRequestId;
+
   if (!remoteId) {
     setMessages([]);
     setMessageRepository(toLinearRepository([]));
@@ -937,6 +941,15 @@ function usePersistedChatRuntime(
     }
 
     const data = (await response.json()) as { thread: ThreadApiDetail };
+    const latestRemoteId = threadListItem.getState().remoteId;
+    const isStaleLoad =
+      loadRequestId !== loadThreadRequestIdRef.current ||
+      latestRemoteId !== remoteId;
+
+    if (isStaleLoad) {
+      return;
+    }
+
     const threadPromptMode =
       data.thread.lastPromptMode && isPromptMode(data.thread.lastPromptMode)
         ? data.thread.lastPromptMode
@@ -997,7 +1010,9 @@ function usePersistedChatRuntime(
     localToDbMessageIdRef.current = nextMap;
 
   } finally {
-    setIsLoading(false);
+    if (loadRequestId === loadThreadRequestIdRef.current) {
+      setIsLoading(false);
+    }
   }
 }, [options, threadListItem]);
 
