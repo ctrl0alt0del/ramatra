@@ -17,6 +17,7 @@ import { publishThreadChanged } from "@/lib/threads/event-bus";
 export type ThreadMessage = {
   id?: string;
   parentMessageId?: string | null;
+  lmstudioResponseId?: string | null;
   messageUiId?: string | null;
   tokenLoad?: number;
   role: Exclude<ChatMessageRoleData, "tool">;
@@ -32,6 +33,7 @@ export type ThreadSummary = {
   lmstudioResponseId: string | null;
   lmstudioModelInstanceId: string | null;
   lastPromptMode: PromptMode | null;
+  lastMoodId: string | null;
   conversationSummary: string | null;
   summaryUpdatedAt: string | null;
   summaryMessageCount: number;
@@ -59,6 +61,7 @@ type ThreadRow = {
   lmstudio_response_id: string | null;
   lmstudio_model_instance_id: string | null;
   last_prompt_mode: PromptMode | null;
+  last_mood_id: string | null;
   conversation_summary: string | null;
   summary_updated_at: string | null;
   summary_message_count: number;
@@ -74,6 +77,7 @@ type ThreadRow = {
 type MessageRow = {
   id: string;
   parent_message_id: string | null;
+  lmstudio_response_id: string | null;
   message_ui_id: string | null;
   role: ThreadMessage["role"];
   content: string;
@@ -107,7 +111,7 @@ const getMessageNodeById = (messageId: string, threadId?: string) => {
     return db
       .prepare(
         `
-          SELECT id, parent_message_id, role
+          SELECT id, parent_message_id, lmstudio_response_id, role
           FROM messages
           WHERE id = ?
             AND thread_id = ?
@@ -115,17 +119,18 @@ const getMessageNodeById = (messageId: string, threadId?: string) => {
       )
       .get(messageId, threadId) as
       | {
-          id: string;
-          parent_message_id: string | null;
-          role: ThreadMessage["role"];
-        }
-      | undefined;
+        id: string;
+        parent_message_id: string | null;
+        lmstudio_response_id: string | null;
+        role: ThreadMessage["role"];
+      }
+    | undefined;
   }
 
   return db
     .prepare(
       `
-        SELECT id, parent_message_id, role
+        SELECT id, parent_message_id, lmstudio_response_id, role
         FROM messages
         WHERE id = ?
       `,
@@ -134,6 +139,7 @@ const getMessageNodeById = (messageId: string, threadId?: string) => {
     | {
         id: string;
         parent_message_id: string | null;
+        lmstudio_response_id: string | null;
         role: ThreadMessage["role"];
       }
     | undefined;
@@ -161,6 +167,7 @@ const getActiveBranchMessages = ({
           SELECT
             id,
             parent_message_id,
+            lmstudio_response_id,
             message_ui_id,
             role,
             content,
@@ -175,6 +182,7 @@ const getActiveBranchMessages = ({
           SELECT
             m.id,
             m.parent_message_id,
+            m.lmstudio_response_id,
             m.message_ui_id,
             m.role,
             m.content,
@@ -184,7 +192,7 @@ const getActiveBranchMessages = ({
           FROM messages m
           JOIN branch ON branch.parent_message_id = m.id
         )
-        SELECT id, parent_message_id, message_ui_id, role, content, token_load, created_at
+        SELECT id, parent_message_id, lmstudio_response_id, message_ui_id, role, content, token_load, created_at
         FROM branch
         ORDER BY depth DESC
       `,
@@ -212,6 +220,7 @@ const toThreadSummary = (thread: ThreadDetail): ThreadSummary => {
     lmstudioResponseId: thread.lmstudioResponseId,
     lmstudioModelInstanceId: thread.lmstudioModelInstanceId,
     lastPromptMode: thread.lastPromptMode,
+    lastMoodId: thread.lastMoodId,
     conversationSummary: thread.conversationSummary,
     summaryUpdatedAt: thread.summaryUpdatedAt,
     summaryMessageCount: thread.summaryMessageCount,
@@ -247,6 +256,7 @@ export const listThreads = (): ThreadSummary[] => {
           t.lmstudio_response_id,
           t.lmstudio_model_instance_id,
           t.last_prompt_mode,
+          t.last_mood_id,
           t.conversation_summary,
           t.summary_updated_at,
           t.summary_message_count,
@@ -274,6 +284,7 @@ export const listThreads = (): ThreadSummary[] => {
     lmstudioResponseId: row.lmstudio_response_id,
     lmstudioModelInstanceId: row.lmstudio_model_instance_id,
     lastPromptMode: row.last_prompt_mode,
+    lastMoodId: row.last_mood_id,
     conversationSummary: row.conversation_summary,
     summaryUpdatedAt: row.summary_updated_at,
     summaryMessageCount: row.summary_message_count,
@@ -295,6 +306,7 @@ export const createThread = (input?: {
   lmstudioModelInstanceId?: string | null;
   userIntent?: string | null;
   lastPromptMode?: PromptMode | null;
+  lastMoodId?: string | null;
   conversationSummary?: string | null;
   summaryUpdatedAt?: string | null;
   summaryMessageCount?: number;
@@ -315,6 +327,7 @@ export const createThread = (input?: {
   const lmstudioModelInstanceId = input?.lmstudioModelInstanceId ?? null;
   const userIntent = input?.userIntent ?? null;
   const lastPromptMode = input?.lastPromptMode ?? null;
+  const lastMoodId = input?.lastMoodId ?? null;
   const conversationSummary = input?.conversationSummary ?? null;
   const summaryUpdatedAt = input?.summaryUpdatedAt ?? null;
   const summaryMessageCount = input?.summaryMessageCount ?? 0;
@@ -338,6 +351,7 @@ export const createThread = (input?: {
           lmstudio_response_id,
           lmstudio_model_instance_id,
           last_prompt_mode,
+          last_mood_id,
           conversation_summary,
           summary_updated_at,
           summary_message_count,
@@ -348,7 +362,7 @@ export const createThread = (input?: {
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       threadId,
@@ -360,6 +374,7 @@ export const createThread = (input?: {
       lmstudioResponseId,
       lmstudioModelInstanceId,
       lastPromptMode,
+      lastMoodId,
       conversationSummary,
       summaryUpdatedAt,
       summaryMessageCount,
@@ -373,8 +388,8 @@ export const createThread = (input?: {
 
     const insertMessage = db.prepare(
       `
-        INSERT INTO messages (id, thread_id, parent_message_id, message_ui_id, role, content, token_load, created_at, position)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO messages (id, thread_id, parent_message_id, lmstudio_response_id, message_ui_id, role, content, token_load, created_at, position)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     );
 
@@ -387,8 +402,9 @@ export const createThread = (input?: {
         messageId,
         threadId,
         parentMessageId,
+        message.lmstudioResponseId ?? null,
         message.messageUiId ?? null,
-        message.role,
+          message.role,
         serializeMessageContent(message.content),
         tokenLoad,
         timestamp,
@@ -424,7 +440,7 @@ export const getThreadMessageById = (threadId: string, messageId: string) => {
   const row = db
     .prepare(
       `
-        SELECT id, parent_message_id, message_ui_id, role, content, token_load, created_at
+        SELECT id, parent_message_id, lmstudio_response_id, message_ui_id, role, content, token_load, created_at
         FROM messages
         WHERE thread_id = ? AND id = ?
         LIMIT 1
@@ -440,13 +456,14 @@ export const getThreadMessageById = (threadId: string, messageId: string) => {
   const fallbackLoad = computeMessageTokenLoad(content);
 
   return {
-    id: row.id,
-    parentMessageId: row.parent_message_id,
-    messageUiId: row.message_ui_id,
-    role: row.role,
-    content,
-    tokenLoad: row.token_load > 0 ? row.token_load : fallbackLoad,
-  } satisfies ThreadMessage;
+      id: row.id,
+      parentMessageId: row.parent_message_id,
+      lmstudioResponseId: row.lmstudio_response_id,
+      messageUiId: row.message_ui_id,
+      role: row.role,
+      content,
+      tokenLoad: row.token_load > 0 ? row.token_load : fallbackLoad,
+    } satisfies ThreadMessage;
 };
 
 export const getThread = (threadId: string) => {
@@ -463,6 +480,7 @@ export const getThread = (threadId: string) => {
           t.lmstudio_response_id,
           t.lmstudio_model_instance_id,
           t.last_prompt_mode,
+          t.last_mood_id,
           t.conversation_summary,
           t.summary_updated_at,
           t.summary_message_count,
@@ -516,6 +534,7 @@ export const getThread = (threadId: string) => {
     lmstudioResponseId: thread.lmstudio_response_id,
     lmstudioModelInstanceId: thread.lmstudio_model_instance_id,
     lastPromptMode: thread.last_prompt_mode,
+    lastMoodId: thread.last_mood_id,
     conversationSummary: thread.conversation_summary,
     summaryUpdatedAt: thread.summary_updated_at,
     summaryMessageCount: thread.summary_message_count,
@@ -540,6 +559,7 @@ export const updateThread = (
     lmstudioModelInstanceId?: string | null;
     userIntent?: string | null;
     lastPromptMode?: PromptMode | null;
+    lastMoodId?: string | null;
     conversationSummary?: string | null;
     summaryUpdatedAt?: string | null;
     summaryMessageCount?: number;
@@ -586,6 +606,8 @@ export const updateThread = (
     input.lastPromptMode !== undefined
       ? input.lastPromptMode
       : existing.lastPromptMode;
+  const nextLastMoodId =
+    input.lastMoodId !== undefined ? input.lastMoodId : existing.lastMoodId;
   const nextConversationSummary =
     input.conversationSummary !== undefined
       ? input.conversationSummary
@@ -636,8 +658,8 @@ export const updateThread = (
 
       const insertMessage = db.prepare(
         `
-          INSERT INTO messages (id, thread_id, parent_message_id, message_ui_id, role, content, token_load, created_at, position)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO messages (id, thread_id, parent_message_id, lmstudio_response_id, message_ui_id, role, content, token_load, created_at, position)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       );
 
@@ -650,8 +672,9 @@ export const updateThread = (
           messageId,
           threadId,
           parentMessageId,
-        message.messageUiId ?? null,
-        message.role,
+          message.lmstudioResponseId ?? null,
+          message.messageUiId ?? null,
+          message.role,
           serializeMessageContent(message.content),
           tokenLoad,
           timestamp,
@@ -688,8 +711,8 @@ export const updateThread = (
 
       const insertMessage = db.prepare(
         `
-          INSERT INTO messages (id, thread_id, parent_message_id, message_ui_id, role, content, token_load, created_at, position)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO messages (id, thread_id, parent_message_id, lmstudio_response_id, message_ui_id, role, content, token_load, created_at, position)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       );
 
@@ -700,6 +723,7 @@ export const updateThread = (
           messageId,
           threadId,
           parentCursor,
+          message.lmstudioResponseId ?? null,
           message.messageUiId ?? null,
           message.role,
           serializeMessageContent(message.content),
@@ -724,6 +748,7 @@ export const updateThread = (
           lmstudio_response_id = ?,
           lmstudio_model_instance_id = ?,
           last_prompt_mode = ?,
+          last_mood_id = ?,
           conversation_summary = ?,
           summary_updated_at = ?,
           summary_message_count = ?,
@@ -743,6 +768,7 @@ export const updateThread = (
       nextLmstudioResponseId,
       nextLmstudioModelInstanceId,
       nextLastPromptMode,
+      nextLastMoodId,
       nextConversationSummary,
       nextSummaryUpdatedAt,
       nextSummaryMessageCount,
@@ -812,7 +838,7 @@ export const getThreadWithAllMessages = (threadId: string) => {
   const rows = db
     .prepare(
       `
-        SELECT id, parent_message_id, message_ui_id, role, content, token_load, created_at
+        SELECT id, parent_message_id, lmstudio_response_id, message_ui_id, role, content, token_load, created_at
         FROM messages
         WHERE thread_id = ?
         ORDER BY position ASC, created_at ASC
@@ -826,8 +852,9 @@ export const getThreadWithAllMessages = (threadId: string) => {
     return {
       id: row.id,
       parentMessageId: row.parent_message_id,
-    messageUiId: row.message_ui_id,
-    role: row.role,
+      lmstudioResponseId: row.lmstudio_response_id,
+      messageUiId: row.message_ui_id,
+      role: row.role,
       content,
       tokenLoad: row.token_load > 0 ? row.token_load : fallbackLoad,
     } satisfies ThreadMessage;
@@ -854,3 +881,41 @@ export const getThreadWithAllMessages = (threadId: string) => {
 
 
 
+
+
+
+export const resolvePreviousResponseIdFromParentMessage = (
+  threadId: string,
+  parentMessageId: string | null,
+) => {
+  let cursor = parentMessageId?.trim() ? parentMessageId.trim() : null;
+  if (!cursor) {
+    return null;
+  }
+
+  const visited = new Set<string>();
+
+  while (cursor) {
+    if (visited.has(cursor)) {
+      return null;
+    }
+    visited.add(cursor);
+
+    const node = getMessageNodeById(cursor, threadId);
+    if (!node) {
+      return null;
+    }
+
+    if (
+      node.role === "assistant" &&
+      typeof node.lmstudio_response_id === "string" &&
+      node.lmstudio_response_id.trim().length > 0
+    ) {
+      return node.lmstudio_response_id.trim();
+    }
+
+    cursor = node.parent_message_id;
+  }
+
+  return null;
+};

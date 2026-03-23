@@ -108,6 +108,7 @@ const ensureSchema = (db: Database.Database) => {
       lmstudio_response_id TEXT,
       lmstudio_model_instance_id TEXT,
       last_prompt_mode TEXT,
+      last_mood_id TEXT,
       conversation_summary TEXT,
       summary_updated_at TEXT,
       summary_message_count INTEGER NOT NULL DEFAULT 0,
@@ -124,6 +125,7 @@ const ensureSchema = (db: Database.Database) => {
       id TEXT PRIMARY KEY,
       thread_id TEXT NOT NULL,
       parent_message_id TEXT,
+      lmstudio_response_id TEXT,
       message_ui_id TEXT,
       role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
       content TEXT NOT NULL,
@@ -325,6 +327,13 @@ const ensureSchema = (db: Database.Database) => {
     `);
   }
 
+  if (!columns.some((column) => column.name === "last_mood_id")) {
+    db.exec(`
+      ALTER TABLE threads
+      ADD COLUMN last_mood_id TEXT
+    `);
+  }
+
   if (!columns.some((column) => column.name === "summary_updated_at")) {
     db.exec(`
       ALTER TABLE threads
@@ -404,6 +413,13 @@ const ensureSchema = (db: Database.Database) => {
     db.exec(`
       ALTER TABLE messages
       ADD COLUMN message_ui_id TEXT
+    `);
+  }
+
+  if (!messageColumns.some((column) => column.name === "lmstudio_response_id")) {
+    db.exec(`
+      ALTER TABLE messages
+      ADD COLUMN lmstudio_response_id TEXT
     `);
   }
 

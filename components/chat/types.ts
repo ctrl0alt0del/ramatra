@@ -16,7 +16,8 @@ export type ThreadApiSummary = {
   status: "regular" | "archived";
   lmstudioResponseId: string | null;
   lmstudioModelInstanceId: string | null;
-  lastPromptMode: "fast" | "regular" | "writer" | "artist" | null;
+  lastPromptMode: "fast" | "regular" | "writer" | "roleplay" | "artist" | null;
+  lastMoodId: string | null;
   conversationSummary: string | null;
   summaryUpdatedAt: string | null;
   summaryMessageCount: number;

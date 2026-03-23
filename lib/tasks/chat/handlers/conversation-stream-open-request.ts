@@ -1,7 +1,9 @@
 import { composeSystemPrompt } from "@/lib/lmstudio/prompts";
+import { getLmStudioSamplingForMode } from "@/lib/lmstudio/mode-sampling";
 import { buildIntegrations, type EphemeralMcpIntegration } from "@/lib/tasks/chat/integrations";
 import type { PromptMode } from "@/lib/lmstudio/prompt-modes";
 import type { LmStudioInputItem } from "@/lib/tasks/chat/lm-input";
+import type { LmStudioSamplingParams } from "@/lib/tasks/chat/policies/lmstudio-sampling";
 
 export const requestConversationChatGenerationStream = async ({
   modelTarget,
@@ -32,6 +34,7 @@ export const requestConversationChatGenerationStream = async ({
     systemPrompt: string;
     forceSystemPrompt?: boolean;
     integrations?: EphemeralMcpIntegration[];
+    sampling?: LmStudioSamplingParams;
     stream?: boolean;
   }) => Promise<Response>;
 }) =>
@@ -48,5 +51,6 @@ export const requestConversationChatGenerationStream = async ({
       }),
     forceSystemPrompt,
     integrations: integrations ?? buildIntegrations(promptMode),
+    sampling: getLmStudioSamplingForMode(promptMode),
     stream: true,
   });

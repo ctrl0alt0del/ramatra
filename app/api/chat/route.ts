@@ -11,6 +11,7 @@ import {
   getThread,
   getThreadMessageById,
   getThreadWithAllMessages,
+  resolvePreviousResponseIdFromParentMessage,
   updateThread,
 } from "@/lib/lmstudio/threads";
 import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
@@ -41,9 +42,21 @@ const requestSchema = z.object({
   threadId: z.string().optional(),
   promptMode: z.string().optional(),
   moodId: z.string().nullable().optional(),
+  previousResponseId: z.string().nullable().optional(),
+  previous_response_id: z.string().nullable().optional(),
   parentMessageId: z.string().nullable().optional(),
   editingMessageId: z.string().nullable().optional(),
 });
+
+
+const normalizePreviousResponseId = (value: string | null | undefined) => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.startsWith("resp_") ? trimmed : null;
+};
 
 const toChatMessages = (messages: Array<z.infer<typeof messageSchema>>) => {
   return messages
@@ -88,6 +101,7 @@ export async function POST(req: Request) {
     parsed.data.promptMode && isPromptMode(parsed.data.promptMode)
       ? parsed.data.promptMode
       : defaultPromptMode;
+  const moodId = parsed.data.moodId?.trim() ? parsed.data.moodId.trim() : null;
   const latestUserMessage = [...inputMessages]
     .reverse()
     .find((message) => message.role === "user");
@@ -105,6 +119,16 @@ export async function POST(req: Request) {
   const selectedEditingMessageId = parsed.data.editingMessageId?.trim()
     ? parsed.data.editingMessageId.trim()
     : null;
+  const hasClientPreviousResponseId =
+    Object.prototype.hasOwnProperty.call(parsed.data, "previousResponseId") ||
+    Object.prototype.hasOwnProperty.call(parsed.data, "previous_response_id");
+  const rawClientPreviousResponseId =
+    parsed.data.previousResponseId ?? parsed.data.previous_response_id ?? null;
+  const clientPreviousResponseId = normalizePreviousResponseId(
+    typeof rawClientPreviousResponseId === "string"
+      ? rawClientPreviousResponseId
+      : null,
+  );
 
   const requestedThreadId =
     parsed.data.threadId && !parsed.data.threadId.startsWith("__LOCALID_")
@@ -119,6 +143,8 @@ export async function POST(req: Request) {
     existingThread ??
     createThread({
       title: "New Chat",
+      lastPromptMode: promptMode,
+      lastMoodId: moodId,
       messages: [
         {
           role: "user",
@@ -179,6 +205,22 @@ export async function POST(req: Request) {
     (latestInputMessage?.role !== "user" ||
       isReplayOfSelectedParentUser ||
       isReplayOfActiveLeafUser);
+  const shouldForceFreshLmStudioChain =
+    Boolean(existingThread) &&
+    (isExplicitEditRequest ||
+      isRegenerateRequest ||
+      resolvedParentMessageId !== null);
+  const parentDerivedPreviousResponseId =
+    existingThread && resolvedParentMessageId
+      ? resolvePreviousResponseIdFromParentMessage(
+          existingThread.id,
+          resolvedParentMessageId,
+        )
+      : null;
+  const resolvedPreviousResponseIdOverride = hasClientPreviousResponseId
+    ? clientPreviousResponseId
+    : parentDerivedPreviousResponseId ??
+      (shouldForceFreshLmStudioChain ? null : undefined);
 
   let persistedUserMessageId: string | null =
     thread.messages
@@ -241,20 +283,53 @@ export async function POST(req: Request) {
             persistedUserMessageId = activeLeaf.id ?? persistedUserMessageId;
           }
         }
+      } else if (
+        isRegenerateRequest &&
+        resolvedParentMessageId === null &&
+        activeLeafMessage?.role === "assistant" &&
+        activeLeafMessage.parentMessageId
+      ) {
+        // Regeneration with no explicit parent should branch from the user turn
+        // that produced the current assistant leaf, not from the assistant leaf itself.
+        const updatedThreadAfterRegenerateBaseSwitch = updateThread(existingThread.id, {
+          activeLeafMessageId: activeLeafMessage.parentMessageId,
+        });
+        if (updatedThreadAfterRegenerateBaseSwitch?.activeLeafMessageId) {
+          const activeLeaf = getThreadMessageById(
+            existingThread.id,
+            updatedThreadAfterRegenerateBaseSwitch.activeLeafMessageId,
+          );
+          if (activeLeaf?.role === "user") {
+            persistedUserMessageId = activeLeaf.id ?? persistedUserMessageId;
+          }
+        }
       }
     }
   }
-
-  const moodId = parsed.data.moodId?.trim() ? parsed.data.moodId.trim() : null;
 
   const task = enqueueChatTask({
     kind: "conversation",
     threadId: thread.id,
     promptMode,
     moodId,
+    previousResponseIdOverride: resolvedPreviousResponseIdOverride,
     contextLength: getConfiguredContextLengthForMode(promptMode, process.env),
     userMessage: latestUserMessage.content,
     regenerateOfLastAssistant: isRegenerateRequest,
+  });
+
+  console.info("[chat-route] previous-response-id", {
+    threadId: thread.id,
+    hasClientPreviousResponseId,
+    clientPreviousResponseId,
+    shouldForceFreshLmStudioChain,
+    rawParentMessageId: parsed.data.parentMessageId ?? null,
+    selectedParentMessageId,
+    parentDerivedPreviousResponseId,
+    resolvedPreviousResponseIdOverride,
+    parentMessageId: resolvedParentMessageId,
+    isExplicitEditRequest,
+    isRegenerateRequest,
   });
 
   if (!isRegenerateRequest) {

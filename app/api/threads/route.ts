@@ -26,6 +26,8 @@ const createThreadSchema = z.object({
   titleGenerated: z.boolean().optional(),
   status: z.enum(["regular", "archived"]).optional(),
   lmstudioResponseId: z.string().nullable().optional(),
+  lastPromptMode: z.enum(["fast", "regular", "writer", "roleplay", "artist"]).nullable().optional(),
+  lastMoodId: z.string().nullable().optional(),
   summaryCallCountTotal: z.number().int().nonnegative().optional(),
   summaryCallsInCurrentRequest: z.number().int().nonnegative().optional(),
   contextWindowUsedTokens: z.number().int().nonnegative().nullable().optional(),

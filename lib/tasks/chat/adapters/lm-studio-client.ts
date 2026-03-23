@@ -1,5 +1,9 @@
 import type { LmStudioInputItem } from "@/lib/tasks/chat/input/types";
-import { stripForbiddenLmStudioSamplingParams } from "@/lib/tasks/chat/policies/lmstudio-sampling";
+import {
+  sanitizeLmStudioSamplingParams,
+  stripForbiddenLmStudioSamplingParams,
+  type LmStudioSamplingParams,
+} from "@/lib/tasks/chat/policies/lmstudio-sampling";
 
 export type RequestLmStudioChatArgs = {
   model: string;
@@ -10,6 +14,7 @@ export type RequestLmStudioChatArgs = {
   forceSystemPrompt?: boolean;
   stream?: boolean;
   integrations?: unknown[];
+  sampling?: LmStudioSamplingParams;
 };
 
 type LmStudioChatPayload = {
@@ -42,6 +47,7 @@ const buildLmStudioChatPayload = ({
   forceSystemPrompt = false,
   stream = false,
   integrations,
+  sampling,
 }: RequestLmStudioChatArgs): LmStudioChatPayload => ({
   model,
   context_length: contextLength,
@@ -51,6 +57,7 @@ const buildLmStudioChatPayload = ({
     ? {}
     : { system_prompt: systemPrompt }),
   integrations: integrations ?? [],
+  ...sanitizeLmStudioSamplingParams(sampling),
   stream,
 });
 
@@ -63,6 +70,7 @@ export const requestLmStudioChat = async ({
   forceSystemPrompt = false,
   stream = false,
   integrations,
+  sampling,
 }: RequestLmStudioChatArgs) => {
   const payload = stripForbiddenLmStudioSamplingParams(
     buildLmStudioChatPayload({
@@ -74,8 +82,18 @@ export const requestLmStudioChat = async ({
       forceSystemPrompt,
       stream,
       integrations,
+      sampling,
     }),
   );
+
+  console.info("[lmstudio-chat] request", {
+    model,
+    contextLength,
+    previousResponseId: payload.previous_response_id ?? null,
+    hasSystemPrompt:
+      typeof payload.system_prompt === "string" && payload.system_prompt.length > 0,
+    stream: payload.stream,
+  });
 
   return fetch(getLmStudioChatUrl(), {
     method: "POST",

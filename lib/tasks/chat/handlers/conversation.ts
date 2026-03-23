@@ -46,6 +46,7 @@ export const persistConversationStreamResult = ({
     latestMessages: latestThread?.messages ?? null,
     textWithCompactionMarkers,
     regenerateOfLastAssistant: task.payload.regenerateOfLastAssistant === true,
+    assistantLmstudioResponseId: finalResponse?.response_id ?? null,
   });
   const isPersistentUtilConversation =
     typeof task.payload.utilTaskName === "string" &&
@@ -59,6 +60,7 @@ export const persistConversationStreamResult = ({
       ? (latestThread?.lmstudioModelInstanceId ?? null)
       : (finalResponse?.model_instance_id ?? null),
     lastPromptMode: promptMode,
+    lastMoodId: moodId,
     contextWindowUsedTokens: usedContextTokens,
     contextWindowTotalTokens: requestedContextLength,
     appendParentMessageId:

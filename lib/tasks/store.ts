@@ -360,10 +360,31 @@ export const getSchedulerSnapshot = (): SchedulerSnapshot => {
   };
 };
 
-export const resetTaskStore = () => {
+export const resetTaskStore = (options?: {
+  preserveCompletedComfyHistory?: boolean;
+}) => {
+  const preserveCompletedComfyHistory =
+    options?.preserveCompletedComfyHistory === true;
+
   const transaction = db.transaction(() => {
-    db.prepare(`DELETE FROM comfy_task_jobs`).run();
-    db.prepare(`DELETE FROM tasks`).run();
+    if (preserveCompletedComfyHistory) {
+      db.prepare(
+        `
+          DELETE FROM tasks
+          WHERE status IN ('queued', 'running')
+        `,
+      ).run();
+      db.prepare(
+        `
+          DELETE FROM tasks
+          WHERE type = 'chat' AND status IN ('completed', 'failed', 'cancelled')
+        `,
+      ).run();
+    } else {
+      db.prepare(`DELETE FROM comfy_task_jobs`).run();
+      db.prepare(`DELETE FROM tasks`).run();
+    }
+
     db.prepare(
       `
         UPDATE task_runtime_state

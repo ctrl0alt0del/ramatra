@@ -4,16 +4,19 @@ import type { MessagePart } from "@/lib/chat/message-content";
 type ThreadMessage = {
   role: "user" | "assistant" | "system";
   content: MessagePart[];
+  lmstudioResponseId?: string | null;
 };
 
 export const buildConversationAssistantMessagePlan = ({
   latestMessages,
   textWithCompactionMarkers,
   regenerateOfLastAssistant,
+  assistantLmstudioResponseId,
 }: {
   latestMessages: ThreadMessage[] | null;
   textWithCompactionMarkers: string;
   regenerateOfLastAssistant: boolean;
+  assistantLmstudioResponseId: string | null;
 }) => {
   if (regenerateOfLastAssistant) {
     return {
@@ -21,6 +24,7 @@ export const buildConversationAssistantMessagePlan = ({
         {
           role: "assistant" as const,
           content: [{ type: "text" as const, text: textWithCompactionMarkers }],
+          lmstudioResponseId: assistantLmstudioResponseId,
         },
       ],
     };
@@ -38,6 +42,7 @@ export const buildConversationAssistantMessagePlan = ({
           {
             role: "assistant" as const,
             content: [{ type: "text" as const, text: textWithCompactionMarkers }],
+            lmstudioResponseId: assistantLmstudioResponseId,
           },
         ]
       : undefined,

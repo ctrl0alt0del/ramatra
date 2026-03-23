@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -356,7 +356,7 @@ function formatGpuTemperature(temperatureC: number | null) {
     return "nvidia-smi not available";
   }
 
-  return `${temperatureC}В°C`;
+  return `${temperatureC}°C`;
 }
 
 function formatLmStudioModelDetail(
@@ -472,13 +472,17 @@ function SidebarPanel({
       </div>
 
       <div className="mt-4 min-h-0 flex-1 overflow-hidden rounded-[24px] border border-white/70 bg-white/72 p-2 shadow-[0_14px_34px_rgba(73,56,145,0.08)]">
-        <ThreadList.Root>
-          <ThreadList.New />
-          <ThreadList.Items
-            components={{
-              ThreadListItem: CustomThreadListItem,
-            }}
-          />
+        <ThreadList.Root className="flex h-full min-h-0 flex-col">
+          <div className="shrink-0">
+            <ThreadList.New />
+          </div>
+          <div className="mt-2 min-h-0 flex-1 overflow-y-auto pr-1">
+            <ThreadList.Items
+              components={{
+                ThreadListItem: CustomThreadListItem,
+              }}
+            />
+          </div>
         </ThreadList.Root>
       </div>
     </div>

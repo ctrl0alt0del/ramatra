@@ -2,6 +2,7 @@ import type { LoadedLmStudioModelInstance } from "@/lib/lmstudio/models";
 import type { PromptMode } from "@/lib/lmstudio/prompt-modes";
 import type { EphemeralMcpIntegration } from "@/lib/tasks/chat/integrations";
 import type { LmStudioInputItem } from "@/lib/tasks/chat/lm-input";
+import type { LmStudioSamplingParams } from "@/lib/tasks/chat/policies/lmstudio-sampling";
 import type { Task, TaskGroupPayloadMap } from "@/lib/tasks/types";
 import type {
   ChatTask,
@@ -33,6 +34,7 @@ export type ConversationRuntimeDeps = {
     systemPrompt: string;
     forceSystemPrompt?: boolean;
     integrations?: EphemeralMcpIntegration[];
+    sampling?: LmStudioSamplingParams;
     stream?: boolean;
   }) => Promise<Response>;
   formatUnknownError: (error: unknown) => {

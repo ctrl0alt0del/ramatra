@@ -191,7 +191,7 @@ export const forceResumeChatGpuMode = async () => {
         free_memory: true,
       });
 
-      resetTaskStore();
+      resetTaskStore({ preserveCompletedComfyHistory: true });
       await ensureChatModelLoaded();
       setSchedulerGpuMode("chat");
     });

@@ -1,6 +1,7 @@
 import type { EphemeralMcpIntegration } from "@/lib/tasks/chat/integrations";
 import type { PromptMode } from "@/lib/lmstudio/prompt-modes";
 import type { LmStudioInputItem } from "@/lib/tasks/chat/lm-input";
+import type { LmStudioSamplingParams } from "@/lib/tasks/chat/policies/lmstudio-sampling";
 import { requestConversationChatGenerationStream } from "@/lib/tasks/chat/handlers/conversation-stream-open-request";
 import { resolveConversationStreamResponseBody } from "@/lib/tasks/chat/handlers/conversation-stream-open-response";
 
@@ -38,6 +39,7 @@ export const openConversationChatGenerationStream = async ({
     systemPrompt: string;
     forceSystemPrompt?: boolean;
     integrations?: EphemeralMcpIntegration[];
+    sampling?: LmStudioSamplingParams;
     stream?: boolean;
   }) => Promise<Response>;
   formatUnknownError: (error: unknown) => {

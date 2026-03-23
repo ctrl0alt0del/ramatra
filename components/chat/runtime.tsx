@@ -15,7 +15,7 @@ import { createAssistantStream } from "assistant-stream";
 
 import { parseCritiqueRequestMarker } from "@/lib/chat/critique-marker";
 import type { MessagePart } from "@/lib/chat/message-content";
-import { type PromptMode } from "@/lib/lmstudio/prompt-modes";
+import { isPromptMode, type PromptMode } from "@/lib/lmstudio/prompt-modes";
 import {
   getMessageReasoning,
   setMessageReasoning,
@@ -36,6 +36,11 @@ type SerializedChatMessage = {
     | { type: "text"; text: string }
     | { type: "image"; dataUrl: string; mimeType?: string; name?: string }
   >;
+};
+
+type ThreadSettingsSnapshot = {
+  promptMode: PromptMode | null;
+  moodId: string | null;
 };
 
 const assistantMetadataBase = {
@@ -279,6 +284,50 @@ const toLinearRepository = (messages: readonly ThreadMessage[]): ThreadMessageRe
       message,
       parentId: index === 0 ? null : messages[index - 1]?.id ?? null,
     })),
+  };
+};
+
+const toRepositoryPreservingBranches = (
+  previousRepository: ThreadMessageRepository,
+  nextMessages: readonly ThreadMessage[],
+): ThreadMessageRepository => {
+  if (nextMessages.length === 0) {
+    return toLinearRepository([]);
+  }
+
+  const previousEntriesById = new Map<
+    string,
+    { message: ThreadMessage; parentId: string | null }
+  >();
+  for (const entry of previousRepository.messages) {
+    if (typeof entry.message.id === "string") {
+      previousEntriesById.set(entry.message.id, entry);
+    }
+  }
+
+  const replacementById = new Map<string, ThreadMessage>();
+  for (const message of nextMessages) {
+    if (typeof message.id !== "string" || !previousEntriesById.has(message.id)) {
+      return toLinearRepository([...nextMessages]);
+    }
+    replacementById.set(message.id, message);
+  }
+
+  return {
+    headId: nextMessages.at(-1)?.id ?? null,
+    messages: previousRepository.messages.map((entry) => {
+      const messageId =
+        typeof entry.message.id === "string" ? entry.message.id : null;
+      const replacement = messageId ? replacementById.get(messageId) : undefined;
+      if (!replacement) {
+        return entry;
+      }
+
+      return {
+        ...entry,
+        message: replacement,
+      };
+    }),
   };
 };
 const toActivePathMessages = (thread: ThreadApiDetail): ThreadMessage[] => {
@@ -777,7 +826,13 @@ const getEditingMessageIdForParent = (
 };
 
 
-function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) {
+function usePersistedChatRuntime(
+  promptMode: PromptMode,
+  moodId: string | null,
+  options?: {
+    onThreadSettingsLoaded?: (settings: ThreadSettingsSnapshot) => void;
+  },
+) {
   const attachmentAdapter = useMemo(() => new SimpleImageAttachmentAdapter(), []);
   const threadListItem = useThreadListItemRuntime();
 
@@ -882,6 +937,19 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
     }
 
     const data = (await response.json()) as { thread: ThreadApiDetail };
+    const threadPromptMode =
+      data.thread.lastPromptMode && isPromptMode(data.thread.lastPromptMode)
+        ? data.thread.lastPromptMode
+        : null;
+    const threadMoodId = data.thread.lastMoodId?.trim()
+      ? data.thread.lastMoodId.trim()
+      : null;
+
+    options?.onThreadSettingsLoaded?.({
+      promptMode: threadPromptMode,
+      moodId: threadMoodId,
+    });
+
     const nextMessages = toActivePathMessages(data.thread);
     const reconciledMessages = reconcileLatestAssistantAfterReload(
       messagesRef.current,
@@ -931,7 +999,7 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
   } finally {
     setIsLoading(false);
   }
-}, [threadListItem]);
+}, [options, threadListItem]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -1187,7 +1255,11 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
       messages,
       messageRepository,
       setMessages: (nextMessages) => {
-        applyLocalMessages([...nextMessages]);
+        const resolvedMessages = [...nextMessages];
+        setMessages(resolvedMessages);
+        setMessageRepository((previousRepository) =>
+          toRepositoryPreservingBranches(previousRepository, resolvedMessages),
+        );
       },
       onCancel: async () => {
         requestAbortRef.current?.abort();
@@ -1292,7 +1364,13 @@ function usePersistedChatRuntime(promptMode: PromptMode, moodId: string | null) 
   return useExternalStoreRuntime(adapter);
 }
 
-export function usePersistedRuntime(promptMode: PromptMode, moodId: string | null) {
+export function usePersistedRuntime(
+  promptMode: PromptMode,
+  moodId: string | null,
+  options?: {
+    onThreadSettingsLoaded?: (settings: ThreadSettingsSnapshot) => void;
+  },
+) {
   const adapter = useMemo<RemoteThreadListAdapter>(
     () => ({
       async list() {
@@ -1383,11 +1461,12 @@ export function usePersistedRuntime(promptMode: PromptMode, moodId: string | nul
 
   return useRemoteThreadListRuntime({
     runtimeHook: function UsePromptModeRuntimeHook() {
-      return usePersistedChatRuntime(promptMode, moodId);
+      return usePersistedChatRuntime(promptMode, moodId, options);
     },
     adapter,
   });
 }
+
 
 
 
