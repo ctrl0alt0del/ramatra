@@ -118,6 +118,29 @@ const normalizeConcept = (value: string) => {
     .replace(/^_+|_+$/g, "");
 };
 
+const normalizeConceptHaystack = (value: string) => {
+  return normalizeConcept(value).replace(/^_+|_+$/g, "");
+};
+
+const conceptMatchesLoraFileName = (loraName: string, concept: string) => {
+  if (!concept) {
+    return false;
+  }
+
+  const basename = path.basename(loraName, path.extname(loraName));
+  if (!basename.startsWith("$")) {
+    return false;
+  }
+  const normalizedBase = normalizeConceptHaystack(basename);
+  if (!normalizedBase) {
+    return false;
+  }
+
+  const wrappedBase = `_${normalizedBase}_`;
+  const wrappedConcept = `_${concept}_`;
+  return wrappedBase.includes(wrappedConcept);
+};
+
 const parseJsonMetadataField = (value: string | undefined) => {
   if (!value) return null;
 
@@ -262,8 +285,12 @@ export const listAvailableLoras = async ({
 
     if (normalizedConcepts.size > 0) {
       const topTag = normalizeConcept(lora.metadata?.topTag?.name ?? "");
-      const hasConceptMatch = topTag.length > 0 && normalizedConcepts.has(topTag);
-      if (!hasConceptMatch) {
+      const hasTopTagMatch = topTag.length > 0 && normalizedConcepts.has(topTag);
+      const hasFileNameConceptMatch = [...normalizedConcepts].some((concept) =>
+        conceptMatchesLoraFileName(lora.name, concept),
+      );
+
+      if (!hasTopTagMatch && !hasFileNameConceptMatch) {
         return false;
       }
     }
@@ -401,3 +428,4 @@ export const validateRequestedLoras = async (
     resolved,
   };
 };
+

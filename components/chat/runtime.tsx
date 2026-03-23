@@ -76,6 +76,15 @@ const resolveThreadRemoteId = async (threadListItem: ThreadListItemRuntime) => {
   return initialized.remoteId;
 };
 
+const getThreadSelectionKey = (
+  state: ReturnType<ThreadListItemRuntime["getState"]>,
+) => {
+  const normalized = state as {
+    remoteId?: string | null;
+    externalId?: string | null;
+  };
+  return `${normalized.remoteId ?? "__none__"}|${normalized.externalId ?? "__none__"}`;
+};
 const normalizeIncomingTitle = (title: string | undefined) => {
   const normalized = title?.trim();
   return normalized ? normalized : null;
@@ -916,7 +925,9 @@ function usePersistedChatRuntime(
   );
 
   const loadThread = useCallback(async () => {
-  const remoteId = threadListItem.getState().remoteId;
+  const initialState = threadListItem.getState();
+  const remoteId = initialState.remoteId;
+  const initialSelectionKey = getThreadSelectionKey(initialState);
   const loadRequestId = loadThreadRequestIdRef.current + 1;
   loadThreadRequestIdRef.current = loadRequestId;
 
@@ -941,10 +952,13 @@ function usePersistedChatRuntime(
     }
 
     const data = (await response.json()) as { thread: ThreadApiDetail };
-    const latestRemoteId = threadListItem.getState().remoteId;
+    const latestState = threadListItem.getState();
+    const latestRemoteId = latestState.remoteId;
+    const latestSelectionKey = getThreadSelectionKey(latestState);
     const isStaleLoad =
       loadRequestId !== loadThreadRequestIdRef.current ||
-      latestRemoteId !== remoteId;
+      latestRemoteId !== remoteId ||
+      latestSelectionKey !== initialSelectionKey;
 
     if (isStaleLoad) {
       return;
@@ -1481,6 +1495,7 @@ export function usePersistedRuntime(
     adapter,
   });
 }
+
 
 
 

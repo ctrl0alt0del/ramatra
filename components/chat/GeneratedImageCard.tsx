@@ -87,11 +87,7 @@ function GenerateParamsTooltip({
   const json = JSON.stringify(params, null, 2);
 
   return (
-    <div
-      className="relative"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
+    <div className="relative">
       <button
         type="button"
         onClick={() => setOpen((previous) => !previous)}
@@ -520,7 +516,7 @@ export function GeneratedImageCard({
   };
 
   return (
-    <div className="mt-3 overflow-hidden rounded-2xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-muted))]">
+    <div className="mt-3 overflow-visible rounded-2xl border border-[hsl(var(--aui-border))] bg-[hsl(var(--aui-muted))]">
       {!hasValidTaskId && (
         <div className="space-y-2 p-4">
           <p className="text-sm font-medium">Generation failed</p>
@@ -664,6 +660,8 @@ export function GeneratedImageCard({
     </div>
   );
 }
+
+
 
 
 
