@@ -6,18 +6,23 @@ export const evaluateUtilChainContinuation = ({
   utilEnqueueCount,
   commandNonce,
   knownNonces,
+  stage,
 }: {
   commandDepth: number;
   utilEnqueueCount: number;
   commandNonce: string;
   knownNonces: string[];
+  stage?: string;
 }):
   | { allowed: true }
   | { allowed: false; reason: "depth-limit" | "enqueue-limit" | "duplicate-nonce" } => {
-  if (commandDepth >= MAX_UTIL_COMMAND_DEPTH) {
+  const normalizedStage = stage?.trim().toLowerCase() ?? "";
+  const isCallbackStage = normalizedStage === "callback";
+
+  if (!isCallbackStage && commandDepth >= MAX_UTIL_COMMAND_DEPTH) {
     return { allowed: false, reason: "depth-limit" };
   }
-  if (utilEnqueueCount >= MAX_UTIL_COMMAND_ENQUEUES) {
+  if (!isCallbackStage && utilEnqueueCount >= MAX_UTIL_COMMAND_ENQUEUES) {
     return { allowed: false, reason: "enqueue-limit" };
   }
   if (commandNonce && knownNonces.includes(commandNonce)) {

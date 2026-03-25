@@ -46,6 +46,15 @@ const run = () => {
   if (!nonceBlocked.allowed) {
     assert.equal(nonceBlocked.reason, "duplicate-nonce");
   }
+
+  const callbackAllowedAtLimits = evaluateUtilChainContinuation({
+    commandDepth: MAX_UTIL_COMMAND_DEPTH,
+    utilEnqueueCount: MAX_UTIL_COMMAND_ENQUEUES,
+    commandNonce: "",
+    knownNonces: [],
+    stage: "callback",
+  });
+  assert.equal(callbackAllowedAtLimits.allowed, true);
 };
 
 run();

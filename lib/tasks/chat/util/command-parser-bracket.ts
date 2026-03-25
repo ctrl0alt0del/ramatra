@@ -28,19 +28,32 @@ export const parseBracketUtilCommand = (text: string) => {
     }
 
     const fields: Record<string, string> = {};
+    let currentKey: string | null = null;
     for (const rawLine of body.split(/\r?\n/)) {
       const line = rawLine.trim();
       if (!line) {
+        if (currentKey && fields[currentKey] !== undefined) {
+          fields[currentKey] = `${fields[currentKey]}\n`;
+        }
         continue;
       }
-      const separatorIndex = line.indexOf(":");
-      if (separatorIndex <= 0) {
+
+      const separatorIndex = rawLine.indexOf(":");
+      const rawKey =
+        separatorIndex > 0 ? rawLine.slice(0, separatorIndex).trim().toLowerCase() : "";
+      const isFieldKey = /^[a-z_][a-z0-9_]*$/.test(rawKey);
+
+      if (separatorIndex > 0 && isFieldKey) {
+        const value = rawLine.slice(separatorIndex + 1).trim();
+        fields[rawKey] = value;
+        currentKey = rawKey;
         continue;
       }
-      const key = line.slice(0, separatorIndex).trim().toLowerCase();
-      const value = line.slice(separatorIndex + 1).trim();
-      if (key && value) {
-        fields[key] = value;
+
+      if (currentKey && fields[currentKey] !== undefined) {
+        fields[currentKey] = fields[currentKey]
+          ? `${fields[currentKey]}\n${line}`
+          : line;
       }
     }
 

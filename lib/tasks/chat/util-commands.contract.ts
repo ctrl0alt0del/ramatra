@@ -27,6 +27,24 @@ context_text: Positive Prompt: X; Negative Prompt: Y
 
   {
     const parsed = parseChatStreamCommandFromOutputs({
+      text: `[[util_task@persistent]]
+stage: callback
+context_text: Generation started. Use marker payload.
+
+[[COMFY_JOB:{"taskId":"abc"}]]
+[[/util_task]]`,
+      reasoning: "",
+      allowReasoningFallback: false,
+    });
+    assert.equal(parsed.command?.stage, "callback");
+    assert.equal(
+      parsed.command?.context_text,
+      `Generation started. Use marker payload.\n\n[[COMFY_JOB:{"taskId":"abc"}]]`,
+    );
+  }
+
+  {
+    const parsed = parseChatStreamCommandFromOutputs({
       text: `[[util_task]]
 stage: img_gen_<WORKFLOW>_finalize
 context_text: abc

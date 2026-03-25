@@ -47,6 +47,7 @@ export const validateAndLogConversationUtilCommand = ({
     utilEnqueueCount,
     commandNonce,
     knownNonces,
+    stage: parsedCommand.command.stage,
   });
   if (!chainPolicy.allowed) {
     if (chainPolicy.reason === "depth-limit") {

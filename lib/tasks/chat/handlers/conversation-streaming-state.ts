@@ -26,8 +26,16 @@ export const createConversationStreamingState = ({
   let streamedText = initialText;
   let streamedReasoning = initialReasoning;
   const inRequestCompactionBreakOffsets: number[] = [];
+  let lastPublishedAt = 0;
+  const MIN_RUNNING_PUBLISH_INTERVAL_MS = 80;
 
   const publishRunningResult = (responseId: string | null) => {
+    const now = Date.now();
+    if (now - lastPublishedAt < MIN_RUNNING_PUBLISH_INTERVAL_MS) {
+      return;
+    }
+    lastPublishedAt = now;
+
     const displayText = applyCompactionMarkersToText(
       streamedText,
       inRequestCompactionBreakOffsets,

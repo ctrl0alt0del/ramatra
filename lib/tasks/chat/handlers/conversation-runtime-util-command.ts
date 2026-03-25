@@ -38,6 +38,17 @@ export const continueConversationRuntimeUtilCommandIfNeeded = ({
     reasoning,
     allowReasoningFallback: false,
   });
+  console.info("[chat-runner] util-command:parse-result", {
+    taskGroupId: task.id,
+    threadId: task.payload.threadId ?? null,
+    utilTaskName:
+      task.payload.kind === "conversation" ? (task.payload.utilTaskName ?? null) : null,
+    source: parsedCommand.source,
+    hasCommand: Boolean(parsedCommand.command),
+    stage: parsedCommand.command?.stage ?? null,
+    textPreview: text.slice(0, 400),
+    reasoningPreview: reasoning.slice(0, 400),
+  });
 
   if (task.payload.kind !== "conversation") {
     return {
@@ -63,6 +74,17 @@ export const continueConversationRuntimeUtilCommandIfNeeded = ({
   });
 
   parsedCommand = conversationCommandResult.parsedCommand;
+  if (!conversationCommandResult.continued) {
+    console.info("[chat-runner] util-command:not-continued", {
+      taskGroupId: task.id,
+      threadId: task.payload.threadId ?? null,
+      utilTaskName: task.payload.utilTaskName ?? null,
+      source: parsedCommand.source,
+      hasCommand: Boolean(parsedCommand.command),
+      stage: parsedCommand.command?.stage ?? null,
+      cleanTextPreview: parsedCommand.cleanText.slice(0, 300),
+    });
+  }
   return {
     continued: conversationCommandResult.continued,
     parsedCommand,

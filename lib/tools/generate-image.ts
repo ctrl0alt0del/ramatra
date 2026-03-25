@@ -418,7 +418,7 @@ export const registerGenerateImageMcpTool = (server: McpServer) => {
           {
             type: "text",
             text: result.ok
-              ? "Generation started. Include the marker below exactly once and verbatim in your final response.\n\n" +
+              ? "Generation started. Use the marker below exactly once and verbatim as your handoff payload.\n\n" +
                 result.marker
               : result.error,
           },
@@ -427,6 +427,7 @@ export const registerGenerateImageMcpTool = (server: McpServer) => {
     },
   );
 };
+
 
 
 

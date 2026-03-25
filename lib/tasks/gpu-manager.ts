@@ -3,6 +3,7 @@ import {
   ensureLmStudioModelLoaded,
   formatLoadedLmStudioModelsForDebug,
   getLoadedChatInstanceId,
+  isTransientLmStudioFetchError,
   listLoadedLmStudioModels,
   unloadAllLmStudioModels,
 } from "@/lib/lmstudio/models";
@@ -151,10 +152,30 @@ export const prepareChatGpuForTaskGroup = async (
 ) => {
   const contextLength = resolveChatTaskContextLength(task);
   const modelKey = getChatModelKey();
-  await ensureLmStudioModelLoaded({
-    modelKey,
-    contextLength,
-  });
+  try {
+    await ensureLmStudioModelLoaded({
+      modelKey,
+      contextLength,
+    });
+  } catch (error) {
+    if (!isTransientLmStudioFetchError(error)) {
+      throw error;
+    }
+
+    console.warn("[gpu-manager] prepare-chat-task-group:transient-retry", {
+      taskGroupId: task.id,
+      kind: task.payload.kind,
+      contextLength,
+      modelKey,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await ensureLmStudioModelLoaded({
+      modelKey,
+      contextLength,
+    });
+  }
   if (getSchedulerState().gpuMode !== "chat") {
     setSchedulerGpuMode("chat");
   }

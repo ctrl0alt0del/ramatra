@@ -16,6 +16,13 @@ const logTaskOrchestration = (phase: string, payload: Record<string, unknown>) =
   console.info(`[task-orch] ${phase}`, payload);
 };
 
+const formatProcessorErrorMessage = (error: unknown) => {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return String(error);
+};
+
 export const processTaskQueues = async () => {
   if (globalThis.__comfyBridgeTaskProcessorPromise) {
     return globalThis.__comfyBridgeTaskProcessorPromise;
@@ -92,22 +99,39 @@ export const processTaskQueues = async () => {
         kind: groupTask.kind,
       });
 
-      if (task.type === "chat") {
-        const { prepareChatGpuForTaskGroup } = await import("@/lib/tasks/gpu-manager");
-        await prepareChatGpuForTaskGroup(task);
-        const { executeQueuedChatTask } = await import("@/lib/tasks/chat-runner");
-        await executeQueuedChatTask(task.id, groupTask.kind);
+      try {
+        if (task.type === "chat") {
+          if (groupTask.kind !== "chat.stream") {
+            const { prepareChatGpuForTaskGroup } = await import("@/lib/tasks/gpu-manager");
+            await prepareChatGpuForTaskGroup(task);
+          }
+          const { executeQueuedChatTask } = await import("@/lib/tasks/chat-runner");
+          await executeQueuedChatTask(task.id, groupTask.kind);
+          continue;
+        }
+
+        const { executeQueuedComfyTask } = await import("@/lib/tasks/comfy-runner");
+        console.info("[comfy-debug] processor:execute-comfy-step", {
+          taskGroupId: task.id,
+          groupTaskId: groupTask.id,
+          kind: groupTask.kind,
+        });
+        await executeQueuedComfyTask(task.id, groupTask.kind);
+        break;
+      } catch (error) {
+        const errorMessage = formatProcessorErrorMessage(error);
+        console.error("[task-orch] task:execute-failed", {
+          taskGroupId: task.id,
+          taskId: groupTask.id,
+          kind: groupTask.kind,
+          error: errorMessage,
+        });
+        markTaskFailed(task.id, errorMessage);
+        logTaskOrchestration("group:failed", {
+          taskGroupId: task.id,
+        });
         continue;
       }
-
-      const { executeQueuedComfyTask } = await import("@/lib/tasks/comfy-runner");
-      console.info("[comfy-debug] processor:execute-comfy-step", {
-        taskGroupId: task.id,
-        groupTaskId: groupTask.id,
-        kind: groupTask.kind,
-      });
-      await executeQueuedComfyTask(task.id, groupTask.kind);
-      break;
     }
   })();
 

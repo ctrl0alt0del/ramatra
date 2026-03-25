@@ -57,6 +57,14 @@ export const normalizeUtilStageForImageChain = ({
   }
 
   if (currentUtilTaskName === "img_gen_workflow") {
+    if (parsedStage === "callback") {
+      return {
+        accepted: true,
+        stage: parsedStage,
+        persistent: parsedPersistent,
+        normalized: false,
+      };
+    }
     if (parsedStage === "img_gen_loras") {
       return {
         accepted: true,
@@ -72,6 +80,14 @@ export const normalizeUtilStageForImageChain = ({
   }
 
   if (currentUtilTaskName === "img_gen_loras") {
+    if (parsedStage === "callback") {
+      return {
+        accepted: true,
+        stage: parsedStage,
+        persistent: parsedPersistent,
+        normalized: false,
+      };
+    }
     if (/^img_gen_(base|illustration|edit)_finalize$/.test(parsedStage)) {
       return {
         accepted: true,
@@ -102,6 +118,14 @@ export const normalizeUtilStageForImageChain = ({
   }
 
   if (/^img_gen_(base|illustration|edit)_finalize$/.test(currentUtilTaskName)) {
+    if (parsedStage === "callback") {
+      return {
+        accepted: true,
+        stage: parsedStage,
+        persistent: parsedPersistent,
+        normalized: false,
+      };
+    }
     return {
       accepted: false,
       reason: `no next util stage expected after ${currentUtilTaskName}`,

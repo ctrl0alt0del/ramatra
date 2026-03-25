@@ -49,11 +49,26 @@ export const executeQueuedChatTask = async (
       error instanceof Error ? error.message : "Chat task failed.",
     );
   } finally {
-    await cleanupChatTaskLmStudioState({
-      taskId,
-      getChatModelKey: runChatTaskPipelineDeps.getChatModelKey,
-      logChatModelDebug,
-    });
+    const latestTask = taskRepository.getById(taskId);
+    const shouldDeferCleanup =
+      latestTask?.type === "chat" &&
+      latestTask.status === "running" &&
+      (latestTask.payload.tasks ?? []).some(
+        (groupTask) =>
+          groupTask.status === "pending" || groupTask.status === "running",
+      );
+
+    if (!shouldDeferCleanup) {
+      await cleanupChatTaskLmStudioState({
+        taskId,
+        getChatModelKey: runChatTaskPipelineDeps.getChatModelKey,
+        logChatModelDebug,
+      });
+    } else {
+      console.info("[chat-runner] cleanup:deferred", {
+        taskId,
+      });
+    }
 
     void processTaskQueues();
   }
