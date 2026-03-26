@@ -236,6 +236,20 @@ const ensureSchema = (db: Database.Database) => {
 
     CREATE INDEX IF NOT EXISTS idx_direct_comfy_history_created_at
       ON direct_comfy_history(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS downloaded_loras (
+      installed_path TEXT PRIMARY KEY,
+      base_model TEXT NOT NULL,
+      source_url TEXT,
+      model_id INTEGER,
+      model_url TEXT,
+      trained_words_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_downloaded_loras_model_id
+      ON downloaded_loras(model_id);
   `);
 
   const promptModeSettingsSqlRow = db

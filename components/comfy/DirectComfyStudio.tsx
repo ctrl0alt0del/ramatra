@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import extractJsonFromString from "extract-json-from-string";
 
 type WorkflowName = "base" | "illustration" | "edit";
 
 type LoraItem = {
   name: string;
   top_tag: string | null;
+  trained_words?: string[];
 };
 
 type GenerationHistoryItem = {
@@ -57,6 +59,7 @@ type StudioAssistantTaskEvent =
     };
 
 type AssistantLoraOption = {
+  modelId: number | null;
   name: string;
   model: string;
   likes: number;
@@ -64,12 +67,46 @@ type AssistantLoraOption = {
   imageUrl: string | null;
   downloadUrl: string;
   fileName: string | null;
+  modelUrl: string | null;
+  trainedWords: string[];
   baseModel: "sdxl" | "illustrious" | "chroma" | "qwen";
 };
+
+type LoraDownloadProgress = {
+  phase: "starting" | "downloading" | "saving" | "completed";
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percentage: number | null;
+};
+
+type LoraDownloadStreamEvent =
+  | ({ type: "progress" } & LoraDownloadProgress)
+  | {
+      type: "completed";
+      ok?: boolean;
+      installedPath?: string;
+      bytes?: number;
+    }
+  | {
+      type: "error";
+      error?: string;
+    };
 
 type ParsedAssistantOptions = {
   cleanText: string;
   items: AssistantLoraOption[];
+};
+
+type AssistantPromptEnhance = {
+  workflowName: WorkflowName;
+  enhancedPrompt: string;
+  negativePrompt: string;
+  notes: string;
+};
+
+type ParsedAssistantPayload = {
+  loraItems: AssistantLoraOption[];
+  promptEnhance: AssistantPromptEnhance | null;
 };
 
 const samplerOptions = [
@@ -254,16 +291,54 @@ const normalizeAssistantLoraItems = (value: unknown): AssistantLoraOption[] => {
 
       return {
         name: record.name,
+        modelId:
+          typeof record.modelId === "number" && Number.isFinite(record.modelId)
+            ? record.modelId
+            : null,
         model: record.model,
         likes: record.likes,
         downloads: record.downloads,
         imageUrl: typeof record.imageUrl === "string" ? record.imageUrl : null,
         downloadUrl: record.downloadUrl,
         fileName: typeof record.fileName === "string" ? record.fileName : null,
+        modelUrl: typeof record.modelUrl === "string" ? record.modelUrl : null,
+        trainedWords: Array.isArray(record.trainedWords)
+          ? record.trainedWords.filter(
+              (word): word is string => typeof word === "string" && word.trim().length > 0,
+            )
+          : [],
         baseModel,
       } satisfies AssistantLoraOption;
     })
     .filter((item): item is AssistantLoraOption => item !== null);
+};
+
+const normalizeAssistantPromptEnhance = (value: unknown): AssistantPromptEnhance | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const workflowName =
+    record.workflowName === "base" ||
+    record.workflowName === "illustration" ||
+    record.workflowName === "edit"
+      ? record.workflowName
+      : null;
+  if (
+    !workflowName ||
+    typeof record.enhancedPrompt !== "string" ||
+    typeof record.negativePrompt !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    workflowName,
+    enhancedPrompt: record.enhancedPrompt,
+    negativePrompt: record.negativePrompt,
+    notes: typeof record.notes === "string" ? record.notes : "",
+  };
 };
 
 const parseAssistantLoraOptions = (text: string): ParsedAssistantOptions => {
@@ -313,6 +388,64 @@ const parseAssistantLoraOptions = (text: string): ParsedAssistantOptions => {
     items: [],
   };
 };
+
+const parseAssistantPayload = (text: string): ParsedAssistantPayload => {
+  const source = text.trim();
+  const parsedLora = parseAssistantLoraOptions(source);
+  if (parsedLora.items.length > 0) {
+    return {
+      loraItems: parsedLora.items,
+      promptEnhance: null,
+    };
+  }
+
+  const extractedCandidates = extractJsonFromString(source);
+  for (const candidate of extractedCandidates) {
+    const promptEnhance = normalizeAssistantPromptEnhance(candidate);
+    if (promptEnhance) {
+      return {
+        loraItems: [],
+        promptEnhance,
+      };
+    }
+  }
+
+  const directPromptEnhance = normalizeAssistantPromptEnhance(
+    (() => {
+      try {
+        return JSON.parse(source) as unknown;
+      } catch {
+        return null;
+      }
+    })(),
+  );
+  if (directPromptEnhance) {
+    return {
+      loraItems: [],
+      promptEnhance: directPromptEnhance,
+    };
+  }
+
+  return {
+    loraItems: [],
+    promptEnhance: null,
+  };
+};
+
+const formatByteSize = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+};
+
 export function DirectComfyStudio() {
   const [workflowName, setWorkflowName] = useState<WorkflowName>("base");
   const [positivePrompt, setPositivePrompt] = useState("");
@@ -343,12 +476,19 @@ export function DirectComfyStudio() {
   const [splitPresetIndex, setSplitPresetIndex] = useState(0);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [assistantInput, setAssistantInput] = useState("");
-  const [assistantOutput, setAssistantOutput] = useState("");
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [assistantNotice, setAssistantNotice] = useState<string | null>(null);
   const [assistantLoraOptions, setAssistantLoraOptions] = useState<AssistantLoraOption[]>([]);
+  const [assistantPromptEnhance, setAssistantPromptEnhance] =
+    useState<AssistantPromptEnhance | null>(null);
   const [downloadingLoraUrl, setDownloadingLoraUrl] = useState<string | null>(null);
+  const [deletingLoraName, setDeletingLoraName] = useState<string | null>(null);
+  const [downloadProgressByUrl, setDownloadProgressByUrl] = useState<
+    Record<string, LoraDownloadProgress>
+  >({});
   const [isAssistantRunning, setIsAssistantRunning] = useState(false);
+  const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
+  const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const assistantStreamRef = useRef<EventSource | null>(null);
 
   const [widthInput, setWidthInput] = useState(String(workflowDefaults.base.width));
@@ -376,6 +516,16 @@ export function DirectComfyStudio() {
       historyClass: "lg:basis-[75%]",
     },
   ] as const;
+
+  const suggestLoraBaseModel = (workflow: WorkflowName): "sdxl" | "illustrious" | "qwen" => {
+    if (workflow === "edit") {
+      return "qwen";
+    }
+    if (workflow === "illustration") {
+      return "illustrious";
+    }
+    return "sdxl";
+  };
 
   useEffect(() => {
     const defaults = workflowDefaults[workflowName];
@@ -560,6 +710,134 @@ export function DirectComfyStudio() {
     setSelectedLoras(mappedLoras);
   };
 
+  const appendTriggerWordToPrompt = (word: string) => {
+    const nextWord = word.trim();
+    if (!nextWord) {
+      return;
+    }
+    setPositivePrompt((previous) => {
+      const trimmed = previous.trim();
+      if (!trimmed) {
+        return nextWord;
+      }
+      if (trimmed.toLowerCase().includes(nextWord.toLowerCase())) {
+        return previous;
+      }
+      return `${trimmed}, ${nextWord}`;
+    });
+  };
+
+  const deleteLoraItem = async (item: LoraItem) => {
+    setError(null);
+    setDeletingLoraName(item.name);
+    try {
+      const response = await fetch("/api/comfy/loras", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: item.name }),
+      });
+
+      const data = (await response.json()) as { deleted?: boolean; error?: string };
+      if (!response.ok || !data.deleted) {
+        throw new Error(data.error ?? `Failed to delete LoRA (${response.status})`);
+      }
+
+      setAvailableLoras((previous) => previous.filter((entry) => entry.name !== item.name));
+      setSelectedLoras((previous) => {
+        const next = { ...previous };
+        delete next[item.name];
+        return next;
+      });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to delete LoRA.");
+    } finally {
+      setDeletingLoraName(null);
+    }
+  };
+
+  const deleteHistoryItem = async (item: GenerationHistoryItem) => {
+    setError(null);
+    setDeletingHistoryId(item.id);
+    try {
+      const response = await fetch(
+        `/api/comfy/studio-history?id=${encodeURIComponent(item.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+      const data = (await response.json()) as { deleted?: boolean; error?: string };
+      if (!response.ok) {
+        throw new Error(data.error ?? `Failed to delete history item (${response.status})`);
+      }
+      if (!data.deleted) {
+        throw new Error("History item was not deleted.");
+      }
+      setHistory((previous) => previous.filter((entry) => entry.id !== item.id));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to delete history item.");
+    } finally {
+      setDeletingHistoryId(null);
+    }
+  };
+
+  const editFromHistoryItem = async (item: GenerationHistoryItem) => {
+    setError(null);
+    if (item.images.length === 0) {
+      setError("This history item has no generated image to use for edit.");
+      return;
+    }
+
+    setEditingHistoryId(item.id);
+    try {
+      const firstImage = item.images[0];
+      const imageResponse = await fetch(firstImage);
+      if (!imageResponse.ok) {
+        throw new Error("Failed to read history image.");
+      }
+      const imageBlob = await imageResponse.blob();
+      const extension = imageBlob.type.includes("png") ? "png" : "jpg";
+      const formData = new FormData();
+      formData.append(
+        "files",
+        new File([imageBlob], `history-edit-${item.id}.${extension}`, {
+          type: imageBlob.type || "image/png",
+        }),
+      );
+
+      const uploadResponse = await fetch("/api/comfy/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const uploadData = (await uploadResponse.json()) as {
+        files?: string[];
+        error?: string;
+      };
+      if (!uploadResponse.ok) {
+        throw new Error(uploadData.error ?? `Upload failed (${uploadResponse.status})`);
+      }
+
+      const nextFiles = Array.isArray(uploadData.files) ? uploadData.files : [];
+      if (nextFiles.length === 0) {
+        throw new Error("Uploaded image file was not returned.");
+      }
+
+      setWorkflowName("edit");
+      setUploadedInputImages((previous) => {
+        const merged = [...nextFiles, ...previous];
+        return merged.filter((value, index, list) => list.indexOf(value) === index);
+      });
+      setAssistantNotice("Switched to edit workflow and added image from history as input.");
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : "Failed to prepare edit from history.",
+      );
+    } finally {
+      setEditingHistoryId(null);
+    }
+  };
+
   const toNormalizedNumber = (
     raw: string,
     fallback: number,
@@ -632,8 +910,8 @@ export function DirectComfyStudio() {
     assistantStreamRef.current?.close();
     assistantStreamRef.current = null;
     setIsAssistantRunning(true);
-    setAssistantOutput("");
     setAssistantLoraOptions([]);
+    setAssistantPromptEnhance(null);
 
     try {
       const response = await fetch("/api/comfy/studio-assistant", {
@@ -690,11 +968,19 @@ export function DirectComfyStudio() {
               return;
             }
 
-            const parsed = parseAssistantLoraOptions(payload.text ?? "");
-            setAssistantOutput(parsed.cleanText);
-            setAssistantLoraOptions(parsed.items);
+            const parsed = parseAssistantPayload(payload.text ?? "");
+            setAssistantLoraOptions(parsed.loraItems);
+            setAssistantPromptEnhance(parsed.promptEnhance);
 
             if (payload.status === "completed") {
+              if (
+                parsed.loraItems.length === 0 &&
+                parsed.promptEnhance === null
+              ) {
+                setAssistantError(
+                  "Assistant did not return a supported structured payload. Try rephrasing your request.",
+                );
+              }
               finish(() => resolve());
             }
           } catch {
@@ -719,6 +1005,20 @@ export function DirectComfyStudio() {
     setAssistantError(null);
     setAssistantNotice(null);
     setDownloadingLoraUrl(item.downloadUrl);
+    const civitaiModelUrl =
+      item.modelUrl ??
+      (typeof item.modelId === "number" && Number.isFinite(item.modelId)
+        ? `https://civitai.com/models/${item.modelId}`
+        : null);
+    setDownloadProgressByUrl((previous) => ({
+      ...previous,
+      [item.downloadUrl]: {
+        phase: "starting",
+        downloadedBytes: 0,
+        totalBytes: null,
+        percentage: null,
+      },
+    }));
 
     try {
       const response = await fetch("/api/comfy/studio-assistant/download", {
@@ -730,20 +1030,95 @@ export function DirectComfyStudio() {
           url: item.downloadUrl,
           baseModel: item.baseModel,
           fileName: item.fileName ?? undefined,
+          modelId:
+            typeof item.modelId === "number" && Number.isFinite(item.modelId)
+              ? item.modelId
+              : undefined,
+          modelUrl: civitaiModelUrl ?? undefined,
+          trainedWords: item.trainedWords,
         }),
       });
 
-      const data = (await response.json()) as {
-        ok?: boolean;
-        installedPath?: string;
-        error?: string;
-      };
-
-      if (!response.ok || data.ok !== true) {
+      if (!response.ok) {
+        const data = (await response.json()) as {
+          ok?: boolean;
+          installedPath?: string;
+          error?: string;
+        };
         throw new Error(data.error ?? `Download failed (${response.status})`);
       }
 
-      setAssistantNotice(`Installed: ${data.installedPath ?? "unknown path"}`);
+      if (!response.body) {
+        throw new Error("Download stream is not available.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      let completedInstalledPath: string | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffered += decoder.decode(value, { stream: true });
+        const lines = buffered.split("\n");
+        buffered = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            continue;
+          }
+
+          let event: LoraDownloadStreamEvent;
+          try {
+            event = JSON.parse(trimmed) as LoraDownloadStreamEvent;
+          } catch {
+            continue;
+          }
+
+          if (event.type === "progress") {
+            setDownloadProgressByUrl((previous) => ({
+              ...previous,
+              [item.downloadUrl]: {
+                phase: event.phase,
+                downloadedBytes: event.downloadedBytes,
+                totalBytes: event.totalBytes,
+                percentage: event.percentage,
+              },
+            }));
+            continue;
+          }
+
+          if (event.type === "error") {
+            throw new Error(event.error ?? "LoRA download failed.");
+          }
+
+          if (event.type === "completed") {
+            completedInstalledPath =
+              typeof event.installedPath === "string" ? event.installedPath : null;
+            setDownloadProgressByUrl((previous) => ({
+              ...previous,
+              [item.downloadUrl]: {
+                phase: "completed",
+                downloadedBytes: Number.isFinite(event.bytes ?? NaN)
+                  ? Number(event.bytes)
+                  : previous[item.downloadUrl]?.downloadedBytes ?? 0,
+                totalBytes: previous[item.downloadUrl]?.totalBytes ?? null,
+                percentage: 100,
+              },
+            }));
+          }
+        }
+      }
+
+      if (!completedInstalledPath) {
+        throw new Error("Download completed without install confirmation.");
+      }
+
+      setAssistantNotice(`Installed: ${completedInstalledPath}`);
       setIsLoadingLoras(true);
       try {
         const loraResponse = await fetch(`/api/comfy/loras?workflowName=${workflowName}`);
@@ -760,6 +1135,11 @@ export function DirectComfyStudio() {
       );
     } finally {
       setDownloadingLoraUrl(null);
+      setDownloadProgressByUrl((previous) => {
+        const next = { ...previous };
+        delete next[item.downloadUrl];
+        return next;
+      });
     }
   };
   const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -991,7 +1371,7 @@ export function DirectComfyStudio() {
             <div>
               <h1 className="text-lg font-semibold text-[hsl(var(--aui-foreground))]">Studio Assistant</h1>
               <p className="text-xs text-[hsl(var(--aui-muted-foreground))]">
-                Find LoRAs and download manually.
+                Find LoRAs or enhance prompts per workflow.
               </p>
             </div>
             <button
@@ -1011,7 +1391,7 @@ export function DirectComfyStudio() {
                   className={`${controlClassName} h-20 resize-y`}
                   value={assistantInput}
                   onChange={(event) => setAssistantInput(event.target.value)}
-                  placeholder="Find LoRA for Nolan from Invincible for Illustrious"
+                  placeholder="Find LoRA for Nolan (Illustrious) or enhance this prompt for edit workflow..."
                 />
               </label>
               <button
@@ -1019,7 +1399,7 @@ export function DirectComfyStudio() {
                 className="rounded-lg border border-[hsl(var(--aui-border))] bg-white/90 px-3 py-1.5 text-xs font-medium disabled:opacity-50"
                 disabled={isAssistantRunning}
               >
-                {isAssistantRunning ? "Searching..." : "Find LoRAs"}
+                {isAssistantRunning ? "Working..." : "Ask Assistant"}
               </button>
             </form>
 
@@ -1035,55 +1415,194 @@ export function DirectComfyStudio() {
               </p>
             ) : null}
 
-            {assistantOutput ? (
-              <p className="mt-2 text-xs text-[hsl(var(--aui-muted-foreground))]">{assistantOutput}</p>
+            {assistantPromptEnhance ? (
+              <article className="mt-2 rounded-lg border border-[hsl(var(--aui-border))] bg-white p-2">
+                <p className="text-xs font-semibold text-[hsl(var(--aui-foreground))]">
+                  Prompt Enhancement ({assistantPromptEnhance.workflowName})
+                </p>
+                <p className="mt-1 text-[11px] text-[hsl(var(--aui-muted-foreground))]">
+                  {assistantPromptEnhance.notes || "Ready to apply to Direct Comfy form."}
+                </p>
+                <div className="mt-2 space-y-2 rounded-md border border-[hsl(var(--aui-border))] bg-white/70 p-2">
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--aui-muted-foreground))]">
+                      Enhanced Prompt
+                    </p>
+                    <p className="text-xs text-[hsl(var(--aui-foreground))]">
+                      {assistantPromptEnhance.enhancedPrompt}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-[hsl(var(--aui-muted-foreground))]">
+                      Negative Prompt
+                    </p>
+                    <p className="text-xs text-[hsl(var(--aui-foreground))]">
+                      {assistantPromptEnhance.negativePrompt}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="mt-2 rounded-md border border-[hsl(var(--aui-border))] bg-white/90 px-2 py-1 text-xs font-medium"
+                  onClick={() => {
+                    setWorkflowName(assistantPromptEnhance.workflowName);
+                    setPositivePrompt(assistantPromptEnhance.enhancedPrompt);
+                    setNegativePrompt(assistantPromptEnhance.negativePrompt);
+                    setAssistantNotice("Applied enhanced prompt to Direct Comfy form.");
+                  }}
+                >
+                  Apply to Form
+                </button>
+              </article>
             ) : null}
 
-            <div className="mt-2 space-y-2">
-              {assistantLoraOptions.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-[hsl(var(--aui-border))] bg-white/70 p-2 text-xs text-[hsl(var(--aui-muted-foreground))]">
-                  LoRA options will appear here after search.
+            <div className="mt-2">
+              {isAssistantRunning &&
+              assistantLoraOptions.length === 0 &&
+              assistantPromptEnhance === null ? (
+                <div className="rounded-lg border border-[hsl(var(--aui-border))] bg-white/80 p-3">
+                  <div className="flex items-center gap-2 text-xs font-medium text-[hsl(var(--aui-foreground))]">
+                    <span className="inline-block h-2 w-2 animate-ping rounded-full bg-[hsl(var(--aui-primary))]" />
+                    Preparing structured result...
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    <div className="h-3 w-2/3 animate-pulse rounded bg-[hsl(var(--aui-muted))]" />
+                    <div className="h-3 w-full animate-pulse rounded bg-[hsl(var(--aui-muted))]" />
+                    <div className="h-20 w-full animate-pulse rounded bg-[hsl(var(--aui-muted))]" />
+                  </div>
                 </div>
-              ) : (
-                assistantLoraOptions.map((item, index) => {
-                  const ratio = item.downloads > 0 ? item.likes / item.downloads : 0;
-                  return (
-                    <article key={`${item.downloadUrl}-${index}`} className="rounded-lg border border-[hsl(var(--aui-border))] bg-white p-2">
-                      <div className="flex gap-2">
+              ) : null}
+
+              {assistantLoraOptions.length === 0 &&
+              assistantPromptEnhance === null &&
+              !isAssistantRunning ? (
+                <div className="rounded-lg border border-dashed border-[hsl(var(--aui-border))] bg-white/70 p-2 text-xs text-[hsl(var(--aui-muted-foreground))]">
+                  Structured assistant results will appear here.
+                </div>
+              ) : assistantLoraOptions.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {assistantLoraOptions.map((item, index) => {
+                    const ratio = item.downloads > 0 ? item.likes / item.downloads : 0;
+                    const downloadProgress = downloadProgressByUrl[item.downloadUrl] ?? null;
+                    const civitaiModelUrl =
+                      item.modelUrl ??
+                      (typeof item.modelId === "number" && Number.isFinite(item.modelId)
+                        ? `https://civitai.com/models/${item.modelId}`
+                        : null);
+                    return (
+                      <article
+                        key={`${item.downloadUrl}-${index}`}
+                        className="group relative overflow-hidden rounded-xl border border-white/20 bg-[#10151f] shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
+                      >
                         {item.imageUrl ? (
-                          <img
-                            src={item.imageUrl}
-                            alt={item.name}
-                            className="h-16 w-16 rounded-md border border-[hsl(var(--aui-border))] object-cover"
-                          />
+                          <div className="relative aspect-[4/5] w-full bg-[#182132]">
+                            <img
+                              src={item.imageUrl}
+                              alt=""
+                              aria-hidden="true"
+                              className="absolute inset-0 h-full w-full scale-105 object-cover opacity-35 blur-sm"
+                            />
+                            <img
+                              src={item.imageUrl}
+                              alt={item.name}
+                              className="absolute inset-0 h-full w-full object-contain p-1 transition-transform duration-300 group-hover:scale-[1.02]"
+                            />
+                          </div>
                         ) : (
-                          <div className="flex h-16 w-16 items-center justify-center rounded-md border border-[hsl(var(--aui-border))] text-[10px] text-[hsl(var(--aui-muted-foreground))]">
-                            no image
+                          <div className="flex aspect-[4/5] w-full items-center justify-center bg-[#182132] text-xs text-white/60">
+                            No preview image
                           </div>
                         )}
 
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-semibold text-[hsl(var(--aui-foreground))]">{item.name}</p>
-                          <p className="truncate text-[11px] text-[hsl(var(--aui-muted-foreground))]">{item.model}</p>
-                          <p className="text-[11px] text-[hsl(var(--aui-muted-foreground))]">
-                            {item.likes} likes / {item.downloads} downloads (ratio {ratio.toFixed(3)})
-                          </p>
-                          <p className="text-[11px] text-[hsl(var(--aui-muted-foreground))]">base: {item.baseModel}</p>
-                        </div>
-                      </div>
+                        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
 
-                      <button
-                        type="button"
-                        className="mt-2 rounded-md border border-[hsl(var(--aui-border))] bg-white/90 px-2 py-1 text-xs font-medium disabled:opacity-50"
-                        onClick={() => onDownloadLora(item)}
-                        disabled={downloadingLoraUrl === item.downloadUrl}
-                      >
-                        {downloadingLoraUrl === item.downloadUrl ? "Downloading..." : "Download"}
-                      </button>
-                    </article>
-                  );
-                })
-              )}
+                        <div className="absolute left-2 top-2 flex items-center gap-1">
+                          <span className="rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                            LoRA
+                          </span>
+                          <span className="rounded-full bg-blue-500/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                            {item.baseModel}
+                          </span>
+                        </div>
+
+                        <div className="absolute inset-x-0 bottom-0 p-3">
+                          <p className="line-clamp-2 text-base font-semibold leading-tight text-white">
+                            {item.name}
+                          </p>
+                          <p className="mt-1 truncate text-xs text-white/75">{item.model}</p>
+
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <span className="rounded-md bg-white/15 px-1.5 py-0.5 text-[11px] text-white">
+                              likes {item.likes}
+                            </span>
+                            <span className="rounded-md bg-white/15 px-1.5 py-0.5 text-[11px] text-white">
+                              dl {item.downloads}
+                            </span>
+                            <span className="rounded-md bg-white/15 px-1.5 py-0.5 text-[11px] text-white">
+                              ratio {ratio.toFixed(3)}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              className="rounded-lg border border-white/30 bg-black/40 px-2 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                              onClick={() => {
+                                if (!civitaiModelUrl) {
+                                  return;
+                                }
+                                window.open(civitaiModelUrl, "_blank", "noopener,noreferrer");
+                              }}
+                              disabled={!civitaiModelUrl}
+                            >
+                              Open Civitai
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-lg border border-white/20 bg-white/90 px-2 py-1.5 text-xs font-semibold text-[#0d1522] disabled:opacity-50"
+                              onClick={() => onDownloadLora(item)}
+                              disabled={downloadingLoraUrl === item.downloadUrl}
+                            >
+                              {downloadingLoraUrl === item.downloadUrl
+                                ? "Downloading..."
+                                : "Download LoRA"}
+                            </button>
+                          </div>
+                          {downloadProgress ? (
+                            <div className="mt-2 space-y-1">
+                              <div className="flex items-center justify-between text-[11px] text-white/85">
+                                <span className="capitalize">{downloadProgress.phase}</span>
+                                <span>
+                                  {downloadProgress.percentage !== null
+                                    ? `${downloadProgress.percentage}%`
+                                    : "--"}
+                                </span>
+                              </div>
+                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/20">
+                                <div
+                                  className="h-full rounded-full bg-white/90 transition-all"
+                                  style={{
+                                    width: `${Math.max(
+                                      4,
+                                      Math.min(100, downloadProgress.percentage ?? 8),
+                                    )}%`,
+                                  }}
+                                />
+                              </div>
+                              <p className="text-[10px] text-white/70">
+                                {formatByteSize(downloadProgress.downloadedBytes)}
+                                {downloadProgress.totalBytes !== null
+                                  ? ` / ${formatByteSize(downloadProgress.totalBytes)}`
+                                  : ""}
+                              </p>
+                            </div>
+                          ) : null}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           </div>
         </section>
@@ -1125,7 +1644,23 @@ export function DirectComfyStudio() {
             </label>
 
             <label className="block text-xs font-medium text-[hsl(var(--aui-foreground))]">
-              Positive Prompt
+              <span className="flex items-center justify-between gap-2">
+                <span>Positive Prompt</span>
+                <button
+                  type="button"
+                  className="rounded-md border border-[hsl(var(--aui-border))] bg-white/90 px-2 py-0.5 text-[10px] font-medium text-[hsl(var(--aui-muted-foreground))]"
+                  onClick={() => {
+                    const base = `Enhance prompt for ${workflowName}:\n\n`;
+                    const existing = positivePrompt.trim();
+                    setAssistantInput(existing ? `${base}${existing}` : base);
+                    setIsAssistantOpen(true);
+                  }}
+                  title="Open Studio Assistant with enhance template"
+                  aria-label="Help with prompt"
+                >
+                  Help
+                </button>
+              </span>
               <textarea
                 className={`${controlClassName} h-28 resize-y`}
                 value={positivePrompt}
@@ -1308,32 +1843,87 @@ export function DirectComfyStudio() {
             </div>
 
             <section className="rounded-2xl border border-[hsl(var(--aui-border))] bg-white/70 p-3">
-              <p className="mb-2 text-xs font-semibold text-[hsl(var(--aui-foreground))]">
-                Manual LoRAs {isLoadingLoras ? "(loading...)" : `(${availableLoras.length})`}
-              </p>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-[hsl(var(--aui-foreground))]">
+                  Manual LoRAs {isLoadingLoras ? "(loading...)" : `(${availableLoras.length})`}
+                </p>
+                <button
+                  type="button"
+                  className="rounded-md border border-[hsl(var(--aui-border))] bg-white/90 px-2 py-0.5 text-[10px] font-medium text-[hsl(var(--aui-muted-foreground))]"
+                  onClick={() => {
+                    const concept = positivePrompt.trim();
+                    const baseModel = suggestLoraBaseModel(workflowName);
+                    const template = [
+                      "Find loras",
+                      `concept: ${concept}`,
+                      `base model: ${baseModel}`,
+                    ].join("\n");
+                    setAssistantInput(template);
+                    setIsAssistantOpen(true);
+                  }}
+                  title="Open Studio Assistant with LoRA search template"
+                  aria-label="Search LoRAs with assistant"
+                >
+                  Search LoRAs
+                </button>
+              </div>
               <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
                 {availableLoras.map((item) => {
                   const selected = selectedLoras[item.name];
+                  const isDeleting = deletingLoraName === item.name;
+                  const trainedWords = Array.isArray(item.trained_words)
+                    ? item.trained_words.filter(
+                        (word): word is string =>
+                          typeof word === "string" && word.trim().length > 0,
+                      )
+                    : [];
                   return (
                     <div key={item.name} className="rounded-xl border border-[hsl(var(--aui-border))] bg-white/80 p-2">
-                      <label className="flex items-start gap-2 text-xs">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(selected)}
-                          onChange={(event) => {
-                            setSelectedLoras((previous) => {
-                              const next = { ...previous };
-                              if (event.target.checked) {
-                                next[item.name] = { strength_model: 1, strength_clip: 1 };
-                              } else {
-                                delete next[item.name];
-                              }
-                              return next;
-                            });
-                          }}
-                        />
-                        <span className="break-all">{item.name}</span>
-                      </label>
+                      <div className="flex items-start justify-between gap-2">
+                        <label className="flex items-start gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selected)}
+                            disabled={isDeleting}
+                            onChange={(event) => {
+                              setSelectedLoras((previous) => {
+                                const next = { ...previous };
+                                if (event.target.checked) {
+                                  next[item.name] = { strength_model: 1, strength_clip: 1 };
+                                } else {
+                                  delete next[item.name];
+                                }
+                                return next;
+                              });
+                            }}
+                          />
+                          <span className="break-all">{item.name}</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="rounded-md border border-red-300 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700 disabled:opacity-50"
+                          onClick={() => void deleteLoraItem(item)}
+                          disabled={isDeleting}
+                          title="Delete this LoRA from disk"
+                        >
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                      {trainedWords.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {trainedWords.slice(0, 6).map((word) => (
+                            <button
+                              key={`${item.name}-${word}`}
+                              type="button"
+                              className="rounded-md border border-[hsl(var(--aui-border))] bg-white px-1.5 py-0.5 text-[10px] text-[hsl(var(--aui-muted-foreground))]"
+                              onClick={() => appendTriggerWordToPrompt(word)}
+                              title={`Copy trigger word: ${word}`}
+                            >
+                              {word}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                       {selected ? (
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           <input
@@ -1489,13 +2079,31 @@ export function DirectComfyStudio() {
                     </div>
                     <div className="mb-3 flex items-start justify-between gap-2">
                       <p className="line-clamp-2 text-xs text-[hsl(var(--aui-foreground))]">{item.params.prompt}</p>
-                      <button
-                        type="button"
-                        className="shrink-0 rounded-lg border border-[hsl(var(--aui-border))] bg-white/90 px-2 py-1 text-[11px] font-medium"
-                        onClick={() => applyHistoryParams(item)}
-                      >
-                        Copy Params
-                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          className="rounded-lg border border-[hsl(var(--aui-border))] bg-white/90 px-2 py-1 text-[11px] font-medium"
+                          onClick={() => applyHistoryParams(item)}
+                        >
+                          Copy Params
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-lg border border-[hsl(var(--aui-border))] bg-white/90 px-2 py-1 text-[11px] font-medium disabled:opacity-50"
+                          onClick={() => void editFromHistoryItem(item)}
+                          disabled={editingHistoryId === item.id}
+                        >
+                          {editingHistoryId === item.id ? "Editing..." : "Edit"}
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-lg border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700 disabled:opacity-50"
+                          onClick={() => void deleteHistoryItem(item)}
+                          disabled={deletingHistoryId === item.id}
+                        >
+                          {deletingHistoryId === item.id ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
                     </div>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
                       {item.images.map((src, index) => (

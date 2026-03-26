@@ -194,3 +194,21 @@ export const listDirectComfyHistory = (limit = 60): DirectComfyHistoryItem[] => 
     };
   });
 };
+
+export const deleteDirectComfyHistoryItem = (id: string) => {
+  const normalizedId = id.trim();
+  if (!normalizedId) {
+    return false;
+  }
+
+  const result = db
+    .prepare(
+      `
+        DELETE FROM direct_comfy_history
+        WHERE id = ?
+      `,
+    )
+    .run(normalizedId);
+
+  return result.changes > 0;
+};

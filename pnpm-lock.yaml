@@ -62,6 +62,9 @@ dependencies:
   express:
     specifier: ^5.2.1
     version: 5.2.1
+  extract-json-from-string:
+    specifier: ^1.0.1
+    version: 1.0.1
   katex:
     specifier: ^0.16.38
     version: 0.16.38
@@ -4591,6 +4594,11 @@ packages:
 
   /extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
+    dev: false
+
+  /extract-json-from-string@1.0.1:
+    resolution: {integrity: sha512-xfQOSFYbELVs9QVkKsV9FZAjlAmXQ2SLR6FpfFX1kpn4QAvaGBJlrnVOblMLwrLPYc26H+q9qxo6JTd4E7AwgQ==}
+    engines: {node: '>=0.10.0'}
     dev: false
 
   /fast-deep-equal@3.1.3:

@@ -94,7 +94,10 @@ export const switchToComfyGpuMode = async () => {
       setSchedulerGpuMode("switching");
       setSchedulerLastError(null);
 
-      await unloadAllLmStudioModels();
+      await unloadAllLmStudioModels({
+        maxAttempts: 6,
+        delayMs: 250,
+      });
 
       setSchedulerGpuMode("comfy");
     });

@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import {
+  deleteDownloadedLoraMetadataByInstalledPath,
+  listDownloadedLoraMetadataByInstalledPaths,
+} from "@/lib/comfy/downloaded-loras";
 import type { WorkflowName } from "@/lib/comfy/workflows/types";
 
 type RawSafetensorsHeader = {
@@ -68,6 +72,9 @@ const normalizeLoraName = (value: string) =>
     .trim()
     .replace(/[\\/]+/g, path.sep)
     .toLowerCase();
+
+const normalizeLoraRelativePath = (value: string) =>
+  value.trim().replace(/[\\/]+/g, "/").toLowerCase();
 
 const flattenTagFrequency = (value: unknown) => {
   if (!value || typeof value !== "object") {
@@ -297,6 +304,9 @@ export const listAvailableLoras = async ({
 
     return true;
   });
+  const downloadedMetadataByPath = listDownloadedLoraMetadataByInstalledPaths(
+    filtered.map((item) => item.name),
+  );
 
   return {
     loraDirectory,
@@ -309,6 +319,9 @@ export const listAvailableLoras = async ({
     items: filtered.map((lora) => ({
       name: lora.name,
       top_tag: lora.metadata?.topTag?.name ?? null,
+      trained_words:
+        downloadedMetadataByPath.get(normalizeLoraPath(lora.name))
+          ?.trainedWords ?? [],
     })),
   };
 };
@@ -426,6 +439,55 @@ export const validateRequestedLoras = async (
   return {
     ok: true as const,
     resolved,
+  };
+};
+
+export const deleteAvailableLora = async (name: string) => {
+  const loraDirectory = process.env.COMFY_LORA_DIR;
+  if (!loraDirectory) {
+    throw new Error("COMFY_LORA_DIR is not configured.");
+  }
+
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    throw new Error("LoRA name is required.");
+  }
+
+  if (path.isAbsolute(trimmedName)) {
+    throw new Error("Absolute LoRA paths are not allowed.");
+  }
+
+  const requestedRelativePath = trimmedName.replace(/[\\/]+/g, path.sep);
+  const absolutePath = path.resolve(loraDirectory, requestedRelativePath);
+  const relativePath = path.relative(loraDirectory, absolutePath);
+
+  if (
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath) ||
+    !relativePath
+  ) {
+    throw new Error("Invalid LoRA path.");
+  }
+
+  const normalizedRelativePath = normalizeLoraRelativePath(relativePath);
+  const allowed = STATIC_LORA_SUBFOLDERS.some((subfolder) =>
+    normalizedRelativePath.startsWith(`${subfolder}/`),
+  );
+
+  if (!allowed) {
+    throw new Error("Deleting LoRAs is only allowed in static LoRA subfolders.");
+  }
+
+  if (path.extname(relativePath).toLowerCase() !== ".safetensors") {
+    throw new Error("Only .safetensors LoRA files can be deleted.");
+  }
+
+  await fs.unlink(absolutePath);
+  deleteDownloadedLoraMetadataByInstalledPath(relativePath);
+
+  return {
+    deleted: true as const,
+    name: normalizedRelativePath,
   };
 };
 

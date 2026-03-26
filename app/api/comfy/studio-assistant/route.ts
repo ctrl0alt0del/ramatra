@@ -12,43 +12,29 @@ const requestSchema = z.object({
 });
 
 const studioAssistantSystemPrompt = [
-  "You are Studio Assistant for direct Comfy workflows.",
-  "You are stateless per request.",
-  "Goal: provide LoRA options for manual user download.",
-  "Do NOT install or download files.",
+  "You are Studio Assistant router for Direct Comfy workflows.",
+  "You are stateless per request and must never rely on previous messages.",
+  "Your job is only to choose the correct util task stage based on user request.",
+  "Do not call tools in this router step.",
+  "Do not output JSON in this router step.",
   "",
-  "Available tool:",
-  "- search_civitai_loras(query, baseModel, limit)",
+  "Routing rules:",
+  "- If user asks to find/search/recommend LoRAs, output stage studio_lora_find.",
+  "- If user asks to improve/enhance/rewrite/optimize prompt, route by workflow:",
+  "  - edit workflow => studio_prompt_edit_enhance",
+  "  - illustration workflow => studio_prompt_illustration_enhance",
+  "  - base workflow or unknown workflow => studio_prompt_base_enhance",
+  "- Infer workflow from user intent when not explicit: edit for modifying existing image, illustration for stylized/anime/drawing tags, otherwise base.",
+  "- If both LoRA search and prompt enhancement are requested, prefer studio_lora_find.",
   "",
-  "Algorithm (strict):",
-  "1) Infer baseModel from user message:",
-  "   - if message mentions qwen => qwen",
-  "   - if message mentions chroma => chroma",
-  "   - if message mentions illustrious or illustrios => illustrious",
-  "   - otherwise => sdxl",
-  "2) Call search_civitai_loras exactly once.",
-  "3) Do not call any other tools.",
-  "4) Output results and stop.",
+  "Output format (required, and nothing else):",
+  "[[util_task]]",
+  "stage: <STAGE_NAME>",
+  "context_text: <ORIGINAL_USER_MESSAGE>",
+  "[[/util_task]]",
   "",
-  "Output format (required):",
-  "- Output ONLY valid JSON.",
-  "- No markdown, no prose, no tables, no code fences, no markers.",
-  "",
-  "JSON schema (return exactly this object shape):",
-  "{",
-  '  "items": [',
-  "    {",
-  '      "name": "string",',
-  '      "model": "string",',
-  '      "likes": number,',
-  '      "downloads": number,',
-  '      "imageUrl": "string|null",',
-  '      "downloadUrl": "string",',
-  '      "fileName": "string|null",',
-  '      "baseModel": "sdxl|chroma|qwen|illustrious"',
-  "    }",
-  "  ]",
-  "}",
+  "Replace placeholders with exact values.",
+  "No prose, no markdown, no extra lines before or after the block.",
 ].join("\n");
 
 export async function POST(req: Request) {
@@ -72,7 +58,7 @@ export async function POST(req: Request) {
       previousResponseIdOverride: null,
       contextLength: getConfiguredContextLengthForMode("regular", process.env),
       systemPromptOverride: studioAssistantSystemPrompt,
-      utilMcpServers: ["comfy_readonly"],
+      utilMcpServers: [],
       userMessage: [{ type: "text", text: parsed.data.message.trim() }],
     });
 
@@ -100,3 +86,4 @@ export async function POST(req: Request) {
     });
   }
 }
+

@@ -1,4 +1,4 @@
-type LoadedInstance = {
+﻿type LoadedInstance = {
   id: string;
   config: {
     context_length: number;
@@ -198,11 +198,71 @@ export const unloadLmStudioModel = async (instanceId: string) => {
   logLmStudioModelDebug("unload:done", { instanceId });
 };
 
-export const unloadAllLmStudioModels = async () => {
-  const instanceIds = await listLoadedLmStudioInstanceIds();
-  for (const instanceId of instanceIds) {
-    await unloadLmStudioModel(instanceId);
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+export const unloadAllLmStudioModels = async (input?: {
+  maxAttempts?: number;
+  delayMs?: number;
+}) => {
+  const maxAttempts = Math.max(1, input?.maxAttempts ?? 4);
+  const delayMs = Math.max(0, input?.delayMs ?? 200);
+  let lastError: unknown = null;
+  let lastRemaining: LoadedLmStudioModelInstance[] = [];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let loadedModels: LoadedLmStudioModelInstance[] = [];
+    try {
+      loadedModels = await listLoadedLmStudioModels();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts) {
+        throw error;
+      }
+      await sleep(delayMs);
+      continue;
+    }
+
+    if (loadedModels.length === 0) {
+      return;
+    }
+
+    lastRemaining = loadedModels;
+    for (const model of loadedModels) {
+      try {
+        await unloadLmStudioModel(model.instanceId);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    try {
+      const remaining = await listLoadedLmStudioModels();
+      if (remaining.length === 0) {
+        return;
+      }
+      lastRemaining = remaining;
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < maxAttempts) {
+      await sleep(delayMs);
+    }
   }
+
+  const remainingSummary = lastRemaining
+    .map((model) => `${model.modelKey}(${model.instanceId})`)
+    .join(", ");
+  const errorSuffix =
+    lastError instanceof Error && lastError.message.trim().length > 0
+      ? ` Last error: ${lastError.message}`
+      : "";
+  throw new Error(
+    `Failed to fully unload LM Studio models before generation. Remaining: ${remainingSummary || "unknown"}.${errorSuffix}`,
+  );
 };
 
 export const loadLmStudioModel = async (
@@ -444,6 +504,7 @@ export const cleanupRedundantLmStudioModels = async ({
 
   return uniqueToUnload;
 };
+
 
 
 

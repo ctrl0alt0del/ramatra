@@ -49,7 +49,7 @@ export function buildHoloEdenScribbleWorkflow(_input: WorkflowInput) {
   });
   /*Load Checkpoint*/
   const [MODEL_1, CLIP_1, VAE_1] = cls.CheckpointLoaderSimple({
-    ckpt_name: "xavier_v10.safetensors",
+    ckpt_name: "mysticsWonders_waivierV10.safetensors",
   });
   /*CLIP Set Last Layer*/
   const [CLIP_2] = cls.CLIPSetLastLayer({

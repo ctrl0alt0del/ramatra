@@ -2,6 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export type InstallBaseModel = "sdxl" | "illustrious" | "chroma" | "qwen";
+export type LoraInstallProgress = {
+  phase: "starting" | "downloading" | "saving" | "completed";
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percentage: number | null;
+  message?: string;
+};
 
 const baseModelToSubfolder: Record<InstallBaseModel, string> = {
   sdxl: "illustration",
@@ -80,7 +87,23 @@ export const installLoraFromUrl = async (input: {
   baseModel: InstallBaseModel;
   fileName?: string;
   overwrite?: boolean;
+  onProgress?: (progress: LoraInstallProgress) => void;
 }) => {
+  const emitProgress = (progress: LoraInstallProgress) => {
+    try {
+      input.onProgress?.(progress);
+    } catch {
+      // Ignore callback failures.
+    }
+  };
+
+  emitProgress({
+    phase: "starting",
+    downloadedBytes: 0,
+    totalBytes: null,
+    percentage: null,
+  });
+
   const loraRootDir = process.env.COMFY_LORA_DIR;
   if (!loraRootDir) {
     throw new Error("COMFY_LORA_DIR is not configured.");
@@ -95,15 +118,28 @@ export const installLoraFromUrl = async (input: {
     requestHeaders.Authorization = `Bearer ${process.env.CIVITAI_API_KEY}`;
   }
 
-  const response = await fetch(input.url, {
-    method: "GET",
-    headers: requestHeaders,
-  });
+  let response: Response;
+  try {
+    response = await fetch(input.url, {
+      method: "GET",
+      headers: requestHeaders,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : String(error);
+    throw new Error(`Download request failed: ${message}`);
+  }
 
   if (!response.ok) {
     const details = await response.text();
     throw new Error(`Download failed (${response.status}). ${details.slice(0, 500)}`);
   }
+
+  const totalBytesRaw = Number(response.headers.get("content-length") ?? "");
+  const totalBytes =
+    Number.isFinite(totalBytesRaw) && totalBytesRaw > 0 ? totalBytesRaw : null;
 
   const fileName = resolveFileName({
     requestedFileName: input.fileName,
@@ -136,16 +172,96 @@ export const installLoraFromUrl = async (input: {
     }
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-  if (arrayBuffer.byteLength <= 0) {
+  let bytes = Buffer.alloc(0);
+  if (response.body) {
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let downloadedBytes = 0;
+    let lastEmittedBytes = -1;
+    emitProgress({
+      phase: "downloading",
+      downloadedBytes,
+      totalBytes,
+      percentage: totalBytes ? Math.round((downloadedBytes / totalBytes) * 100) : null,
+    });
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value) {
+        continue;
+      }
+      const chunk = Buffer.from(value);
+      chunks.push(chunk);
+      downloadedBytes += chunk.byteLength;
+
+      const shouldEmit =
+        totalBytes !== null
+          ? downloadedBytes === totalBytes ||
+            downloadedBytes - lastEmittedBytes >= Math.max(1, Math.floor(totalBytes / 40))
+          : downloadedBytes - lastEmittedBytes >= 512 * 1024;
+
+      if (shouldEmit) {
+        lastEmittedBytes = downloadedBytes;
+        emitProgress({
+          phase: "downloading",
+          downloadedBytes,
+          totalBytes,
+          percentage: totalBytes
+            ? Math.max(0, Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)))
+            : null,
+        });
+      }
+    }
+
+    bytes = Buffer.concat(chunks);
+  } else {
+    const arrayBuffer = await response.arrayBuffer();
+    bytes = Buffer.from(arrayBuffer);
+    emitProgress({
+      phase: "downloading",
+      downloadedBytes: bytes.byteLength,
+      totalBytes,
+      percentage:
+        totalBytes && totalBytes > 0
+          ? Math.max(0, Math.min(100, Math.round((bytes.byteLength / totalBytes) * 100)))
+          : 100,
+    });
+  }
+
+  if (bytes.byteLength <= 0) {
     throw new Error("Downloaded file is empty.");
   }
 
-  await fs.writeFile(targetPath, Buffer.from(arrayBuffer));
+  emitProgress({
+    phase: "saving",
+    downloadedBytes: bytes.byteLength,
+    totalBytes,
+    percentage: 100,
+  });
+
+  try {
+    await fs.writeFile(targetPath, bytes);
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : String(error);
+    throw new Error(`Failed to save file to ${relativePath}: ${message}`);
+  }
+
+  emitProgress({
+    phase: "completed",
+    downloadedBytes: bytes.byteLength,
+    totalBytes,
+    percentage: 100,
+  });
 
   return {
     baseModel: input.baseModel,
     installedPath: relativePath,
-    bytes: arrayBuffer.byteLength,
+    bytes: bytes.byteLength,
   };
 };

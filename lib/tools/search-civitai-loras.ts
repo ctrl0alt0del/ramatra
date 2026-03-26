@@ -1,4 +1,4 @@
-import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+﻿import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 export const searchCivitaiLorasToolName = "search_civitai_loras";
@@ -24,6 +24,7 @@ type CivitaiModelVersion = {
   id?: unknown;
   name?: unknown;
   baseModel?: unknown;
+  trainedWords?: unknown;
   files?: unknown;
   images?: unknown;
 };
@@ -50,6 +51,14 @@ const toArray = <T>(value: unknown): T[] => (Array.isArray(value) ? (value as T[
 const getCivitaiBaseUrl = () => {
   const url = process.env.CIVITAI_API_BASE_URL?.trim();
   return url && /^https?:\/\//i.test(url) ? url.replace(/\/$/, "") : "https://civitai.com";
+};
+
+const getCivitaiSiteOrigin = (apiBase: string) => {
+  try {
+    return new URL(apiBase).origin;
+  } catch {
+    return "https://civitai.com";
+  }
 };
 
 const fetchJson = async (url: string) => {
@@ -93,7 +102,11 @@ const resolveDownloadFromVersion = async ({
   const files = toArray<CivitaiFile>(version.files);
   const preferred =
     files.find((file) => file.primary === true && typeof file.downloadUrl === "string") ??
-    files.find((file) => toStringValue(file.type).toLowerCase().includes("model") && typeof file.downloadUrl === "string") ??
+    files.find(
+      (file) =>
+        toStringValue(file.type).toLowerCase().includes("model") &&
+        typeof file.downloadUrl === "string",
+    ) ??
     files.find((file) => typeof file.downloadUrl === "string") ??
     null;
 
@@ -138,6 +151,7 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
     async (input) => {
       try {
         const apiBase = getCivitaiBaseUrl();
+        const civitaiSiteOrigin = getCivitaiSiteOrigin(apiBase);
         const limit = Math.max(1, Math.min(12, input.limit ?? 8));
 
         const params = new URLSearchParams();
@@ -145,6 +159,7 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
         params.set("limit", String(Math.max(20, limit * 3)));
         params.set("sort", "Most Downloaded");
         params.set("period", "AllTime");
+        params.set("nsfw", "true");
         params.append("types", "LORA");
 
         for (const model of baseModelFilter(input.baseModel)) {
@@ -156,6 +171,7 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
         const items = toArray<CivitaiModel>(search.items);
 
         const normalized = [] as Array<{
+          modelId: number;
           name: string;
           model: string;
           likes: number;
@@ -163,6 +179,8 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
           imageUrl: string | null;
           downloadUrl: string;
           fileName: string | null;
+          modelUrl: string;
+          trainedWords: string[];
           baseModel: "sdxl" | "illustrious" | "qwen" | "chroma";
         }>;
 
@@ -172,9 +190,10 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
           }
 
           const name = toStringValue(model.name);
+          const modelId = toNumber(model.id);
           const versions = toArray<CivitaiModelVersion>(model.modelVersions);
           const version = versions[0];
-          if (!name || !version) {
+          if (!name || !version || !modelId) {
             continue;
           }
 
@@ -193,12 +212,18 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
             continue;
           }
 
-          const stats = (model.stats ?? {}) as { downloadCount?: unknown; thumbsUpCount?: unknown };
+          const stats = (model.stats ?? {}) as {
+            downloadCount?: unknown;
+            thumbsUpCount?: unknown;
+          };
           const likes = toNumber(stats.thumbsUpCount);
           const downloads = toNumber(stats.downloadCount);
 
           const images = toArray<CivitaiImage>(version.images);
           const imageUrl = toStringValue(images[0]?.url) || null;
+          const trainedWords = toArray<unknown>(version.trainedWords)
+            .map((word) => (typeof word === "string" ? word.trim() : ""))
+            .filter((word) => word.length > 0);
 
           const download = await resolveDownloadFromVersion({ apiBase, version });
           if (!download.downloadUrl) {
@@ -206,6 +231,7 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
           }
 
           normalized.push({
+            modelId,
             name,
             model: toStringValue(version.name) || toStringValue(version.baseModel) || "Unknown",
             likes,
@@ -213,6 +239,8 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
             imageUrl,
             downloadUrl: download.downloadUrl,
             fileName: download.fileName,
+            modelUrl: `${civitaiSiteOrigin}/models/${modelId}`,
+            trainedWords,
             baseModel: inferredBaseModel,
           });
         }
@@ -244,3 +272,7 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
     },
   );
 };
+
+
+
+
