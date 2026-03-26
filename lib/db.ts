@@ -213,6 +213,29 @@ const ensureSchema = (db: Database.Database) => {
       mcp_servers_json TEXT NOT NULL DEFAULT '[]',
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS direct_comfy_history (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL UNIQUE,
+      workflow_name TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      negative_prompt TEXT NOT NULL DEFAULT '',
+      input_image_json TEXT NOT NULL DEFAULT '[]',
+      width INTEGER NOT NULL,
+      height INTEGER NOT NULL,
+      steps INTEGER NOT NULL,
+      cfg REAL NOT NULL,
+      seed INTEGER NOT NULL,
+      sampler_name TEXT NOT NULL,
+      scheduler TEXT NOT NULL,
+      loras_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_direct_comfy_history_created_at
+      ON direct_comfy_history(created_at DESC);
   `);
 
   const promptModeSettingsSqlRow = db
@@ -675,6 +698,7 @@ export const getDb = () => {
 
   return globalDb.__comfyBridgeDb;
 };
+
 
 
 

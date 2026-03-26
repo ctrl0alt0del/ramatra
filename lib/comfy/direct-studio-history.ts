@@ -1,0 +1,196 @@
+import { getStoredGeneration } from "@/lib/comfy/generations";
+import { getDb } from "@/lib/db";
+import { getTask } from "@/lib/tasks/store";
+
+type DirectComfyHistoryRow = {
+  id: string;
+  task_id: string;
+  workflow_name: "base" | "illustration" | "edit";
+  prompt: string;
+  negative_prompt: string;
+  input_image_json: string;
+  width: number;
+  height: number;
+  steps: number;
+  cfg: number;
+  seed: number;
+  sampler_name: string;
+  scheduler: string;
+  loras_json: string;
+  created_at: string;
+};
+
+type LoraConfig = {
+  name: string;
+  strength_model: number;
+  strength_clip: number;
+};
+
+export type DirectComfyHistoryParams = {
+  workflowName: "base" | "illustration" | "edit";
+  prompt: string;
+  negativePrompt: string;
+  inputImage: string[];
+  width: number;
+  height: number;
+  steps: number;
+  cfg: number;
+  seed: number;
+  samplerName: string;
+  scheduler: string;
+  loras: LoraConfig[];
+};
+
+export type DirectComfyHistoryItem = {
+  id: string;
+  taskId: string;
+  createdAt: string;
+  params: DirectComfyHistoryParams;
+  images: string[];
+};
+
+const db = getDb();
+
+const parseJsonArray = <T>(value: string, fallback: T[]): T[] => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? (parsed as T[]) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const toDataUrl = (mimeType: string, data: string) => `data:${mimeType};base64,${data}`;
+
+export const upsertDirectComfyHistory = (input: {
+  taskId: string;
+  params: DirectComfyHistoryParams;
+}) => {
+  const timestamp = new Date().toISOString();
+
+  db.prepare(
+    `
+      INSERT INTO direct_comfy_history (
+        id,
+        task_id,
+        workflow_name,
+        prompt,
+        negative_prompt,
+        input_image_json,
+        width,
+        height,
+        steps,
+        cfg,
+        seed,
+        sampler_name,
+        scheduler,
+        loras_json,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET
+        workflow_name = excluded.workflow_name,
+        prompt = excluded.prompt,
+        negative_prompt = excluded.negative_prompt,
+        input_image_json = excluded.input_image_json,
+        width = excluded.width,
+        height = excluded.height,
+        steps = excluded.steps,
+        cfg = excluded.cfg,
+        seed = excluded.seed,
+        sampler_name = excluded.sampler_name,
+        scheduler = excluded.scheduler,
+        loras_json = excluded.loras_json,
+        updated_at = excluded.updated_at
+    `,
+  ).run(
+    input.taskId,
+    input.taskId,
+    input.params.workflowName,
+    input.params.prompt,
+    input.params.negativePrompt,
+    JSON.stringify(input.params.inputImage),
+    input.params.width,
+    input.params.height,
+    input.params.steps,
+    input.params.cfg,
+    input.params.seed,
+    input.params.samplerName,
+    input.params.scheduler,
+    JSON.stringify(input.params.loras),
+    timestamp,
+    timestamp,
+  );
+};
+
+export const listDirectComfyHistory = (limit = 60): DirectComfyHistoryItem[] => {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, limit)) : 60;
+  const rows = db
+    .prepare(
+      `
+        SELECT
+          id,
+          task_id,
+          workflow_name,
+          prompt,
+          negative_prompt,
+          input_image_json,
+          width,
+          height,
+          steps,
+          cfg,
+          seed,
+          sampler_name,
+          scheduler,
+          loras_json,
+          created_at
+        FROM direct_comfy_history
+        ORDER BY created_at DESC
+        LIMIT ?
+      `,
+    )
+    .all(safeLimit) as DirectComfyHistoryRow[];
+
+  return rows.map((row) => {
+    const task = getTask(row.task_id);
+    const jobId = task?.type === "comfy" ? task.result?.jobId ?? null : null;
+    const generation = jobId ? getStoredGeneration(jobId) : null;
+    const images =
+      generation?.status === "completed"
+        ? generation.images.map((image) => toDataUrl(image.mimeType, image.data))
+        : [];
+
+    const inputImage = parseJsonArray<string>(row.input_image_json, []).filter(
+      (value) => typeof value === "string",
+    );
+    const loras = parseJsonArray<LoraConfig>(row.loras_json, []).filter(
+      (item) =>
+        !!item &&
+        typeof item === "object" &&
+        typeof item.name === "string" &&
+        typeof item.strength_model === "number" &&
+        typeof item.strength_clip === "number",
+    );
+
+    return {
+      id: row.id,
+      taskId: row.task_id,
+      createdAt: row.created_at,
+      params: {
+        workflowName: row.workflow_name,
+        prompt: row.prompt,
+        negativePrompt: row.negative_prompt,
+        inputImage,
+        width: row.width,
+        height: row.height,
+        steps: row.steps,
+        cfg: row.cfg,
+        seed: row.seed,
+        samplerName: row.sampler_name,
+        scheduler: row.scheduler,
+        loras,
+      },
+      images,
+    };
+  });
+};

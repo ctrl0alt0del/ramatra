@@ -86,12 +86,10 @@ export const buildIntegrationsForServers = (
     });
   }
 
-  if (
-    servers.includes("civitai") &&
-    process.env.CIVITAI_MCP_ENABLED === "true"
-  ) {
+  if (servers.includes("civitai")) {
     const serverUrl = process.env.CIVITAI_MCP_URL;
-    if (serverUrl) {
+    const civitaiEnabled = process.env.CIVITAI_MCP_ENABLED;
+    if (serverUrl && civitaiEnabled !== "false") {
       integrations.push({
         type: "ephemeral_mcp",
         server_label: "civitai",

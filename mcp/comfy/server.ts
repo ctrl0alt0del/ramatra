@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { registerGenerateImageMcpTool } from "@/lib/tools/generate-image";
 import { registerListLorasMcpTool } from "@/lib/tools/list-loras";
+import { registerSearchCivitaiLorasMcpTool } from "@/lib/tools/search-civitai-loras";
 
 import { bootstrapExpressServerForMCPServer } from "../bootstrap";
 
@@ -13,6 +14,7 @@ function createComfyFullMCPServer() {
 
   registerGenerateImageMcpTool(comfyServer);
   registerListLorasMcpTool(comfyServer);
+  registerSearchCivitaiLorasMcpTool(comfyServer);
 
   return comfyServer;
 }
@@ -24,6 +26,7 @@ function createComfyReadOnlyMCPServer() {
   });
 
   registerListLorasMcpTool(comfyServer);
+  registerSearchCivitaiLorasMcpTool(comfyServer);
 
   return comfyServer;
 }
@@ -39,4 +42,3 @@ bootstrapExpressServerForMCPServer(
     : 4001,
   createComfyReadOnlyMCPServer,
 );
-

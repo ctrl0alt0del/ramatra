@@ -1,5 +1,8 @@
 import { getClient } from "@/lib/comfy/client";
-import { runWorkflow } from "@/lib/comfy/runner";
+import { upsertDirectComfyHistory } from "@/lib/comfy/direct-studio-history";
+import { ensureComfyQueueListeners } from "@/lib/tasks/comfy-runner";
+import { processTaskQueues } from "@/lib/tasks/processor";
+import { enqueueComfyTask } from "@/lib/tasks/scheduler";
 import { workflowNames } from "@/lib/comfy/workflows/types";
 import { toHttpError } from "@/lib/errors/server-error";
 import z from "zod";
@@ -43,16 +46,53 @@ export async function POST(req: Request) {
     const input = parsed.data;
     const workflowName = input.workflowName;
     const workflowInput = input.input;
-    const results = await runWorkflow({
-      client: await getClient(),
+
+    await getClient();
+
+    const task = enqueueComfyTask({
+      sourceThreadId: null,
+      sourceUserIntent: workflowInput.positivePrompt,
       workflowName,
-      input: workflowInput,
+      prompt: workflowInput.positivePrompt,
+      negativePrompt: workflowInput.negativePrompt,
+      inputImage: workflowInput.inputImage,
+      width: workflowInput.width,
+      height: workflowInput.height,
+      steps: workflowInput.steps,
+      cfg: workflowInput.cfg,
+      seed: workflowInput.seed,
+      samplerName: workflowInput.samplerName,
+      scheduler: workflowInput.scheduler,
+      loras: workflowInput.loras,
     });
-    const responseBody = {
-      images: {
-        base64Array: results,
+
+    upsertDirectComfyHistory({
+      taskId: task.id,
+      params: {
+        workflowName,
+        prompt: workflowInput.positivePrompt,
+        negativePrompt: workflowInput.negativePrompt,
+        inputImage: workflowInput.inputImage,
+        width: workflowInput.width,
+        height: workflowInput.height,
+        steps: workflowInput.steps,
+        cfg: workflowInput.cfg,
+        seed: workflowInput.seed,
+        samplerName: workflowInput.samplerName,
+        scheduler: workflowInput.scheduler,
+        loras: workflowInput.loras,
       },
+    });
+
+    ensureComfyQueueListeners();
+    void processTaskQueues();
+
+    const responseBody = {
+      taskId: task.id,
+      status: "queued" as const,
+      jobId: null as string | null,
     };
+
     return new Response(JSON.stringify(responseBody), {
       status: 200,
       headers: { "Content-Type": "application/json" },
