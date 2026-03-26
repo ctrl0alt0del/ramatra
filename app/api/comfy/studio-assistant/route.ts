@@ -55,7 +55,7 @@ export async function POST(req: Request) {
       moodId: null,
       persistent: false,
       previousResponseIdOverride: null,
-      contextLength: 150000,
+      contextLength: 64000,
       systemPromptOverride: studioAssistantSystemPrompt,
       utilMcpServers: [],
       userMessage: [{ type: "text", text: parsed.data.message.trim() }],

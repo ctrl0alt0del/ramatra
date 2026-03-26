@@ -112,6 +112,7 @@ type AssistantPromptEnhance = {
 type ParsedAssistantPayload = {
   loraItems: AssistantLoraOption[];
   promptEnhance: AssistantPromptEnhance | null;
+  alternativeQueries: string[];
 };
 
 const samplerOptions = [
@@ -356,7 +357,17 @@ const parseAssistantLoraOptions = (text: string): ParsedAssistantOptions => {
   const source = text.trim();
   const match = source.match(loraOptionsBlockPattern);
 
+  const sanitizeAssistantLoraJson = (input: string) => {
+    // Some model outputs break JSON specifically around trainedWords content.
+    // If that happens, keep payload parseable by collapsing trainedWords to [].
+    return input.replace(
+      /"trainedWords"\s*:\s*[\s\S]*?,"civitaiBaseModel"/g,
+      '"trainedWords":[],"civitaiBaseModel"',
+    );
+  };
+
   const tryParse = (jsonText: string, cleanText: string): ParsedAssistantOptions | null => {
+    const normalizedJsonText = sanitizeAssistantLoraJson(jsonText);
     try {
       const parsed = JSON.parse(jsonText) as {
         items?: unknown;
@@ -373,7 +384,24 @@ const parseAssistantLoraOptions = (text: string): ParsedAssistantOptions => {
           : [],
       };
     } catch {
-      return null;
+      try {
+        const parsed = JSON.parse(normalizedJsonText) as {
+          items?: unknown;
+          alternativeQueries?: unknown;
+        };
+        return {
+          cleanText,
+          items: normalizeAssistantLoraItems(parsed.items),
+          alternativeQueries: Array.isArray(parsed.alternativeQueries)
+            ? parsed.alternativeQueries.filter(
+                (query): query is string =>
+                  typeof query === "string" && query.trim().length > 0,
+              )
+            : [],
+        };
+      } catch {
+        return null;
+      }
     }
   };
 
@@ -417,6 +445,7 @@ const parseAssistantPayload = (text: string): ParsedAssistantPayload => {
     return {
       loraItems: parsedLora.items,
       promptEnhance: null,
+      alternativeQueries: parsedLora.alternativeQueries,
     };
   }
 
@@ -427,6 +456,7 @@ const parseAssistantPayload = (text: string): ParsedAssistantPayload => {
       return {
         loraItems: [],
         promptEnhance,
+        alternativeQueries: [],
       };
     }
   }
@@ -444,12 +474,14 @@ const parseAssistantPayload = (text: string): ParsedAssistantPayload => {
     return {
       loraItems: [],
       promptEnhance: directPromptEnhance,
+      alternativeQueries: [],
     };
   }
 
   return {
     loraItems: [],
     promptEnhance: null,
+    alternativeQueries: [],
   };
 };
 
@@ -506,6 +538,9 @@ export function DirectComfyStudio() {
   const [assistantLoraOptions, setAssistantLoraOptions] = useState<AssistantLoraOption[]>([]);
   const [assistantPromptEnhance, setAssistantPromptEnhance] =
     useState<AssistantPromptEnhance | null>(null);
+  const [assistantAlternativeQueries, setAssistantAlternativeQueries] = useState<
+    string[]
+  >([]);
   const [downloadingLoraUrl, setDownloadingLoraUrl] = useState<string | null>(null);
   const [deletingLoraName, setDeletingLoraName] = useState<string | null>(null);
   const [downloadProgressByUrl, setDownloadProgressByUrl] = useState<
@@ -1011,6 +1046,7 @@ export function DirectComfyStudio() {
     setIsAssistantRunning(true);
     setAssistantLoraOptions([]);
     setAssistantPromptEnhance(null);
+    setAssistantAlternativeQueries([]);
 
     try {
       const response = await fetch("/api/comfy/studio-assistant", {
@@ -1070,6 +1106,7 @@ export function DirectComfyStudio() {
             const parsed = parseAssistantPayload(payload.text ?? "");
             setAssistantLoraOptions(parsed.loraItems);
             setAssistantPromptEnhance(parsed.promptEnhance);
+            setAssistantAlternativeQueries(parsed.alternativeQueries);
 
             if (payload.status === "completed") {
               if (
@@ -1556,6 +1593,30 @@ export function DirectComfyStudio() {
                 >
                   Apply to Form
                 </button>
+              </article>
+            ) : null}
+
+            {assistantAlternativeQueries.length > 0 ? (
+              <article className="mt-2 rounded-lg border border-[hsl(var(--aui-border))] bg-white p-2">
+                <p className="text-xs font-semibold text-[hsl(var(--aui-foreground))]">
+                  Suggested Alternative Queries
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {assistantAlternativeQueries.map((query, index) => (
+                    <button
+                      key={`${query}-${index}`}
+                      type="button"
+                      className="rounded-full border border-[hsl(var(--aui-border))] bg-white/90 px-2.5 py-1 text-xs text-[hsl(var(--aui-foreground))]"
+                      onClick={() => {
+                        setAssistantInput(query);
+                        setAssistantNotice("Inserted suggested query.");
+                      }}
+                      title={`Use query: ${query}`}
+                    >
+                      {query}
+                    </button>
+                  ))}
+                </div>
               </article>
             ) : null}
 
