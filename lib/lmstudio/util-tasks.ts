@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getDb } from "@/lib/db";
+import { applyPromptPragmas } from "@/lib/lmstudio/prompt-pragmas";
 
 export const utilTaskMcpServerLabels = [
   "comfy",
@@ -397,7 +398,15 @@ export const getUtilTaskSettingByName = (
     )
     .get(normalizedName) as UtilTaskSettingsRow | undefined;
 
-  return row ? rowToUtilTaskSetting(row) : null;
+  if (!row) {
+    return null;
+  }
+
+  const setting = rowToUtilTaskSetting(row);
+  return {
+    ...setting,
+    prompt: applyPromptPragmas(setting.prompt),
+  };
 };
 
 export const replaceUtilTaskSettings = (

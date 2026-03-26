@@ -7,21 +7,36 @@ import {
   updateSystemPromptForMode,
 } from "@/lib/lmstudio/prompts";
 import { isPromptMode, promptModes } from "@/lib/lmstudio/prompt-modes";
+import {
+  getDefaultStudioAssistantSystemPrompt,
+  getStudioAssistantModeKey,
+  getStudioAssistantSystemPrompt,
+  updateStudioAssistantSystemPrompt,
+} from "@/lib/lmstudio/studio-assistant-prompts";
 
 const updatePromptsSchema = z.object({
   prompts: z.record(z.string(), z.string()),
 });
 
 export async function GET() {
-  const prompts = listSystemPromptsByMode();
+  const studioAssistantMode = getStudioAssistantModeKey();
+  const prompts = {
+    ...listSystemPromptsByMode(),
+    [studioAssistantMode]: getStudioAssistantSystemPrompt(),
+  };
+  const modeKeys = [...promptModes, studioAssistantMode];
   const defaults = Object.fromEntries(
-    promptModes.map((mode) => [mode, getDefaultSystemPromptForMode(mode)]),
+    modeKeys.map((mode) =>
+      mode === studioAssistantMode
+        ? [mode, getDefaultStudioAssistantSystemPrompt()]
+        : [mode, getDefaultSystemPromptForMode(mode)],
+    ),
   );
 
   return NextResponse.json({
     prompts,
     defaults,
-    modes: promptModes,
+    modes: modeKeys,
   });
 }
 
@@ -37,6 +52,11 @@ export async function PATCH(req: Request) {
   }
 
   for (const [mode, prompt] of Object.entries(parsed.data.prompts)) {
+    if (mode === getStudioAssistantModeKey()) {
+      updateStudioAssistantSystemPrompt(prompt);
+      continue;
+    }
+
     if (!isPromptMode(mode)) {
       return NextResponse.json(
         { error: `Unsupported mode: ${mode}` },
@@ -48,6 +68,9 @@ export async function PATCH(req: Request) {
   }
 
   return NextResponse.json({
-    prompts: listSystemPromptsByMode(),
+    prompts: {
+      ...listSystemPromptsByMode(),
+      [getStudioAssistantModeKey()]: getStudioAssistantSystemPrompt(),
+    },
   });
 }

@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 
 import { getMoodPromptById } from "./moods";
 import { promptModes, type PromptMode } from "./prompt-modes";
+import { applyPromptPragmas } from "./prompt-pragmas";
 
 const fastPrompt = `You are a fast text-only assistant.
 
@@ -297,7 +298,8 @@ export const getSystemPromptForMode = (mode: PromptMode) => {
     .get(mode) as { prompt: string } | undefined;
 
   const prompt = row?.prompt?.trim();
-  return prompt?.length ? prompt : promptsByMode[mode];
+  const resolved = prompt?.length ? prompt : promptsByMode[mode];
+  return applyPromptPragmas(resolved);
 };
 
 export const getMoodPromptForChat = (moodId: string | null | undefined) => {

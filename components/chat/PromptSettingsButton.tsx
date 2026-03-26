@@ -15,8 +15,13 @@ import {
 } from "@/lib/lmstudio/prompt-modes";
 
 type PromptSettingsResponse = {
-  prompts: Record<PromptMode, string>;
-  defaults: Record<PromptMode, string>;
+  prompts: Record<string, string>;
+  defaults: Record<string, string>;
+};
+
+type PromptPragmaSettingsResponse = {
+  pragmas: Array<{ name: string; template: string; updatedAt?: string }>;
+  defaults: Record<string, string>;
 };
 
 type EditableMood = {
@@ -188,19 +193,25 @@ const createMoodId = () => {
 
 export function PromptSettingsButton() {
   const [isMobileViewport, setIsMobileViewport] = useState(false);
-  const [activeTab, setActiveTab] = useState<"modes" | "moods" | "utilTasks">("modes");
+  const [activeTab, setActiveTab] = useState<"modes" | "moods" | "utilTasks" | "pragmas">("modes");
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingAllChats, setDeletingAllChats] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
-  const [prompts, setPrompts] = useState<Record<PromptMode, string> | null>(null);
-  const [defaults, setDefaults] = useState<Record<PromptMode, string> | null>(null);
+  const [prompts, setPrompts] = useState<Record<string, string> | null>(null);
+  const [defaults, setDefaults] = useState<Record<string, string> | null>(null);
   const [moods, setMoods] = useState<EditableMood[] | null>(null);
   const [utilTasks, setUtilTasks] = useState<EditableUtilTask[] | null>(null);
-  const [utilTaskDefaults, setUtilTaskDefaults] = useState<Record<string, string>>({});
-  const [expandedMode, setExpandedMode] = useState<PromptMode | null>(null);
+  const [utilTaskDefaults, setUtilTaskDefaults] = useState<Record<string, string>>(
+    {},
+  );
+  const [promptPragmasText, setPromptPragmasText] = useState("[]");
+  const [promptPragmasDefaults, setPromptPragmasDefaults] = useState<
+    Record<string, string>
+  >({});
+  const [expandedMode, setExpandedMode] = useState<string | null>(null);
   const expandedTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -234,7 +245,12 @@ export function PromptSettingsButton() {
         setLoading(true);
         setError(null);
 
-        const [promptResponse, moodResponse, utilTaskResponse] = await Promise.all([
+        const [
+          promptResponse,
+          moodResponse,
+          utilTaskResponse,
+          promptPragmaResponse,
+        ] = await Promise.all([
           fetch("/api/settings/system-prompts", {
             cache: "no-store",
           }),
@@ -242,6 +258,9 @@ export function PromptSettingsButton() {
             cache: "no-store",
           }),
           fetch("/api/settings/util-tasks", {
+            cache: "no-store",
+          }),
+          fetch("/api/settings/prompt-pragmas", {
             cache: "no-store",
           }),
         ]);
@@ -257,11 +276,16 @@ export function PromptSettingsButton() {
         if (!utilTaskResponse.ok) {
           throw new Error("Failed to load util task settings.");
         }
+        if (!promptPragmaResponse.ok) {
+          throw new Error("Failed to load prompt pragma settings.");
+        }
 
         const promptData = (await promptResponse.json()) as PromptSettingsResponse;
         const moodData = (await moodResponse.json()) as MoodSettingsResponse;
         const utilTaskData =
           (await utilTaskResponse.json()) as UtilTaskSettingsResponse;
+        const promptPragmaData =
+          (await promptPragmaResponse.json()) as PromptPragmaSettingsResponse;
 
         if (!cancelled) {
           setPrompts(promptData.prompts);
@@ -269,6 +293,8 @@ export function PromptSettingsButton() {
           setMoods(moodData.moods);
           setUtilTasks(utilTaskData.tasks);
           setUtilTaskDefaults(utilTaskData.defaults);
+          setPromptPragmasDefaults(promptPragmaData.defaults ?? {});
+          setPromptPragmasText(JSON.stringify(promptPragmaData.pragmas ?? [], null, 2));
         }
       } catch (nextError) {
         if (!cancelled) {
@@ -328,12 +354,24 @@ export function PromptSettingsButton() {
     textarea.setSelectionRange(cursorPosition, cursorPosition);
   }, [expandedMode]);
 
+  const promptSettingsModes = [...promptModes, "studio_assistant"] as const;
+
+  const modeLabel = (mode: string) =>
+    mode === "studio_assistant"
+      ? "Studio Assistant"
+      : promptModeLabels[mode as PromptMode] ?? mode;
+
+  const modeDescription = (mode: string) =>
+    mode === "studio_assistant"
+      ? "Direct Comfy assistant router prompt."
+      : promptModeDescriptions[mode as PromptMode] ?? "";
+
   const canSave = useMemo(
     () => !!prompts && !!moods && !!utilTasks && !loading && !saving,
     [prompts, moods, utilTasks, loading, saving],
   );
 
-  const updateModePrompt = (mode: PromptMode, value: string) => {
+  const updateModePrompt = (mode: string, value: string) => {
     setPrompts((previous) => {
       if (!previous) {
         return previous;
@@ -346,7 +384,7 @@ export function PromptSettingsButton() {
     });
   };
 
-  const restoreDefault = (mode: PromptMode) => {
+  const restoreDefault = (mode: string) => {
     if (!defaults) {
       return;
     }
@@ -483,12 +521,48 @@ export function PromptSettingsButton() {
       return;
     }
 
+    let parsedPromptPragmas: Array<{ name: string; template: string }> = [];
+    try {
+      const parsed = JSON.parse(promptPragmasText);
+      if (!Array.isArray(parsed)) {
+        throw new Error("Prompt pragmas must be a JSON array.");
+      }
+      parsedPromptPragmas = parsed.map((item) => {
+        if (
+          !item ||
+          typeof item !== "object" ||
+          typeof (item as { name?: unknown }).name !== "string" ||
+          typeof (item as { template?: unknown }).template !== "string"
+        ) {
+          throw new Error(
+            "Each pragma must be an object with string fields: name and template.",
+          );
+        }
+        return {
+          name: (item as { name: string }).name,
+          template: (item as { template: string }).template,
+        };
+      });
+    } catch (parseError) {
+      setError(
+        parseError instanceof Error
+          ? parseError.message
+          : "Invalid prompt pragma JSON.",
+      );
+      return;
+    }
+
     try {
       setSaving(true);
       setError(null);
       setSavedAt(null);
 
-      const [promptResponse, moodResponse, utilTaskResponse] = await Promise.all([
+      const [
+        promptResponse,
+        moodResponse,
+        utilTaskResponse,
+        promptPragmaResponse,
+      ] = await Promise.all([
         fetch("/api/settings/system-prompts", {
           method: "PATCH",
           headers: {
@@ -516,6 +590,15 @@ export function PromptSettingsButton() {
             tasks: normalizedUtilTasks,
           }),
         }),
+        fetch("/api/settings/prompt-pragmas", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            pragmas: parsedPromptPragmas,
+          }),
+        }),
       ]);
 
       if (!promptResponse.ok) {
@@ -530,16 +613,23 @@ export function PromptSettingsButton() {
         throw new Error("Failed to save util task settings.");
       }
 
+      if (!promptPragmaResponse.ok) {
+        throw new Error("Failed to save prompt pragma settings.");
+      }
+
       const promptData = (await promptResponse.json()) as {
-        prompts: Record<PromptMode, string>;
+        prompts: Record<string, string>;
       };
       const moodData = (await moodResponse.json()) as MoodSettingsResponse;
       const utilTaskData =
         (await utilTaskResponse.json()) as { tasks: EditableUtilTask[] };
+      const promptPragmaData =
+        (await promptPragmaResponse.json()) as PromptPragmaSettingsResponse;
 
       setPrompts(promptData.prompts);
       setMoods(moodData.moods);
       setUtilTasks(utilTaskData.tasks);
+      setPromptPragmasText(JSON.stringify(promptPragmaData.pragmas ?? [], null, 2));
       setSavedAt(new Date().toISOString());
       window.dispatchEvent(new Event(MOODS_UPDATED_EVENT));
     } catch (nextError) {
@@ -550,7 +640,6 @@ export function PromptSettingsButton() {
       setSaving(false);
     }
   };
-
   const selectAllExpandedPrompt = () => {
     const textarea = expandedTextareaRef.current;
     if (!textarea) {
@@ -614,7 +703,7 @@ export function PromptSettingsButton() {
         <Tabs.Root
           value={activeTab}
           onValueChange={(value) => {
-            if (value === "modes" || value === "moods" || value === "utilTasks") {
+            if (value === "modes" || value === "moods" || value === "utilTasks" || value === "pragmas") {
               setActiveTab(value);
             }
             closeExpandedMode();
@@ -659,6 +748,12 @@ export function PromptSettingsButton() {
             >
               Util Tasks
             </Tabs.Trigger>
+            <Tabs.Trigger
+              value="pragmas"
+              className="rounded-full border border-white/70 bg-white px-3 py-1.5 text-xs font-semibold text-[hsl(var(--aui-foreground))] transition hover:bg-[#f7f2ff] data-[state=active]:border-transparent data-[state=active]:bg-[linear-gradient(135deg,#7f74ff_0%,#b7adff_100%)] data-[state=active]:text-white"
+            >
+              Pragmas
+            </Tabs.Trigger>
           </Tabs.List>
 
           <div
@@ -674,7 +769,7 @@ export function PromptSettingsButton() {
               <div className="space-y-4">
 
                 <Tabs.Content value="modes" className="space-y-4">
-                  {promptModes.map((mode) => (
+                  {promptSettingsModes.map((mode) => (
                     <div
                       key={mode}
                       className="rounded-[20px] border border-white/70 bg-white/85 p-4"
@@ -682,10 +777,10 @@ export function PromptSettingsButton() {
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div>
                           <h3 className="text-sm font-semibold text-[#1f1838]">
-                            {promptModeLabels[mode]}
+                            {modeLabel(mode)}
                           </h3>
                           <p className="mt-0.5 text-xs text-[hsl(var(--aui-muted-foreground))]">
-                            {promptModeDescriptions[mode]}
+                            {modeDescription(mode)}
                           </p>
                         </div>
                         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
@@ -821,6 +916,41 @@ export function PromptSettingsButton() {
                     </div>
                   </div>
                 </Tabs.Content>
+
+                <Tabs.Content value="pragmas" className="space-y-4">
+                  <div className="rounded-[20px] border border-white/70 bg-white/85 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-[#1f1838]">
+                          Prompt Pragmas
+                        </h3>
+                        <p className="mt-0.5 text-xs text-[hsl(var(--aui-muted-foreground))]">
+                          Reusable prompt inserts via <code>{'{{@pragma:insert "name"}}'}</code>.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const defaultsPayload = Object.entries(
+                            promptPragmasDefaults,
+                          ).map(([name, template]) => ({ name, template }));
+                          setPromptPragmasText(
+                            JSON.stringify(defaultsPayload, null, 2),
+                          );
+                        }}
+                        className="shrink-0 rounded-full border border-white/70 bg-white px-3 py-1 text-xs font-medium text-[hsl(var(--aui-foreground))] transition hover:bg-[#f7f2ff]"
+                      >
+                        Restore Defaults
+                      </button>
+                    </div>
+
+                    <textarea
+                      value={promptPragmasText}
+                      onChange={(event) => setPromptPragmasText(event.target.value)}
+                      className="mt-3 min-h-[260px] w-full resize-y rounded-[14px] border border-[hsl(var(--aui-border))] bg-white px-3 py-2 font-mono text-xs leading-6 text-[#2a2146] caret-[#2a2146] shadow-[inset_0_1px_1px_rgba(31,24,56,0.04)] outline-none focus:border-[#8b7cff]"
+                    />
+                  </div>
+                </Tabs.Content>
               </div>
             )}
           </div>
@@ -882,7 +1012,7 @@ export function PromptSettingsButton() {
             <div className="flex items-center justify-between border-b border-white/70 px-4 py-3">
               <div>
                 <h3 className="text-base font-semibold text-[#1f1838]">
-                  {promptModeLabels[expandedMode]} Prompt
+                  {modeLabel(expandedMode)} Prompt
                 </h3>
                 <p className="text-xs text-[hsl(var(--aui-muted-foreground))]">
                   Fullscreen editor

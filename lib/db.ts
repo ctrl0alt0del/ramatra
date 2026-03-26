@@ -193,7 +193,7 @@ const ensureSchema = (db: Database.Database) => {
     );
 
     CREATE TABLE IF NOT EXISTS prompt_mode_settings (
-      mode TEXT PRIMARY KEY CHECK (mode IN ('fast', 'regular', 'writer', 'roleplay', 'artist')),
+      mode TEXT PRIMARY KEY CHECK (mode IN ('fast', 'regular', 'writer', 'roleplay', 'artist', 'studio_assistant')),
       prompt TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -211,6 +211,12 @@ const ensureSchema = (db: Database.Database) => {
       prompt TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       mcp_servers_json TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS prompt_pragma_settings (
+      name TEXT PRIMARY KEY,
+      template TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
 
@@ -267,13 +273,14 @@ const ensureSchema = (db: Database.Database) => {
   const promptModeSettingsSql = (promptModeSettingsSqlRow?.sql ?? "").toLowerCase();
   if (
     promptModeSettingsSql.length > 0 &&
-    !promptModeSettingsSql.includes("'roleplay'")
+    (!promptModeSettingsSql.includes("'roleplay'") ||
+      !promptModeSettingsSql.includes("'studio_assistant'"))
   ) {
     db.exec(`
       ALTER TABLE prompt_mode_settings RENAME TO prompt_mode_settings_legacy;
 
       CREATE TABLE prompt_mode_settings (
-        mode TEXT PRIMARY KEY CHECK (mode IN ('fast', 'regular', 'writer', 'roleplay', 'artist')),
+        mode TEXT PRIMARY KEY CHECK (mode IN ('fast', 'regular', 'writer', 'roleplay', 'artist', 'studio_assistant')),
         prompt TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -281,7 +288,7 @@ const ensureSchema = (db: Database.Database) => {
       INSERT INTO prompt_mode_settings (mode, prompt, updated_at)
       SELECT mode, prompt, updated_at
       FROM prompt_mode_settings_legacy
-      WHERE mode IN ('fast', 'regular', 'writer', 'artist');
+      WHERE mode IN ('fast', 'regular', 'writer', 'roleplay', 'artist', 'studio_assistant');
 
       DROP TABLE prompt_mode_settings_legacy;
     `);
