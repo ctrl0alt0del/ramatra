@@ -93,6 +93,21 @@ export const requestLmStudioChat = async ({
     hasSystemPrompt:
       typeof payload.system_prompt === "string" && payload.system_prompt.length > 0,
     stream: payload.stream,
+    integrations: (Array.isArray(payload.integrations) ? payload.integrations : []).map(
+      (integration: unknown) => {
+        const record = (integration ?? {}) as Record<string, unknown>;
+        return {
+          type: typeof record.type === "string" ? record.type : null,
+          serverLabel:
+            typeof record.server_label === "string" ? record.server_label : null,
+          allowedTools: Array.isArray(record.allowed_tools)
+            ? record.allowed_tools.filter(
+                (tool): tool is string => typeof tool === "string",
+              )
+            : [],
+        };
+      },
+    ),
   });
 
   return fetch(getLmStudioChatUrl(), {

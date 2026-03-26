@@ -6,6 +6,8 @@ type DownloadedLoraRow = {
   source_url: string | null;
   model_id: number | null;
   model_url: string | null;
+  civitai_base_model: string | null;
+  image_url: string | null;
   trained_words_json: string;
   created_at: string;
   updated_at: string;
@@ -17,6 +19,8 @@ export type DownloadedLoraMetadata = {
   sourceUrl: string | null;
   modelId: number | null;
   modelUrl: string | null;
+  civitaiBaseModel: string | null;
+  imageUrl: string | null;
   trainedWords: string[];
   createdAt: string;
   updatedAt: string;
@@ -47,6 +51,8 @@ const rowToMetadata = (row: DownloadedLoraRow): DownloadedLoraMetadata => ({
   sourceUrl: row.source_url,
   modelId: row.model_id,
   modelUrl: row.model_url,
+  civitaiBaseModel: row.civitai_base_model,
+  imageUrl: row.image_url,
   trainedWords: parseTrainedWords(row.trained_words_json),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -58,6 +64,8 @@ export const upsertDownloadedLoraMetadata = (input: {
   sourceUrl?: string | null;
   modelId?: number | null;
   modelUrl?: string | null;
+  civitaiBaseModel?: string | null;
+  imageUrl?: string | null;
   trainedWords?: string[];
 }) => {
   const installedPath = normalizeInstalledPath(input.installedPath);
@@ -80,15 +88,19 @@ export const upsertDownloadedLoraMetadata = (input: {
         source_url,
         model_id,
         model_url,
+        civitai_base_model,
+        image_url,
         trained_words_json,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(installed_path) DO UPDATE SET
         base_model = excluded.base_model,
         source_url = excluded.source_url,
         model_id = excluded.model_id,
         model_url = excluded.model_url,
+        civitai_base_model = excluded.civitai_base_model,
+        image_url = excluded.image_url,
         trained_words_json = excluded.trained_words_json,
         updated_at = excluded.updated_at
     `,
@@ -98,6 +110,8 @@ export const upsertDownloadedLoraMetadata = (input: {
     input.sourceUrl ?? null,
     Number.isFinite(input.modelId ?? NaN) ? input.modelId : null,
     input.modelUrl ?? null,
+    input.civitaiBaseModel ?? null,
+    input.imageUrl ?? null,
     JSON.stringify(trainedWords),
     timestamp,
     timestamp,
@@ -124,6 +138,8 @@ export const listDownloadedLoraMetadataByInstalledPaths = (
           source_url,
           model_id,
           model_url,
+          civitai_base_model,
+          image_url,
           trained_words_json,
           created_at,
           updated_at

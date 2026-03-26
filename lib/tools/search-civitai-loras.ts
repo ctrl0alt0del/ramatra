@@ -1,4 +1,4 @@
-﻿import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 export const searchCivitaiLorasToolName = "search_civitai_loras";
@@ -6,7 +6,6 @@ export const searchCivitaiLorasToolName = "search_civitai_loras";
 const searchCivitaiLorasInputSchema = z.object({
   query: z.string().min(1),
   baseModel: z.enum(["sdxl", "illustrious", "qwen", "chroma"]).optional(),
-  limit: z.number().int().min(1).max(12).optional(),
 });
 
 type CivitaiFile = {
@@ -40,6 +39,11 @@ type SearchResponse = {
   items?: unknown;
 };
 
+const SEARCH_RETRY_MAX_CALLS_PER_BURST = 4;
+const SEARCH_RETRY_BURST_WINDOW_MS = 15_000;
+let searchRetryBurstCount = 0;
+let searchRetryBurstStartedAt = 0;
+
 const toNumber = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : 0;
 
@@ -62,14 +66,33 @@ const getCivitaiSiteOrigin = (apiBase: string) => {
 };
 
 const fetchJson = async (url: string) => {
-  const headers: Record<string, string> = {};
-  if (process.env.CIVITAI_API_KEY) {
-    headers.Authorization = `Bearer ${process.env.CIVITAI_API_KEY}`;
-  }
+  const apiKey = process.env.CIVITAI_API_KEY?.trim() ?? "";
+  const resolvedUrl = (() => {
+    if (!apiKey) {
+      return url;
+    }
 
-  const response = await fetch(url, {
+    try {
+      const parsed = new URL(url);
+      if (!parsed.searchParams.has("token")) {
+        parsed.searchParams.set("token", apiKey);
+      }
+      return parsed.toString();
+    } catch {
+      const joiner = url.includes("?") ? "&" : "?";
+      return `${url}${joiner}token=${encodeURIComponent(apiKey)}`;
+    }
+  })();
+
+  const safeResolvedUrl = resolvedUrl.replace(/([?&]token=)[^&]*/i, "$1***");
+  console.info("[civitai-search] fetch", {
+    url: safeResolvedUrl,
+    hasApiKey: Boolean(apiKey),
+    tokenInQuery: /[?&]token=/i.test(resolvedUrl),
+  });
+
+  const response = await fetch(resolvedUrl, {
     method: "GET",
-    headers,
   });
 
   if (!response.ok) {
@@ -150,15 +173,30 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
     },
     async (input) => {
       try {
+        const now = Date.now();
+        if (now - searchRetryBurstStartedAt > SEARCH_RETRY_BURST_WINDOW_MS) {
+          searchRetryBurstStartedAt = now;
+          searchRetryBurstCount = 0;
+        }
+        searchRetryBurstCount += 1;
+        if (searchRetryBurstCount > SEARCH_RETRY_MAX_CALLS_PER_BURST) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  "Search retry limit reached for this assistant turn (max 3 retries, 4 calls total). Return final JSON using current best matches.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
         const apiBase = getCivitaiBaseUrl();
         const civitaiSiteOrigin = getCivitaiSiteOrigin(apiBase);
-        const limit = Math.max(1, Math.min(12, input.limit ?? 8));
 
         const params = new URLSearchParams();
         params.set("query", input.query.trim());
-        params.set("limit", String(Math.max(20, limit * 3)));
-        params.set("sort", "Most Downloaded");
-        params.set("period", "AllTime");
         params.set("nsfw", "true");
         params.append("types", "LORA");
 
@@ -166,7 +204,13 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
           params.append("baseModels", model);
         }
 
-        const searchRaw = await fetchJson(`${apiBase}/api/v1/models?${params.toString()}`);
+        const searchUrl = `${apiBase}/api/v1/models?${params.toString()}`;
+        console.info("[civitai-search] request", {
+          url: searchUrl,
+          hasApiKey: Boolean(process.env.CIVITAI_API_KEY),
+        });
+
+        const searchRaw = await fetchJson(searchUrl);
         const search = searchRaw as SearchResponse;
         const items = toArray<CivitaiModel>(search.items);
 
@@ -181,13 +225,11 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
           fileName: string | null;
           modelUrl: string;
           trainedWords: string[];
+          civitaiBaseModel: string;
           baseModel: "sdxl" | "illustrious" | "qwen" | "chroma";
         }>;
 
         for (const model of items) {
-          if (normalized.length >= limit) {
-            break;
-          }
 
           const name = toStringValue(model.name);
           const modelId = toNumber(model.id);
@@ -198,6 +240,8 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
           }
 
           const versionBaseModel = toStringValue(version.baseModel).toLowerCase();
+          const rawCivitaiBaseModel =
+            toStringValue(version.baseModel).trim() || "Unknown";
           const inferredBaseModel: "sdxl" | "illustrious" | "qwen" | "chroma" =
             input.baseModel ??
             (versionBaseModel.includes("illustrious")
@@ -241,17 +285,16 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
             fileName: download.fileName,
             modelUrl: `${civitaiSiteOrigin}/models/${modelId}`,
             trainedWords,
+            civitaiBaseModel: rawCivitaiBaseModel,
             baseModel: inferredBaseModel,
           });
         }
-
-        normalized.sort((a, b) => b.downloads - a.downloads || b.likes - a.likes);
 
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ items: normalized.slice(0, limit) }),
+              text: JSON.stringify({ items: normalized }),
             },
           ],
         };
@@ -272,7 +315,4 @@ export const registerSearchCivitaiLorasMcpTool = (server: McpServer) => {
     },
   );
 };
-
-
-
 

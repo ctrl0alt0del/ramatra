@@ -13,6 +13,8 @@ const requestSchema = z.object({
   overwrite: z.boolean().optional(),
   modelId: z.number().int().positive().optional(),
   modelUrl: z.string().url().optional(),
+  civitaiBaseModel: z.string().min(1).optional(),
+  imageUrl: z.string().url().optional(),
   trainedWords: z.array(z.string().min(1)).optional(),
 });
 
@@ -76,6 +78,8 @@ export async function POST(req: Request) {
               sourceUrl: parsed.data.url,
               modelId: parsed.data.modelId ?? null,
               modelUrl: parsed.data.modelUrl ?? null,
+              civitaiBaseModel: parsed.data.civitaiBaseModel ?? null,
+              imageUrl: parsed.data.imageUrl ?? null,
               trainedWords: parsed.data.trainedWords ?? [],
             });
             emit({

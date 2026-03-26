@@ -164,20 +164,42 @@ const readSafetensorsMetadata = async (
   const handle = await fs.open(filePath, "r");
 
   try {
+    const fileStat = await handle.stat();
+    const fileSize = fileStat.size;
+    if (!Number.isFinite(fileSize) || fileSize <= 8) {
+      return null;
+    }
+
     const sizeBuffer = Buffer.alloc(8);
     await handle.read(sizeBuffer, 0, 8, 0);
 
-    const headerLength = Number(sizeBuffer.readBigUInt64LE(0));
+    const headerLengthBigInt = sizeBuffer.readBigUInt64LE(0);
+    if (headerLengthBigInt > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return null;
+    }
+
+    const headerLength = Number(headerLengthBigInt);
     if (!Number.isFinite(headerLength) || headerLength <= 0) {
+      return null;
+    }
+    // Corrupted or non-safetensors files can report absurd header lengths.
+    if (headerLength > fileSize - 8) {
+      return null;
+    }
+    // Hard cap for metadata header sanity.
+    if (headerLength > 16 * 1024 * 1024) {
       return null;
     }
 
     const headerBuffer = Buffer.alloc(headerLength);
     await handle.read(headerBuffer, 0, headerLength, 8);
 
-    const header = JSON.parse(
-      headerBuffer.toString("utf8"),
-    ) as RawSafetensorsHeader;
+    let header: RawSafetensorsHeader;
+    try {
+      header = JSON.parse(headerBuffer.toString("utf8")) as RawSafetensorsHeader;
+    } catch {
+      return null;
+    }
     const metadata = header.__metadata__;
     if (!metadata) {
       return null;
@@ -257,7 +279,12 @@ const scanAvailableLoras = async () => {
     files.map(async (absolutePath) => {
       const name = path.relative(loraDirectory, absolutePath);
 
-      const metadata = await readSafetensorsMetadata(absolutePath);
+      let metadata: LoraMetadata | null = null;
+      try {
+        metadata = await readSafetensorsMetadata(absolutePath);
+      } catch {
+        metadata = null;
+      }
 
       return {
         name,
@@ -316,13 +343,19 @@ export const listAvailableLoras = async ({
       ? WORKFLOW_LORA_SUBFOLDERS[workflowName]
       : [...STATIC_LORA_SUBFOLDERS],
     total: filtered.length,
-    items: filtered.map((lora) => ({
-      name: lora.name,
-      top_tag: lora.metadata?.topTag?.name ?? null,
-      trained_words:
-        downloadedMetadataByPath.get(normalizeLoraPath(lora.name))
-          ?.trainedWords ?? [],
-    })),
+    items: filtered.map((lora) => {
+      const downloadedMetadata = downloadedMetadataByPath.get(
+        normalizeLoraPath(lora.name),
+      );
+      return {
+        name: lora.name,
+        top_tag: lora.metadata?.topTag?.name ?? null,
+        trained_words: downloadedMetadata?.trainedWords ?? [],
+        image_url: downloadedMetadata?.imageUrl ?? null,
+        civitai_base_model: downloadedMetadata?.civitaiBaseModel ?? null,
+        model_url: downloadedMetadata?.modelUrl ?? null,
+      };
+    }),
   };
 };
 const getClosestLoraMatches = (

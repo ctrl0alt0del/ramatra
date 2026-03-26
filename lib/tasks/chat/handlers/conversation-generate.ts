@@ -42,15 +42,40 @@ export const executeConversationGenerateStage = async ({
 
   const normalizedUserInput =
     typeof userInput === "string" && userInput.length === 0 ? " " : userInput;
+  const conversationPayload =
+    task.payload.kind === "conversation" ? task.payload : null;
+  const isStudioAssistantTask =
+    conversationPayload !== null && conversationPayload.threadId === null;
+  const isStudioAssistantUtilTask =
+    isStudioAssistantTask &&
+    typeof conversationPayload?.utilTaskName === "string" &&
+    conversationPayload.utilTaskName.trim().length > 0;
+  const studioAssistantAllowedTools: string[] = isStudioAssistantUtilTask
+    ? ["search_civitai_loras"]
+    : [];
   const integrationOverride =
-    task.payload.kind === "conversation" && task.payload.disableMcpTools === true
+    task.payload.kind === "conversation" &&
+    task.payload.disableMcpTools === true
       ? []
-      : task.payload.kind === "conversation" &&
-          Array.isArray(task.payload.utilMcpServers)
-        ? buildIntegrationsForServers(task.payload.utilMcpServers, {
+      : task.payload.kind === "conversation" && isStudioAssistantUtilTask
+        ? buildIntegrationsForServers(["comfy"], {
             promptMode: task.payload.promptMode,
+            allowedToolsByServer: {
+              comfy: studioAssistantAllowedTools,
+            },
           })
-        : undefined;
+        : task.payload.kind === "conversation" &&
+            Array.isArray(task.payload.utilMcpServers)
+          ? buildIntegrationsForServers(task.payload.utilMcpServers, {
+              promptMode: task.payload.promptMode,
+              allowedToolsByServer:
+                studioAssistantAllowedTools.length > 0
+                  ? {
+                      comfy: studioAssistantAllowedTools,
+                    }
+                  : undefined,
+            })
+          : undefined;
 
   if (
     task.payload.kind === "conversation" &&
@@ -89,7 +114,11 @@ export const executeConversationGenerateStage = async ({
       threadId: task.payload.threadId ?? null,
       error:
         error instanceof Error
-          ? { name: error.name, message: error.message, stack: error.stack ?? null }
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack ?? null,
+            }
           : { name: "UnknownError", message: String(error), stack: null },
     });
     throw error;

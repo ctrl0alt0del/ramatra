@@ -123,8 +123,15 @@ export const upsertDirectComfyHistory = (input: {
   );
 };
 
-export const listDirectComfyHistory = (limit = 60): DirectComfyHistoryItem[] => {
+export const listDirectComfyHistory = ({
+  limit = 60,
+  offset = 0,
+}: {
+  limit?: number;
+  offset?: number;
+}): DirectComfyHistoryItem[] => {
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, limit)) : 60;
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
   const rows = db
     .prepare(
       `
@@ -147,9 +154,10 @@ export const listDirectComfyHistory = (limit = 60): DirectComfyHistoryItem[] => 
         FROM direct_comfy_history
         ORDER BY created_at DESC
         LIMIT ?
+        OFFSET ?
       `,
     )
-    .all(safeLimit) as DirectComfyHistoryRow[];
+    .all(safeLimit, safeOffset) as DirectComfyHistoryRow[];
 
   return rows.map((row) => {
     const task = getTask(row.task_id);
@@ -193,6 +201,19 @@ export const listDirectComfyHistory = (limit = 60): DirectComfyHistoryItem[] => 
       images,
     };
   });
+};
+
+export const countDirectComfyHistory = () => {
+  const row = db
+    .prepare(
+      `
+        SELECT COUNT(*) AS total
+        FROM direct_comfy_history
+      `,
+    )
+    .get() as { total?: number } | undefined;
+
+  return Number.isFinite(row?.total ?? NaN) ? Number(row?.total) : 0;
 };
 
 export const deleteDirectComfyHistoryItem = (id: string) => {

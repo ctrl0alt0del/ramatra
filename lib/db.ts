@@ -243,6 +243,8 @@ const ensureSchema = (db: Database.Database) => {
       source_url TEXT,
       model_id INTEGER,
       model_url TEXT,
+      civitai_base_model TEXT,
+      image_url TEXT,
       trained_words_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -561,6 +563,22 @@ const ensureSchema = (db: Database.Database) => {
       UPDATE util_task_settings
       SET mcp_servers_json = '[]'
       WHERE mcp_servers_json IS NULL OR TRIM(COALESCE(mcp_servers_json, '')) = ''
+    `);
+  }
+
+  const downloadedLoraColumns = db.prepare(`PRAGMA table_info(downloaded_loras)`).all() as Array<{
+    name: string;
+  }>;
+  if (!downloadedLoraColumns.some((column) => column.name === "civitai_base_model")) {
+    db.exec(`
+      ALTER TABLE downloaded_loras
+      ADD COLUMN civitai_base_model TEXT
+    `);
+  }
+  if (!downloadedLoraColumns.some((column) => column.name === "image_url")) {
+    db.exec(`
+      ALTER TABLE downloaded_loras
+      ADD COLUMN image_url TEXT
     `);
   }
 

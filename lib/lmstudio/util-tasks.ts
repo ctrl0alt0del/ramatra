@@ -1,4 +1,4 @@
-﻿import "server-only";
+import "server-only";
 
 import { getDb } from "@/lib/db";
 
@@ -72,18 +72,23 @@ const defaultUtilTaskPrompts = {
   ].join("\n"),
   studio_lora_find: [
     "You are a LoRA discovery assistant for Direct Studio.",
-    "Use search_civitai_loras exactly once, then return final answer.",
     "Input is provided in context_text and includes user request.",
     "Infer base model from request:",
     "- if mentions illustrious or illustrios => illustrious",
     "- if mentions qwen => qwen",
     "- if mentions chroma => chroma",
     "- otherwise => sdxl",
-    "Call search_civitai_loras with query from request, inferred baseModel, limit 8.",
+    "Search strategy:",
+    "- Call search_civitai_loras exactly once using the user's query and inferred baseModel.",
+    "- Do not retry. Do not call search_civitai_loras again.",
     "Output ONLY valid JSON.",
     "No markdown, no prose, no code fences, no util_task blocks.",
     "JSON schema:",
-    '{"items":[{"modelId":number,"name":"string","model":"string","likes":number,"downloads":number,"imageUrl":"string|null","downloadUrl":"string","fileName":"string|null","modelUrl":"string","trainedWords":["string"],"baseModel":"sdxl|illustrious|chroma|qwen"}]}',
+    '{"items":[{"modelId":number,"name":"string","model":"string","likes":number,"downloads":number,"imageUrl":"string|null","downloadUrl":"string","fileName":"string|null","modelUrl":"string","trainedWords":["string"],"civitaiBaseModel":"string","baseModel":"sdxl|illustrious|chroma|qwen"}],"alternativeQueries":["string"]}',
+    "alternativeQueries rules:",
+    "- Provide 0-5 short query suggestions for manual follow-up searches.",
+    "- Suggestions should be rephrases/synonyms/narrower-or-broader variants.",
+    "- Keep suggestions plain text only.",
   ].join("\n"),
   studio_prompt_enhance: [
     "You are a prompt enhancement assistant for Direct Studio.",
@@ -196,7 +201,7 @@ const defaultUtilTaskMcpServers: Record<string, UtilTaskMcpServerLabel[]> = {
   img_gen_workflow: [],
   img_gen_loras: ["comfy_readonly"],
   img_gen_finalize: ["comfy"],
-  studio_lora_find: ["comfy_readonly"],
+  studio_lora_find: ["comfy"],
   studio_prompt_enhance: [],
   studio_prompt_base_enhance: [],
   studio_prompt_illustration_enhance: [],
@@ -268,13 +273,43 @@ const ensureUtilTaskSettingsSeeded = () => {
       `,
     ).run(JSON.stringify(["comfy_readonly"]), timestamp, "img_gen_loras");
   }
+  const maybeLegacyStudioLoraServers = db
+    .prepare(
+      `
+        SELECT mcp_servers_json
+        FROM util_task_settings
+        WHERE name = ?
+      `,
+    )
+    .get("studio_lora_find") as { mcp_servers_json: string } | undefined;
+  if (
+    maybeLegacyStudioLoraServers?.mcp_servers_json ===
+    JSON.stringify(["comfy_readonly"])
+  ) {
+    db.prepare(
+      `
+        UPDATE util_task_settings
+        SET mcp_servers_json = ?, updated_at = ?
+        WHERE name = ?
+      `,
+    ).run(JSON.stringify(["comfy"]), timestamp, "studio_lora_find");
+  }
   if (
     typeof maybeLegacyStudioLoraPrompt?.prompt === "string" &&
     (maybeLegacyStudioLoraPrompt.prompt.includes(
       '\"downloadUrl\":\"string\",\"fileName\":\"string|null\",\"baseModel\":\"sdxl|illustrious|chroma|qwen\"',
     ) ||
       !maybeLegacyStudioLoraPrompt.prompt.includes('\"modelUrl\":\"string\"') ||
-      !maybeLegacyStudioLoraPrompt.prompt.includes('\"trainedWords\"'))
+      !maybeLegacyStudioLoraPrompt.prompt.includes('\"trainedWords\"') ||
+      !maybeLegacyStudioLoraPrompt.prompt.includes('\"civitaiBaseModel\"') ||
+      !maybeLegacyStudioLoraPrompt.prompt.includes('\"alternativeQueries\"') ||
+      maybeLegacyStudioLoraPrompt.prompt.includes("limit 8") ||
+      maybeLegacyStudioLoraPrompt.prompt.includes("exactly once") ||
+      maybeLegacyStudioLoraPrompt.prompt.includes(
+        "Recursive LoRA Discovery Agent",
+      ) ||
+      maybeLegacyStudioLoraPrompt.prompt.includes("SEARCH PROTOCOL (STRICT)") ||
+      maybeLegacyStudioLoraPrompt.prompt.includes("Maximum retries: 3"))
   ) {
     db.prepare(
       `
@@ -282,7 +317,11 @@ const ensureUtilTaskSettingsSeeded = () => {
         SET prompt = ?, updated_at = ?
         WHERE name = ?
       `,
-    ).run(defaultUtilTaskPrompts.studio_lora_find, timestamp, "studio_lora_find");
+    ).run(
+      defaultUtilTaskPrompts.studio_lora_find,
+      timestamp,
+      "studio_lora_find",
+    );
   }
   for (const [name, prompt] of Object.entries(defaultUtilTaskPrompts)) {
     insert.run(
@@ -402,6 +441,3 @@ export const replaceUtilTaskSettings = (
 
   return listUtilTaskSettings();
 };
-
-
-

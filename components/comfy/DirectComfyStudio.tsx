@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import extractJsonFromString from "extract-json-from-string";
 
 type WorkflowName = "base" | "illustration" | "edit";
@@ -9,6 +9,9 @@ type LoraItem = {
   name: string;
   top_tag: string | null;
   trained_words?: string[];
+  image_url?: string | null;
+  civitai_base_model?: string | null;
+  model_url?: string | null;
 };
 
 type GenerationHistoryItem = {
@@ -69,6 +72,7 @@ type AssistantLoraOption = {
   fileName: string | null;
   modelUrl: string | null;
   trainedWords: string[];
+  civitaiBaseModel: string;
   baseModel: "sdxl" | "illustrious" | "chroma" | "qwen";
 };
 
@@ -95,6 +99,7 @@ type LoraDownloadStreamEvent =
 type ParsedAssistantOptions = {
   cleanText: string;
   items: AssistantLoraOption[];
+  alternativeQueries: string[];
 };
 
 type AssistantPromptEnhance = {
@@ -307,11 +312,17 @@ const normalizeAssistantLoraItems = (value: unknown): AssistantLoraOption[] => {
               (word): word is string => typeof word === "string" && word.trim().length > 0,
             )
           : [],
+        civitaiBaseModel:
+          typeof record.civitaiBaseModel === "string" && record.civitaiBaseModel.trim().length > 0
+            ? record.civitaiBaseModel.trim()
+            : "Unknown",
         baseModel,
       } satisfies AssistantLoraOption;
     })
     .filter((item): item is AssistantLoraOption => item !== null);
 };
+
+const HISTORY_PAGE_SIZE = 3;
 
 const normalizeAssistantPromptEnhance = (value: unknown): AssistantPromptEnhance | null => {
   if (!value || typeof value !== "object") {
@@ -347,10 +358,19 @@ const parseAssistantLoraOptions = (text: string): ParsedAssistantOptions => {
 
   const tryParse = (jsonText: string, cleanText: string): ParsedAssistantOptions | null => {
     try {
-      const parsed = JSON.parse(jsonText) as { items?: unknown };
+      const parsed = JSON.parse(jsonText) as {
+        items?: unknown;
+        alternativeQueries?: unknown;
+      };
       return {
         cleanText,
         items: normalizeAssistantLoraItems(parsed.items),
+        alternativeQueries: Array.isArray(parsed.alternativeQueries)
+          ? parsed.alternativeQueries.filter(
+              (query): query is string =>
+                typeof query === "string" && query.trim().length > 0,
+            )
+          : [],
       };
     } catch {
       return null;
@@ -386,6 +406,7 @@ const parseAssistantLoraOptions = (text: string): ParsedAssistantOptions => {
   return {
     cleanText: source,
     items: [],
+    alternativeQueries: [],
   };
 };
 
@@ -466,6 +487,10 @@ export function DirectComfyStudio() {
   >({});
 
   const [history, setHistory] = useState<GenerationHistoryItem[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [historyHasMore, setHistoryHasMore] = useState(true);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isLoadingLoras, setIsLoadingLoras] = useState(false);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -490,6 +515,9 @@ export function DirectComfyStudio() {
   const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const assistantStreamRef = useRef<EventSource | null>(null);
+  const historyScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const historyLoadMoreRef = useRef<HTMLDivElement | null>(null);
+  const isLoadingHistoryRef = useRef(false);
 
   const [widthInput, setWidthInput] = useState(String(workflowDefaults.base.width));
   const [heightInput, setHeightInput] = useState(String(workflowDefaults.base.height));
@@ -552,37 +580,99 @@ export function DirectComfyStudio() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadHistory = async () => {
+  const loadHistoryPage = useCallback(
+    async (offset: number, { reset = false }: { reset?: boolean } = {}) => {
+      if (isLoadingHistoryRef.current) {
+        return;
+      }
+      isLoadingHistoryRef.current = true;
+      setIsLoadingHistory(true);
       try {
-        const response = await fetch("/api/comfy/studio-history?limit=80");
+        const response = await fetch(
+          `/api/comfy/studio-history?limit=${HISTORY_PAGE_SIZE}&offset=${Math.max(
+            0,
+            Math.floor(offset),
+          )}`,
+        );
         if (!response.ok) {
           throw new Error(`Failed to load Direct Comfy history (${response.status})`);
         }
 
-        const data = (await response.json()) as { items?: GenerationHistoryItem[] };
-        if (cancelled) {
-          return;
-        }
+        const data = (await response.json()) as {
+          items?: GenerationHistoryItem[];
+          total?: number;
+          nextOffset?: number;
+          hasMore?: boolean;
+        };
+        const items = Array.isArray(data.items) ? data.items : [];
+        const total = Number.isFinite(data.total ?? NaN) ? Number(data.total) : 0;
+        const nextOffset = Number.isFinite(data.nextOffset ?? NaN)
+          ? Number(data.nextOffset)
+          : offset + items.length;
 
-        setHistory(Array.isArray(data.items) ? data.items : []);
+        setHistory((previous) => {
+          if (reset) {
+            return items;
+          }
+          const existingIds = new Set(previous.map((entry) => entry.id));
+          const appended = items.filter((entry) => !existingIds.has(entry.id));
+          return [...previous, ...appended];
+        });
+        setHistoryTotal(total);
+        setHistoryOffset(Math.max(0, nextOffset));
+        setHistoryHasMore(Boolean(data.hasMore));
       } catch (nextError) {
-        if (!cancelled) {
-          setError(
-            nextError instanceof Error
-              ? nextError.message
-              : "Failed to load Direct Comfy history.",
-          );
-        }
+        setHistoryHasMore(false);
+        setError(
+          nextError instanceof Error
+            ? nextError.message
+            : "Failed to load Direct Comfy history.",
+        );
+      } finally {
+        isLoadingHistoryRef.current = false;
+        setIsLoadingHistory(false);
       }
-    };
+    },
+    [],
+  );
 
-    void loadHistory();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  useEffect(() => {
+    void loadHistoryPage(0, { reset: true });
+  }, [loadHistoryPage]);
+
+  useEffect(() => {
+    const root = historyScrollContainerRef.current;
+    const target = historyLoadMoreRef.current;
+    if (!root || !target) {
+      return;
+    }
+    if (isLoadingHistory || !historyHasMore) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) {
+            continue;
+          }
+          if (isLoadingHistory || !historyHasMore) {
+            continue;
+          }
+          void loadHistoryPage(historyOffset);
+          break;
+        }
+      },
+      {
+        root,
+        rootMargin: "200px 0px 200px 0px",
+        threshold: 0.1,
+      },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [historyHasMore, historyOffset, isLoadingHistory, loadHistoryPage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -774,7 +864,16 @@ export function DirectComfyStudio() {
       if (!data.deleted) {
         throw new Error("History item was not deleted.");
       }
-      setHistory((previous) => previous.filter((entry) => entry.id !== item.id));
+      let removed = false;
+      setHistory((previous) => {
+        const next = previous.filter((entry) => entry.id !== item.id);
+        removed = next.length !== previous.length;
+        return next;
+      });
+      if (removed) {
+        setHistoryTotal((previous) => Math.max(0, previous - 1));
+        setHistoryOffset((previous) => Math.max(0, previous - 1));
+      }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to delete history item.");
     } finally {
@@ -1035,6 +1134,8 @@ export function DirectComfyStudio() {
               ? item.modelId
               : undefined,
           modelUrl: civitaiModelUrl ?? undefined,
+          civitaiBaseModel: item.civitaiBaseModel,
+          imageUrl: item.imageUrl ?? undefined,
           trainedWords: item.trainedWords,
         }),
       });
@@ -1339,6 +1440,8 @@ export function DirectComfyStudio() {
         const filtered = previous.filter((item) => item.taskId !== taskId);
         return [nextItem, ...filtered];
       });
+      setHistoryTotal((previous) => previous + 1);
+      setHistoryOffset((previous) => previous + 1);
       setGenerationProgress((previous) =>
         previous
           ? {
@@ -1521,7 +1624,7 @@ export function DirectComfyStudio() {
                             LoRA
                           </span>
                           <span className="rounded-full bg-blue-500/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
-                            {item.baseModel}
+                            {item.civitaiBaseModel || item.baseModel}
                           </span>
                         </div>
 
@@ -1897,7 +2000,23 @@ export function DirectComfyStudio() {
                               });
                             }}
                           />
-                          <span className="break-all">{item.name}</span>
+                          <span className="flex min-w-0 items-start gap-2">
+                            {item.image_url ? (
+                              <img
+                                src={item.image_url}
+                                alt={item.name}
+                                className="h-10 w-10 shrink-0 rounded-md border border-[hsl(var(--aui-border))] object-cover"
+                              />
+                            ) : null}
+                            <span className="min-w-0">
+                              <span className="block break-all">{item.name}</span>
+                              {item.civitai_base_model ? (
+                                <span className="mt-0.5 block text-[10px] text-[hsl(var(--aui-muted-foreground))]">
+                                  {item.civitai_base_model}
+                                </span>
+                              ) : null}
+                            </span>
+                          </span>
                         </label>
                         <button
                           type="button"
@@ -2061,13 +2180,13 @@ export function DirectComfyStudio() {
         >
           <header className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-[hsl(var(--aui-foreground))]">Created Images</h2>
-            <span className="text-xs text-[hsl(var(--aui-muted-foreground))]">{history.length} runs</span>
+            <span className="text-xs text-[hsl(var(--aui-muted-foreground))]">{historyTotal} runs</span>
           </header>
 
-          <div className="h-[calc(100%-2rem)] overflow-y-auto pr-1">
+          <div ref={historyScrollContainerRef} className="h-[calc(100%-2rem)] overflow-y-auto pr-1">
             {history.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[hsl(var(--aui-border))] bg-white/70 p-6 text-sm text-[hsl(var(--aui-muted-foreground))]">
-                Your generated images will appear here.
+                {isLoadingHistory ? "Loading history..." : "Your generated images will appear here."}
               </div>
             ) : (
               <div className="space-y-4">
@@ -2123,6 +2242,18 @@ export function DirectComfyStudio() {
                     </div>
                   </article>
                 ))}
+                {isLoadingHistory ? (
+                  <div className="rounded-xl border border-[hsl(var(--aui-border))] bg-white/70 px-3 py-2 text-center text-xs text-[hsl(var(--aui-muted-foreground))]">
+                    Loading more runs...
+                  </div>
+                ) : null}
+                {historyHasMore ? (
+                  <div ref={historyLoadMoreRef} className="h-2 w-full" aria-hidden="true" />
+                ) : history.length > 0 ? (
+                  <div className="rounded-xl border border-dashed border-[hsl(var(--aui-border))] bg-white/60 px-3 py-2 text-center text-xs text-[hsl(var(--aui-muted-foreground))]">
+                    End of history
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

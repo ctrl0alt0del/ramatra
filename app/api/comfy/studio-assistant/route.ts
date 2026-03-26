@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { toHttpError } from "@/lib/errors/server-error";
-import { getConfiguredContextLengthForMode } from "@/lib/lmstudio/context-length";
 import { enqueueChatTask } from "@/lib/tasks/scheduler";
 import { processTaskQueues } from "@/lib/tasks/processor";
 
@@ -15,7 +14,7 @@ const studioAssistantSystemPrompt = [
   "You are Studio Assistant router for Direct Comfy workflows.",
   "You are stateless per request and must never rely on previous messages.",
   "Your job is only to choose the correct util task stage based on user request.",
-  "Do not call tools in this router step.",
+  "Do not execute any external actions in this router step.",
   "Do not output JSON in this router step.",
   "",
   "Routing rules:",
@@ -56,7 +55,7 @@ export async function POST(req: Request) {
       moodId: null,
       persistent: false,
       previousResponseIdOverride: null,
-      contextLength: getConfiguredContextLengthForMode("regular", process.env),
+      contextLength: 150000,
       systemPromptOverride: studioAssistantSystemPrompt,
       utilMcpServers: [],
       userMessage: [{ type: "text", text: parsed.data.message.trim() }],
@@ -86,4 +85,3 @@ export async function POST(req: Request) {
     });
   }
 }
-
