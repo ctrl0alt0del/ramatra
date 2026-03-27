@@ -68,11 +68,9 @@ const isAllowedForWorkflow = (
   );
 };
 
-const normalizeLoraName = (value: string) =>
-  value
-    .trim()
-    .replace(/[\\/]+/g, path.sep)
-    .toLowerCase();
+const toCanonicalLoraPath = (value: string) => value.trim().replace(/[\\/]+/g, "/");
+
+const normalizeLoraName = (value: string) => toCanonicalLoraPath(value).toLowerCase();
 
 const normalizeLoraRelativePath = (value: string) =>
   value.trim().replace(/[\\/]+/g, "/").toLowerCase();
@@ -278,7 +276,7 @@ const scanAvailableLoras = async () => {
   const files = subfolderFiles;
   const loras = await Promise.all(
     files.map(async (absolutePath) => {
-      const name = path.relative(loraDirectory, absolutePath);
+      const name = toCanonicalLoraPath(path.relative(loraDirectory, absolutePath));
 
       let metadata: LoraMetadata | null = null;
       try {
@@ -431,7 +429,7 @@ export const validateRequestedLoras = async (
     if (exactName) {
       resolved.push({
         ...requested,
-        name: exactName,
+        name: toCanonicalLoraPath(exactName),
       });
       continue;
     }
@@ -440,7 +438,7 @@ export const validateRequestedLoras = async (
     if (exactFileNameMatches.length === 1) {
       resolved.push({
         ...requested,
-        name: exactFileNameMatches[0],
+        name: toCanonicalLoraPath(exactFileNameMatches[0]),
       });
       continue;
     }
