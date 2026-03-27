@@ -1,4 +1,4 @@
-type KnownImageWorkflow = "base" | "illustration" | "edit";
+type KnownImageWorkflow = "base" | "illustration" | "edit" | "radiance";
 
 const extractWorkflowNameFromText = (
   input: string | null | undefined,
@@ -7,7 +7,7 @@ const extractWorkflowNameFromText = (
     return null;
   }
   const match = input.match(
-    /\bselected\s+workflow\s*:\s*(base|illustration|edit)\b/i,
+    /\bselected\s+workflow\s*:\s*(base|illustration|edit|radiance)\b/i,
   );
   if (!match) {
     return null;
@@ -16,7 +16,8 @@ const extractWorkflowNameFromText = (
   if (
     workflow === "base" ||
     workflow === "illustration" ||
-    workflow === "edit"
+    workflow === "edit" ||
+    workflow === "radiance"
   ) {
     return workflow;
   }
@@ -88,7 +89,7 @@ export const normalizeUtilStageForImageChain = ({
         normalized: false,
       };
     }
-    if (/^img_gen_(base|illustration|edit)_finalize$/.test(parsedStage)) {
+    if (/^img_gen_(base|illustration|edit|radiance)_finalize$/.test(parsedStage)) {
       return {
         accepted: true,
         stage: parsedStage,
@@ -117,7 +118,7 @@ export const normalizeUtilStageForImageChain = ({
     };
   }
 
-  if (/^img_gen_(base|illustration|edit)_finalize$/.test(currentUtilTaskName)) {
+  if (/^img_gen_(base|illustration|edit|radiance)_finalize$/.test(currentUtilTaskName)) {
     if (parsedStage === "callback") {
       return {
         accepted: true,

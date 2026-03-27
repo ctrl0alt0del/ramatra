@@ -42,6 +42,7 @@ const defaultUtilTaskPrompts = {
     "Do not call any tools in this task.",
     "Pick edit only when user asked to edit existing images.",
     "Pick illustration for clearly non-photoreal stylized drawing/anime requests.",
+    "Pick radiance when user explicitly asks for high-quality professional photoreal photos.",
     "Otherwise pick base.",
   ].join("\n"),
   img_gen_loras: [
@@ -66,7 +67,16 @@ const defaultUtilTaskPrompts = {
     "You finalize image generation call arguments.",
     "Return JSON only.",
     "Schema:",
-    '{"workflowName":"base"|"illustration"|"edit","prompt":"string","negativePrompt":"string","width":number,"height":number,"steps":number,"cfg":number,"samplerName":"string","scheduler":"string","loras":[{"name":"string","strength_model":1,"strength_clip":1}],"imageRefs":["user:1"|"generated:1"]}',
+    '{"workflowName":"base"|"illustration"|"edit"|"radiance","prompt":"string","negativePrompt":"string","width":number,"height":number,"steps":number,"cfg":number,"samplerName":"string","scheduler":"string","loras":[{"name":"string","strength_model":1,"strength_clip":1}],"imageRefs":["user:1"|"generated:1"]}',
+    "Respect workflow defaults unless user requested otherwise.",
+    "Never set cfg above 3.5.",
+    "If no LoRA, return empty loras array.",
+  ].join("\n"),
+  img_gen_radiance_finalize: [
+    "You finalize image generation call arguments for the radiance workflow.",
+    "Return JSON only.",
+    "Schema:",
+    '{"workflowName":"radiance","prompt":"string","negativePrompt":"string","width":number,"height":number,"steps":number,"cfg":number,"samplerName":"string","scheduler":"string","loras":[{"name":"string","strength_model":1,"strength_clip":1}],"imageRefs":["user:1"|"generated:1"]}',
     "Respect workflow defaults unless user requested otherwise.",
     "Never set cfg above 3.5.",
     "If no LoRA, return empty loras array.",
@@ -94,11 +104,11 @@ const defaultUtilTaskPrompts = {
   studio_prompt_enhance: [
     "You are a prompt enhancement assistant for Direct Studio.",
     "Input is provided in context_text and includes workflow and user prompt.",
-    "If workflow is missing, infer from request: edit when modifying existing image, illustration for stylized/anime/drawing, otherwise base.",
+    "If workflow is missing, infer from request: edit when modifying existing image, illustration for stylized/anime/drawing, radiance for requests explicitly emphasizing high quality/professional photoreal results, otherwise base.",
     "Return ONLY valid JSON.",
     "No markdown, no prose, no code fences, no util_task blocks.",
     "JSON schema:",
-    '{"workflowName":"base|illustration|edit","enhancedPrompt":"string","negativePrompt":"string","notes":"string"}',
+    '{"workflowName":"base|illustration|edit|radiance","enhancedPrompt":"string","negativePrompt":"string","notes":"string"}',
     "Rules:",
     "- Preserve user intent exactly.",
     "- Keep enhancedPrompt concise and production-ready.",
@@ -196,17 +206,40 @@ const defaultUtilTaskPrompts = {
     "JSON schema:",
     '{"workflowName":"edit","enhancedPrompt":"string","negativePrompt":"string","notes":"string"}',
   ].join("\n"),
+  studio_prompt_radiance_enhance: [
+    "You are a prompt enhancement assistant for Direct Studio radiance workflow.",
+    "Input is provided in context_text and includes user request.",
+    "Return ONLY valid JSON.",
+    "No markdown, no prose, no code fences, no util_task blocks.",
+    "",
+    "RADIANCE PROMPTING GUIDE",
+    "",
+    "- Prioritize photoreal cinematic portraiture and physically plausible lighting.",
+    "- Keep prompts descriptive, concrete, and production-ready (no tag spam).",
+    "- Emphasize camera language when useful: lens, framing, depth of field, and light direction.",
+    "- Preserve user intent exactly and avoid adding unrelated style shifts.",
+    "",
+    "NEGATIVE PROMPT RULES",
+    "",
+    "Use a negative prompt only when it helps avoid common artifacts.",
+    "Keep negative prompts short and practical.",
+    "",
+    "JSON schema:",
+    '{"workflowName":"radiance","enhancedPrompt":"string","negativePrompt":"string","notes":"string"}',
+  ].join("\n"),
 } as const;
 
 const defaultUtilTaskMcpServers: Record<string, UtilTaskMcpServerLabel[]> = {
   img_gen_workflow: [],
   img_gen_loras: ["comfy_readonly"],
   img_gen_finalize: ["comfy"],
+  img_gen_radiance_finalize: ["comfy"],
   studio_lora_find: ["comfy"],
   studio_prompt_enhance: [],
   studio_prompt_base_enhance: [],
   studio_prompt_illustration_enhance: [],
   studio_prompt_edit_enhance: [],
+  studio_prompt_radiance_enhance: [],
 };
 
 export type DefaultUtilTaskName = keyof typeof defaultUtilTaskPrompts;
@@ -264,6 +297,24 @@ const ensureUtilTaskSettingsSeeded = () => {
       `,
     )
     .get("studio_lora_find") as { prompt: string } | undefined;
+  const maybeLegacyImgGenWorkflowPrompt = db
+    .prepare(
+      `
+        SELECT prompt
+        FROM util_task_settings
+        WHERE name = ?
+      `,
+    )
+    .get("img_gen_workflow") as { prompt: string } | undefined;
+  const maybeLegacyStudioPromptEnhance = db
+    .prepare(
+      `
+        SELECT prompt
+        FROM util_task_settings
+        WHERE name = ?
+      `,
+    )
+    .get("studio_prompt_enhance") as { prompt: string } | undefined;
 
   if (maybeLegacyLorasServers?.mcp_servers_json === JSON.stringify(["comfy"])) {
     db.prepare(
@@ -322,6 +373,38 @@ const ensureUtilTaskSettingsSeeded = () => {
       defaultUtilTaskPrompts.studio_lora_find,
       timestamp,
       "studio_lora_find",
+    );
+  }
+  if (
+    typeof maybeLegacyImgGenWorkflowPrompt?.prompt === "string" &&
+    !maybeLegacyImgGenWorkflowPrompt.prompt.includes(
+      "Pick radiance when user explicitly asks for high-quality professional photoreal photos.",
+    )
+  ) {
+    db.prepare(
+      `
+        UPDATE util_task_settings
+        SET prompt = ?, updated_at = ?
+        WHERE name = ?
+      `,
+    ).run(defaultUtilTaskPrompts.img_gen_workflow, timestamp, "img_gen_workflow");
+  }
+  if (
+    typeof maybeLegacyStudioPromptEnhance?.prompt === "string" &&
+    !maybeLegacyStudioPromptEnhance.prompt.includes(
+      "base|illustration|edit|radiance",
+    )
+  ) {
+    db.prepare(
+      `
+        UPDATE util_task_settings
+        SET prompt = ?, updated_at = ?
+        WHERE name = ?
+      `,
+    ).run(
+      defaultUtilTaskPrompts.studio_prompt_enhance,
+      timestamp,
+      "studio_prompt_enhance",
     );
   }
   for (const [name, prompt] of Object.entries(defaultUtilTaskPrompts)) {

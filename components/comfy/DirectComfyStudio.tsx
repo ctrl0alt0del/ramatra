@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import extractJsonFromString from "extract-json-from-string";
 
-type WorkflowName = "base" | "illustration" | "edit";
+type WorkflowName = "base" | "illustration" | "edit" | "radiance";
 
 type LoraItem = {
   name: string;
@@ -242,6 +242,14 @@ const workflowDefaults: Record<
     samplerName: "euler_ancestral",
     scheduler: "beta",
   },
+  radiance: {
+    width: 1024,
+    height: 1024,
+    steps: 22,
+    cfg: 1,
+    samplerName: "er_sde",
+    scheduler: "power_shift",
+  },
 };
 
 const toDataUrlFromComfyImage = (image: ComfyImage) =>
@@ -334,7 +342,8 @@ const normalizeAssistantPromptEnhance = (value: unknown): AssistantPromptEnhance
   const workflowName =
     record.workflowName === "base" ||
     record.workflowName === "illustration" ||
-    record.workflowName === "edit"
+    record.workflowName === "edit" ||
+    record.workflowName === "radiance"
       ? record.workflowName
       : null;
   if (
@@ -1804,6 +1813,7 @@ export function DirectComfyStudio() {
                 <option value="base">base</option>
                 <option value="illustration">illustration</option>
                 <option value="edit">edit</option>
+                <option value="radiance">radiance</option>
               </select>
             </label>
 
@@ -2352,22 +2362,3 @@ export function DirectComfyStudio() {
     </main>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

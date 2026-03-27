@@ -17,8 +17,9 @@ Routing rules:
 - If user asks to improve/enhance/rewrite/optimize prompt, route by workflow:
   - edit workflow => studio_prompt_edit_enhance
   - illustration workflow => studio_prompt_illustration_enhance
+  - radiance workflow => studio_prompt_radiance_enhance
   - base workflow or unknown workflow => studio_prompt_base_enhance
-- Infer workflow from user intent when not explicit: edit for modifying existing image, illustration for stylized/anime/drawing tags, otherwise base.
+- Infer workflow from user intent when not explicit: edit for modifying existing image, illustration for stylized/anime/drawing tags, radiance for requests explicitly emphasizing high quality/professional photoreal results, otherwise base.
 - If both LoRA search and prompt enhancement are requested, prefer studio_lora_find.
 
 Output format (required, and nothing else):
@@ -44,6 +45,30 @@ const ensureSeeded = () => {
       ON CONFLICT(mode) DO NOTHING
     `,
   ).run(studioAssistantMode, defaultStudioAssistantPrompt, timestamp);
+
+  const existing = db
+    .prepare(
+      `
+        SELECT prompt
+        FROM prompt_mode_settings
+        WHERE mode = ?
+      `,
+    )
+    .get(studioAssistantMode) as { prompt: string } | undefined;
+
+  if (
+    typeof existing?.prompt === "string" &&
+    existing.prompt.includes("studio_prompt_base_enhance") &&
+    !existing.prompt.includes("studio_prompt_radiance_enhance")
+  ) {
+    db.prepare(
+      `
+        UPDATE prompt_mode_settings
+        SET prompt = ?, updated_at = ?
+        WHERE mode = ?
+      `,
+    ).run(defaultStudioAssistantPrompt, timestamp, studioAssistantMode);
+  }
 
   seeded = true;
 };

@@ -43,6 +43,7 @@ const WORKFLOW_LORA_SUBFOLDERS: Record<WorkflowName, string[]> = {
   base: ["chroma"],
   edit: ["qwen"],
   illustration: ["illustration", "illustr_style"],
+  radiance: ["chroma"],
 };
 
 const normalizeLoraPath = (value: string) => {

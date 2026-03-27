@@ -9,12 +9,14 @@ import { getSchedulerState, updateComfyTaskForJob } from "@/lib/tasks/scheduler"
 import { buildBaseWorkflow } from "./workflows/base";
 import { buildEditWorkflow } from "./workflows/edit";
 import { buildHoloEdenScribbleWorkflow } from "./workflows/holoEdenScribble";
+import { buildRadianceWorkflow } from "./workflows/radiance";
 import { type WorkflowInput, type WorkflowName } from "./workflows/types";
 
 const workflows: Record<WorkflowName, (input: WorkflowInput) => Workflow> = {
   base: buildBaseWorkflow,
   illustration: buildHoloEdenScribbleWorkflow,
   edit: buildEditWorkflow,
+  radiance: buildRadianceWorkflow,
 };
 
 const getNodeProgressRatio = (value: number | null, max: number | null) => {

@@ -1,11 +1,12 @@
 import { getStoredGeneration } from "@/lib/comfy/generations";
 import { getDb } from "@/lib/db";
 import { getTask } from "@/lib/tasks/store";
+import type { WorkflowName } from "@/lib/comfy/workflows/types";
 
 type DirectComfyHistoryRow = {
   id: string;
   task_id: string;
-  workflow_name: "base" | "illustration" | "edit";
+  workflow_name: WorkflowName;
   prompt: string;
   negative_prompt: string;
   input_image_json: string;
@@ -27,7 +28,7 @@ type LoraConfig = {
 };
 
 export type DirectComfyHistoryParams = {
-  workflowName: "base" | "illustration" | "edit";
+  workflowName: WorkflowName;
   prompt: string;
   negativePrompt: string;
   inputImage: string[];
