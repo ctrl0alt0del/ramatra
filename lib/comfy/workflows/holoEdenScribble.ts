@@ -49,7 +49,7 @@ export function buildHoloEdenScribbleWorkflow(_input: WorkflowInput) {
   });
   /*Load Checkpoint*/
   const [MODEL_1, CLIP_1, VAE_1] = cls.CheckpointLoaderSimple({
-    ckpt_name: "mysticsWonders_waivierV10.safetensors",
+    ckpt_name: "hyphoriaIlluNAI_v001.safetensors",
   });
   /*CLIP Set Last Layer*/
   const [CLIP_2] = cls.CLIPSetLastLayer({
@@ -118,15 +118,15 @@ export function buildHoloEdenScribbleWorkflow(_input: WorkflowInput) {
   });
   /*FaceDetailer*/
   const [OUT_0_1] = cls.FaceDetailer({
-    guide_size: 1024,
+    guide_size: 512,
     guide_size_for: true,
-    max_size: 2048,
+    max_size: 1024,
     seed: input.seed + 1,
-    steps: input.steps,
-    cfg: 3,
+    steps: 30,
+    cfg: 8,
     sampler_name: "euler_ancestral",
     scheduler: "karras",
-    denoise: 0.4,
+    denoise: 0.5,
     feather: 5,
     noise_mask: true,
     force_inpaint: true,

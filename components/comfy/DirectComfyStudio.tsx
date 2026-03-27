@@ -539,6 +539,8 @@ export function DirectComfyStudio() {
   const [generationProgress, setGenerationProgress] =
     useState<GenerationProgressState | null>(null);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
+  const [isFullscreenZoomed, setIsFullscreenZoomed] = useState(false);
+  const [fullscreenPan, setFullscreenPan] = useState({ x: 0, y: 0 });
   const [splitPresetIndex, setSplitPresetIndex] = useState(0);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [assistantInput, setAssistantInput] = useState("");
@@ -559,6 +561,15 @@ export function DirectComfyStudio() {
   const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const assistantStreamRef = useRef<EventSource | null>(null);
+  const fullscreenLastTapAtRef = useRef(0);
+  const fullscreenPointerRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    panX: number;
+    panY: number;
+  } | null>(null);
+  const fullscreenPointerMovedRef = useRef(false);
   const historyScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const historyLoadMoreRef = useRef<HTMLDivElement | null>(null);
   const isLoadingHistoryRef = useRef(false);
@@ -568,6 +579,25 @@ export function DirectComfyStudio() {
   const [stepsInput, setStepsInput] = useState(String(workflowDefaults.base.steps));
   const [cfgInput, setCfgInput] = useState(String(workflowDefaults.base.cfg));
   const [seedInput, setSeedInput] = useState(String(seed));
+
+  const closeFullscreenImage = () => {
+    setFullscreenImage(null);
+    setIsFullscreenZoomed(false);
+    setFullscreenPan({ x: 0, y: 0 });
+    fullscreenLastTapAtRef.current = 0;
+    fullscreenPointerRef.current = null;
+    fullscreenPointerMovedRef.current = false;
+  };
+
+  const toggleFullscreenZoom = () => {
+    setIsFullscreenZoomed((previous) => {
+      const next = !previous;
+      if (!next) {
+        setFullscreenPan({ x: 0, y: 0 });
+      }
+      return next;
+    });
+  };
 
   const controlClassName =
     "mt-1 w-full rounded-xl border border-[hsl(var(--aui-border))] bg-white/90 px-3 py-2 text-base md:text-sm";
@@ -2301,7 +2331,14 @@ export function DirectComfyStudio() {
                           key={`${item.id}-${index}`}
                           type="button"
                           className="overflow-hidden rounded-xl border border-[hsl(var(--aui-border))] bg-white"
-                          onClick={() => setFullscreenImage(src)}
+                          onClick={() => {
+                            setFullscreenImage(src);
+                            setIsFullscreenZoomed(false);
+                            setFullscreenPan({ x: 0, y: 0 });
+                            fullscreenLastTapAtRef.current = 0;
+                            fullscreenPointerRef.current = null;
+                            fullscreenPointerMovedRef.current = false;
+                          }}
                         >
                           <img
                             alt={`Generated ${index + 1}`}
@@ -2335,27 +2372,109 @@ export function DirectComfyStudio() {
       {fullscreenImage ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4"
-          onClick={() => setFullscreenImage(null)}
+          onClick={closeFullscreenImage}
           role="button"
           tabIndex={0}
           onKeyDown={(event) => {
             if (event.key === "Escape" || event.key === "Enter" || event.key === " ") {
-              setFullscreenImage(null);
+              closeFullscreenImage();
             }
           }}
         >
           <button
             type="button"
             className="absolute right-4 top-4 rounded-lg border border-white/40 bg-black/40 px-3 py-1 text-sm text-white"
-            onClick={() => setFullscreenImage(null)}
+            onClick={closeFullscreenImage}
           >
             Close
           </button>
           <img
             src={fullscreenImage}
             alt="Fullscreen generated"
-            className="max-h-full max-w-full rounded-xl object-contain"
+            className="max-h-full max-w-full rounded-xl object-contain transition-transform duration-200"
+            style={{
+              transform: isFullscreenZoomed
+                ? `translate(${fullscreenPan.x}px, ${fullscreenPan.y}px) scale(2)`
+                : "scale(1)",
+              cursor: isFullscreenZoomed
+                ? (fullscreenPointerRef.current ? "grabbing" : "grab")
+                : "zoom-in",
+              touchAction: "none",
+            }}
             onClick={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => {
+              event.stopPropagation();
+              toggleFullscreenZoom();
+            }}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              if (!isFullscreenZoomed) {
+                return;
+              }
+              fullscreenPointerRef.current = {
+                pointerId: event.pointerId,
+                x: event.clientX,
+                y: event.clientY,
+                panX: fullscreenPan.x,
+                panY: fullscreenPan.y,
+              };
+              fullscreenPointerMovedRef.current = false;
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              if (!isFullscreenZoomed) {
+                return;
+              }
+              const activePointer = fullscreenPointerRef.current;
+              if (!activePointer || activePointer.pointerId !== event.pointerId) {
+                return;
+              }
+
+              const deltaX = event.clientX - activePointer.x;
+              const deltaY = event.clientY - activePointer.y;
+              if (Math.abs(deltaX) > 2 || Math.abs(deltaY) > 2) {
+                fullscreenPointerMovedRef.current = true;
+              }
+
+              setFullscreenPan({
+                x: activePointer.panX + deltaX,
+                y: activePointer.panY + deltaY,
+              });
+            }}
+            onPointerUp={(event) => {
+              const activePointer = fullscreenPointerRef.current;
+              if (!activePointer || activePointer.pointerId !== event.pointerId) {
+                return;
+              }
+              fullscreenPointerRef.current = null;
+              try {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              } catch {
+                // Ignore capture release errors.
+              }
+            }}
+            onPointerCancel={(event) => {
+              const activePointer = fullscreenPointerRef.current;
+              if (!activePointer || activePointer.pointerId !== event.pointerId) {
+                return;
+              }
+              fullscreenPointerRef.current = null;
+            }}
+            onTouchEnd={(event) => {
+              event.stopPropagation();
+              if (fullscreenPointerMovedRef.current) {
+                fullscreenPointerMovedRef.current = false;
+                fullscreenLastTapAtRef.current = 0;
+                return;
+              }
+              const now = Date.now();
+              if (now - fullscreenLastTapAtRef.current <= 280) {
+                toggleFullscreenZoom();
+                fullscreenLastTapAtRef.current = 0;
+                return;
+              }
+              fullscreenLastTapAtRef.current = now;
+            }}
           />
         </div>
       ) : null}
