@@ -23,6 +23,7 @@ type GenerationHistoryItem = {
     prompt: string;
     negativePrompt: string;
     inputImage: string[];
+    referenceStrength: number;
     width: number;
     height: number;
     steps: number;
@@ -214,6 +215,7 @@ const workflowDefaults: Record<
     height: number;
     steps: number;
     cfg: number;
+    referenceStrength: number;
     samplerName: string;
     scheduler: string;
   }
@@ -223,6 +225,7 @@ const workflowDefaults: Record<
     height: 1024,
     steps: 25,
     cfg: 1,
+    referenceStrength: 0,
     samplerName: "euler",
     scheduler: "simple",
   },
@@ -231,6 +234,7 @@ const workflowDefaults: Record<
     height: 1024,
     steps: 30,
     cfg: 3.5,
+    referenceStrength: 0,
     samplerName: "dpmpp_2m_sde",
     scheduler: "karras",
   },
@@ -239,6 +243,7 @@ const workflowDefaults: Record<
     height: 768,
     steps: 4,
     cfg: 1,
+    referenceStrength: 0,
     samplerName: "euler_ancestral",
     scheduler: "beta",
   },
@@ -247,6 +252,7 @@ const workflowDefaults: Record<
     height: 1024,
     steps: 22,
     cfg: 1,
+    referenceStrength: 0,
     samplerName: "er_sde",
     scheduler: "power_shift",
   },
@@ -518,6 +524,7 @@ export function DirectComfyStudio() {
   const [height, setHeight] = useState(workflowDefaults.base.height);
   const [steps, setSteps] = useState(workflowDefaults.base.steps);
   const [cfg, setCfg] = useState(workflowDefaults.base.cfg);
+  const [referenceStrength, setReferenceStrength] = useState(workflowDefaults.base.referenceStrength);
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 1_000_000));
   const [samplerName, setSamplerName] = useState(workflowDefaults.base.samplerName);
   const [scheduler, setScheduler] = useState(workflowDefaults.base.scheduler);
@@ -578,6 +585,7 @@ export function DirectComfyStudio() {
   const [heightInput, setHeightInput] = useState(String(workflowDefaults.base.height));
   const [stepsInput, setStepsInput] = useState(String(workflowDefaults.base.steps));
   const [cfgInput, setCfgInput] = useState(String(workflowDefaults.base.cfg));
+  const [referenceStrengthInput, setReferenceStrengthInput] = useState(String(workflowDefaults.base.referenceStrength));
   const [seedInput, setSeedInput] = useState(String(seed));
 
   const closeFullscreenImage = () => {
@@ -635,12 +643,14 @@ export function DirectComfyStudio() {
     setHeight(defaults.height);
     setSteps(defaults.steps);
     setCfg(defaults.cfg);
+    setReferenceStrength(defaults.referenceStrength);
     setSamplerName(defaults.samplerName);
     setScheduler(defaults.scheduler);
     setWidthInput(String(defaults.width));
     setHeightInput(String(defaults.height));
     setStepsInput(String(defaults.steps));
     setCfgInput(String(defaults.cfg));
+    setReferenceStrengthInput(String(defaults.referenceStrength));
   }, [workflowName]);
 
   useEffect(() => {
@@ -851,6 +861,7 @@ export function DirectComfyStudio() {
     setHeight(params.height);
     setSteps(params.steps);
     setCfg(params.cfg);
+    setReferenceStrength(typeof params.referenceStrength === "number" ? params.referenceStrength : 0);
     setSeed(params.seed);
     setSamplerName(params.samplerName);
     setScheduler(params.scheduler);
@@ -859,6 +870,7 @@ export function DirectComfyStudio() {
     setHeightInput(String(params.height));
     setStepsInput(String(params.steps));
     setCfgInput(String(params.cfg));
+    setReferenceStrengthInput(String(typeof params.referenceStrength === "number" ? params.referenceStrength : 0));
     setSeedInput(String(params.seed));
 
     const mappedLoras: Record<
@@ -1339,17 +1351,20 @@ export function DirectComfyStudio() {
       integerOnly: true,
     });
     const nextCfg = toNormalizedNumber(cfgInput, cfg, { min: 0, max: 3.5 });
+    const nextReferenceStrength = toNormalizedNumber(referenceStrengthInput, referenceStrength, { min: 0, max: 2 });
     const nextSeed = toNormalizedNumber(seedInput, seed, { min: 1, integerOnly: true });
 
     setWidth(nextWidth);
     setHeight(nextHeight);
     setSteps(nextSteps);
     setCfg(nextCfg);
+    setReferenceStrength(nextReferenceStrength);
     setSeed(nextSeed);
     setWidthInput(String(nextWidth));
     setHeightInput(String(nextHeight));
     setStepsInput(String(nextSteps));
     setCfgInput(String(nextCfg));
+    setReferenceStrengthInput(String(nextReferenceStrength));
     setSeedInput(String(nextSeed));
 
     const trimmedPrompt = positivePrompt.trim();
@@ -1365,6 +1380,7 @@ export function DirectComfyStudio() {
         positivePrompt: trimmedPrompt,
         negativePrompt,
         inputImage: uploadedInputImages,
+        referenceStrength: nextReferenceStrength,
         width: nextWidth,
         height: nextHeight,
         steps: nextSteps,
@@ -1502,6 +1518,7 @@ export function DirectComfyStudio() {
             prompt: trimmedPrompt,
             negativePrompt,
             inputImage: [...uploadedInputImages],
+            referenceStrength: nextReferenceStrength,
             width: nextWidth,
             height: nextHeight,
             steps: nextSteps,
@@ -1990,6 +2007,28 @@ export function DirectComfyStudio() {
                       min: 0,
                       max: 3.5,
                     })
+                  }
+                />
+              </label>
+
+              <label className="text-xs font-medium text-[hsl(var(--aui-foreground))]">Reference Strength
+                <input
+                  className={controlClassName}
+                  type="number"
+                  inputMode="decimal"
+                  step="0.05"
+                  min={0}
+                  max={2}
+                  value={referenceStrengthInput}
+                  onChange={(event) => setReferenceStrengthInput(event.target.value)}
+                  onBlur={() =>
+                    syncNumericInput(
+                      referenceStrengthInput,
+                      referenceStrength,
+                      setReferenceStrength,
+                      setReferenceStrengthInput,
+                      { min: 0, max: 2 },
+                    )
                   }
                 />
               </label>

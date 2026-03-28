@@ -6,6 +6,7 @@ export type WorkflowInput = {
   positivePrompt: string;
   negativePrompt: string;
   inputImage: string[];
+  referenceStrength: number;
   width: number;
   height: number;
   steps: number;

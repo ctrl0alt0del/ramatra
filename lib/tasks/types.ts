@@ -116,6 +116,7 @@ export type TaskGroupPayloadMap = {
     prompt: string;
     negativePrompt: string;
     inputImage: string[];
+    referenceStrength: number;
     width: number;
     height: number;
     steps: number;

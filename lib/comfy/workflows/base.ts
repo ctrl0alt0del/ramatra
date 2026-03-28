@@ -6,6 +6,7 @@ const withDefaults = (input: Partial<WorkflowInput>): WorkflowInput => {
     positivePrompt: input.positivePrompt || "",
     negativePrompt: input.negativePrompt || "",
     inputImage: input.inputImage || [],
+    referenceStrength: input.referenceStrength ?? 0,
     width: input.width || 1024,
     height: input.height || 1512,
     steps: input.steps || 25,
@@ -21,6 +22,7 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
   const input = withDefaults(_input);
   const workflow = new Workflow();
   const cls = workflow.classes;
+  const sourceImagePath = input.inputImage.find(Boolean);
 
   /*AdvancedNoise*/
   const [OUT_0_6] = cls.AdvancedNoise({
@@ -184,12 +186,49 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
   const [CONDITIONING_5] = cls.ConditioningZeroOut({
     conditioning: CONDITIONING_4,
   });
+  let positiveConditioning = CONDITIONING_3;
+  let negativeConditioning = CONDITIONING_5;
+
+  if (sourceImagePath) {
+    /*Load Image*/
+    const [IMAGE_2] = cls.LoadImage({
+      image: sourceImagePath,
+    });
+    /*ResizeAndPadImage*/
+    const [OUT_0_8] = cls.ResizeAndPadImage({
+      target_width: input.width,
+      target_height: input.height,
+      padding_color: "white",
+      interpolation: "area",
+      image: IMAGE_2,
+    });
+    /*Load ControlNet Model*/
+    const [CONTROL_NET_1] = cls.ControlNetLoader({
+      control_net_name: "flux1DevControlnetUnion_v10.safetensors",
+    });
+    /*SetUnionControlNetType*/
+    const [CONTROL_NET_2] = cls.SetUnionControlNetType({
+      type: "openpose",
+      control_net: CONTROL_NET_1,
+    });
+    /*Apply Controlnet with VAE*/
+    [positiveConditioning, negativeConditioning] = cls.ControlNetApplySD3({
+      strength: input.referenceStrength,
+      start_percent: 0,
+      end_percent: 0.6,
+      positive: CONDITIONING_3,
+      negative: CONDITIONING_5,
+      control_net: CONTROL_NET_2,
+      vae: VAE_1,
+      image: OUT_0_8,
+    });
+  }
   /*CFGGuider*/
   const [GUIDER_1] = cls.CFGGuider({
     cfg: input.cfg,
     model: MODEL_2,
-    positive: CONDITIONING_3,
-    negative: CONDITIONING_5,
+    positive: positiveConditioning,
+    negative: negativeConditioning,
   });
   /*SamplerCustomAdvanced*/
   const [LATENT_1] = cls.SamplerCustomAdvanced({
@@ -238,8 +277,8 @@ export function buildBaseWorkflow(_input: WorkflowInput) {
     model: MODEL_2,
     clip: TOKENIZED_CLIP_1,
     vae: VAE_1,
-    positive: CONDITIONING_3,
-    negative: CONDITIONING_5,
+    positive: positiveConditioning,
+    negative: negativeConditioning,
     bbox_detector: OUT_0_1,
     sam_model_opt: OUT_0_3,
   });

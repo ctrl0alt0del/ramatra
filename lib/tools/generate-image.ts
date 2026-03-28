@@ -22,6 +22,8 @@ export const generateImageParameters = {
   negativePrompt: z.string().default(""),
   imageRefs: z.array(z.string().min(1)).max(3).default([]),
   inputImage: z.array(z.string().min(1)).max(3).default([]),
+  referenceStrength: z.number().min(0).max(2).optional(),
+  referenceStreangth: z.number().min(0).max(2).optional(),
   steps: z.number().int().positive().max(1000).default(25),
   width: z.number().int().positive().max(2048).default(512),
   height: z.number().int().positive().max(2048).default(512),
@@ -262,6 +264,8 @@ export const executeGenerateImage = async (
     negativePrompt,
     imageRefs,
     inputImage,
+    referenceStrength,
+    referenceStreangth,
     steps,
     width,
     height,
@@ -272,11 +276,14 @@ export const executeGenerateImage = async (
     loras,
   } = input;
 
+  const effectiveReferenceStrength = referenceStrength ?? referenceStreangth ?? 0;
+
   try {
     console.info("[comfy-debug] generate_image:received", {
       workflowName,
       imageRefsCount: imageRefs.length,
       inputImageCount: inputImage.length,
+      referenceStrength: effectiveReferenceStrength,
       promptLength: prompt.length,
     });
 
@@ -316,6 +323,7 @@ export const executeGenerateImage = async (
       prompt,
       negativePrompt,
       inputImage: resolvedInputImage,
+      referenceStrength: effectiveReferenceStrength,
       width,
       height,
       steps,
@@ -345,6 +353,7 @@ export const executeGenerateImage = async (
           negativePrompt,
           imageRefs,
           inputImage,
+          referenceStrength: effectiveReferenceStrength,
           steps,
           width,
           height,
@@ -427,6 +436,8 @@ export const registerGenerateImageMcpTool = (server: McpServer) => {
     },
   );
 };
+
+
 
 
 

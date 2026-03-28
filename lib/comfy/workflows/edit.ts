@@ -6,6 +6,7 @@ const withDefaults = (input: Partial<WorkflowInput>): WorkflowInput => {
     positivePrompt: input.positivePrompt || "",
     negativePrompt: input.negativePrompt || "",
     inputImage: input.inputImage || [],
+    referenceStrength: input.referenceStrength ?? 0,
     width: input.width || 1024,
     height: input.height || 1024,
     steps: input.steps || 40,

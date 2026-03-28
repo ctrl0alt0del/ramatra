@@ -8,6 +8,7 @@ const withDefaults = (input: Partial<WorkflowInput>): WorkflowInput => {
       input.negativePrompt ||
       "very low quality. ugly. deformed. cartoon. illustration. art. artistic.",
     inputImage: input.inputImage || [],
+    referenceStrength: input.referenceStrength ?? 0,
     width: input.width || 1024,
     height: input.height || 1024,
     steps: input.steps || 22,
@@ -203,7 +204,7 @@ export function buildRadianceWorkflow(_input: WorkflowInput) {
     });
     /*Apply Controlnet with VAE*/
     [positiveConditioning, negativeConditioning] = cls.ControlNetApplySD3({
-      strength: 0,
+      strength: input.referenceStrength,
       start_percent: 0,
       end_percent: 0.6,
       positive: CONDITIONING_5,

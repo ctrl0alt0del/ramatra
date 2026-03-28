@@ -17,6 +17,8 @@ const workflowInputSchema = z.object({
   positivePrompt: z.string(),
   negativePrompt: z.string(),
   inputImage: z.array(z.string()).default([]),
+  referenceStrength: z.number().min(0).max(2).optional(),
+  referenceStreangth: z.number().min(0).max(2).optional(),
   width: z.number(),
   height: z.number(),
   steps: z.number(),
@@ -46,6 +48,7 @@ export async function POST(req: Request) {
     const input = parsed.data;
     const workflowName = input.workflowName;
     const workflowInput = input.input;
+    const referenceStrength = workflowInput.referenceStrength ?? workflowInput.referenceStreangth ?? 0;
 
     await getClient();
 
@@ -56,6 +59,7 @@ export async function POST(req: Request) {
       prompt: workflowInput.positivePrompt,
       negativePrompt: workflowInput.negativePrompt,
       inputImage: workflowInput.inputImage,
+        referenceStrength,
       width: workflowInput.width,
       height: workflowInput.height,
       steps: workflowInput.steps,
@@ -73,6 +77,7 @@ export async function POST(req: Request) {
         prompt: workflowInput.positivePrompt,
         negativePrompt: workflowInput.negativePrompt,
         inputImage: workflowInput.inputImage,
+        referenceStrength,
         width: workflowInput.width,
         height: workflowInput.height,
         steps: workflowInput.steps,

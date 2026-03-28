@@ -235,6 +235,7 @@ const ensureSchema = (db: Database.Database) => {
       sampler_name TEXT NOT NULL,
       scheduler TEXT NOT NULL,
       loras_json TEXT NOT NULL DEFAULT '[]',
+      reference_strength REAL NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
@@ -570,6 +571,16 @@ const ensureSchema = (db: Database.Database) => {
       UPDATE util_task_settings
       SET mcp_servers_json = '[]'
       WHERE mcp_servers_json IS NULL OR TRIM(COALESCE(mcp_servers_json, '')) = ''
+    `);
+  }
+
+  const directComfyHistoryColumns = db.prepare(`PRAGMA table_info(direct_comfy_history)`).all() as Array<{
+    name: string;
+  }>;
+  if (!directComfyHistoryColumns.some((column) => column.name === "reference_strength")) {
+    db.exec(`
+      ALTER TABLE direct_comfy_history
+      ADD COLUMN reference_strength REAL NOT NULL DEFAULT 0
     `);
   }
 

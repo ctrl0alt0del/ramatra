@@ -80,6 +80,10 @@ export const executeQueuedComfyTask = async (
         positivePrompt: task.payload.prompt,
         negativePrompt: task.payload.negativePrompt,
         inputImage: Array.isArray(task.payload.inputImage) ? task.payload.inputImage : [],
+        referenceStrength:
+          typeof task.payload.referenceStrength === "number"
+            ? task.payload.referenceStrength
+            : 0,
         width: task.payload.width,
         height: task.payload.height,
         steps: task.payload.steps,

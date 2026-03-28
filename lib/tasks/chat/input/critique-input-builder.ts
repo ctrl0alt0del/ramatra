@@ -98,6 +98,7 @@ export const buildBiasedCritiqueLmStudioInput = ({
         scheduler: comfyTask.payload.scheduler,
         loras: comfyTask.payload.loras,
         inputImage: comfyTask.payload.inputImage,
+        referenceStrength: comfyTask.payload.referenceStrength,
         sourceTaskId: comfyTask.id,
         sourceJobId: comfyTask.result?.jobId ?? null,
         selectedImageIndex: imageIndex,

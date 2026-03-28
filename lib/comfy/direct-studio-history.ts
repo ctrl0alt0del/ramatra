@@ -18,6 +18,7 @@ type DirectComfyHistoryRow = {
   sampler_name: string;
   scheduler: string;
   loras_json: string;
+  reference_strength: number;
   created_at: string;
 };
 
@@ -40,6 +41,7 @@ export type DirectComfyHistoryParams = {
   samplerName: string;
   scheduler: string;
   loras: LoraConfig[];
+  referenceStrength: number;
 };
 
 export type DirectComfyHistoryItem = {
@@ -86,9 +88,10 @@ export const upsertDirectComfyHistory = (input: {
         sampler_name,
         scheduler,
         loras_json,
+        reference_strength,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(task_id) DO UPDATE SET
         workflow_name = excluded.workflow_name,
         prompt = excluded.prompt,
@@ -102,6 +105,7 @@ export const upsertDirectComfyHistory = (input: {
         sampler_name = excluded.sampler_name,
         scheduler = excluded.scheduler,
         loras_json = excluded.loras_json,
+        reference_strength = excluded.reference_strength,
         updated_at = excluded.updated_at
     `,
   ).run(
@@ -119,6 +123,7 @@ export const upsertDirectComfyHistory = (input: {
     input.params.samplerName,
     input.params.scheduler,
     JSON.stringify(input.params.loras),
+    input.params.referenceStrength,
     timestamp,
     timestamp,
   );
@@ -151,6 +156,7 @@ export const listDirectComfyHistory = ({
           sampler_name,
           scheduler,
           loras_json,
+          reference_strength,
           created_at
         FROM direct_comfy_history
         ORDER BY created_at DESC
@@ -198,6 +204,10 @@ export const listDirectComfyHistory = ({
         samplerName: row.sampler_name,
         scheduler: row.scheduler,
         loras,
+        referenceStrength:
+          typeof row.reference_strength === "number" && Number.isFinite(row.reference_strength)
+            ? row.reference_strength
+            : 0,
       },
       images,
     };

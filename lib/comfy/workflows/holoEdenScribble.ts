@@ -8,6 +8,7 @@ const withDefaults = (input: Partial<WorkflowInput>): WorkflowInput => {
       input.negativePrompt ||
       "((text)), ((watermark)), ((cappedlimb:1.5)), breasts, censorship, clothed, mosaic, lowres, bad anatomy, poorly drawn, watermark, signature, extra limbs, text, embedding:ng_deepnegative_v1_75t, text, bubble speach",
     inputImage: input.inputImage || [],
+    referenceStrength: input.referenceStrength ?? 0,
     width: input.width || 1024,
     height: input.height || 1024,
     steps: input.steps || 30,
@@ -23,15 +24,14 @@ export function buildHoloEdenScribbleWorkflow(_input: WorkflowInput) {
   const input = withDefaults(_input);
   const workflow = new Workflow();
   const cls = workflow.classes;
+  const sourceImagePath = input.inputImage.find(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
 
   /*Load ControlNet Model*/
   const [CONTROL_NET_1] = cls.ControlNetLoader({
     control_net_name:
       "SDXL\\controlnet-scribble-sdxl-1.0-anime\\diffusion_pytorch_model.safetensors",
-  });
-  /*Load Image*/
-  const [IMAGE_3] = cls.LoadImage({
-    image: "Screenshot 2025-11-29 144941.png",
   });
   /*UltralyticsDetectorProvider*/
   const [OUT_0_2] = cls.UltralyticsDetectorProvider({
@@ -88,16 +88,27 @@ export function buildHoloEdenScribbleWorkflow(_input: WorkflowInput) {
     text: input.negativePrompt,
     clip: OUT_1_1,
   });
-  /*Apply ControlNet*/
-  const [CONDITIONING_2, CONDITIONING_3] = cls.ControlNetApplyAdvanced({
-    strength: 0,
-    start_percent: 0,
-    end_percent: 0.8,
-    positive: OUT_0_4,
-    negative: CONDITIONING_1,
-    control_net: CONTROL_NET_1,
-    image: IMAGE_3,
-  });
+
+  let positiveConditioning = OUT_0_4;
+  let negativeConditioning = CONDITIONING_1;
+
+  if (sourceImagePath) {
+    /*Load Image*/
+    const [IMAGE_3] = cls.LoadImage({
+      image: sourceImagePath,
+    });
+    /*Apply ControlNet*/
+    [positiveConditioning, negativeConditioning] = cls.ControlNetApplyAdvanced({
+      strength: input.referenceStrength,
+      start_percent: 0,
+      end_percent: 0.8,
+      positive: OUT_0_4,
+      negative: CONDITIONING_1,
+      control_net: CONTROL_NET_1,
+      image: IMAGE_3,
+    });
+  }
+
   /*KSampler*/
   const [LATENT_1] = cls.KSampler({
     seed: input.seed,
@@ -107,8 +118,8 @@ export function buildHoloEdenScribbleWorkflow(_input: WorkflowInput) {
     scheduler: input.scheduler,
     denoise: 1,
     model: MODEL_2,
-    positive: CONDITIONING_2,
-    negative: CONDITIONING_3,
+    positive: positiveConditioning,
+    negative: negativeConditioning,
     latent_image: LATENT_2,
   });
   /*VAE Decode*/
@@ -150,8 +161,8 @@ export function buildHoloEdenScribbleWorkflow(_input: WorkflowInput) {
     model: MODEL_2,
     clip: OUT_1_1,
     vae: VAE_1,
-    positive: CONDITIONING_2,
-    negative: CONDITIONING_3,
+    positive: positiveConditioning,
+    negative: negativeConditioning,
     bbox_detector: OUT_0_2,
   });
   /*Upscale Image (using Model)*/
