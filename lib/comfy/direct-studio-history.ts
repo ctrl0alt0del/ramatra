@@ -1,4 +1,3 @@
-import { getStoredGeneration } from "@/lib/comfy/generations";
 import { getDb } from "@/lib/db";
 import { getTask } from "@/lib/tasks/store";
 import type { WorkflowName } from "@/lib/comfy/workflows/types";
@@ -20,6 +19,10 @@ type DirectComfyHistoryRow = {
   loras_json: string;
   reference_strength: number;
   created_at: string;
+};
+
+type GenerationImageRow = {
+  position: number;
 };
 
 type LoraConfig = {
@@ -62,8 +65,6 @@ const parseJsonArray = <T>(value: string, fallback: T[]): T[] => {
     return fallback;
   }
 };
-
-const toDataUrl = (mimeType: string, data: string) => `data:${mimeType};base64,${data}`;
 
 export const upsertDirectComfyHistory = (input: {
   taskId: string;
@@ -169,11 +170,21 @@ export const listDirectComfyHistory = ({
   return rows.map((row) => {
     const task = getTask(row.task_id);
     const jobId = task?.type === "comfy" ? task.result?.jobId ?? null : null;
-    const generation = jobId ? getStoredGeneration(jobId) : null;
-    const images =
-      generation?.status === "completed"
-        ? generation.images.map((image) => toDataUrl(image.mimeType, image.data))
-        : [];
+    const imageRows = jobId
+      ? (db
+          .prepare(
+            `
+              SELECT position
+              FROM comfy_generation_images
+              WHERE job_id = ?
+              ORDER BY position ASC
+            `,
+          )
+          .all(jobId) as GenerationImageRow[])
+      : [];
+    const images = imageRows.map(
+      (image) => `/api/comfy/history-image?jobId=${encodeURIComponent(jobId!)}&index=${image.position}`,
+    );
 
     const inputImage = parseJsonArray<string>(row.input_image_json, []).filter(
       (value) => typeof value === "string",

@@ -20,3 +20,6 @@ export type WorkflowInput = {
     strength_clip: number;
   }[];
 };
+
+export const toComfyLoraPath = (value: string) =>
+  value.trim().replace(/[\\/]+/g, "\\");

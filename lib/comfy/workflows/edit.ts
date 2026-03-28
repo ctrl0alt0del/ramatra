@@ -1,5 +1,5 @@
 import { Workflow } from "@stable-canvas/comfyui-client";
-import { WorkflowInput } from "./types";
+import { toComfyLoraPath, WorkflowInput } from "./types";
 
 const withDefaults = (input: Partial<WorkflowInput>): WorkflowInput => {
   return {
@@ -96,7 +96,7 @@ export function buildEditWorkflow(_input: WorkflowInput) {
   let currentModel = OUT_0_3;
   for (const lora of input.loras) {
     [currentModel] = cls.LoraLoaderModelOnly({
-      lora_name: lora.name,
+      lora_name: toComfyLoraPath(lora.name),
       strength_model: lora.strength_model,
       model: currentModel,
     });

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import extractJsonFromString from "extract-json-from-string";
 
@@ -542,6 +543,7 @@ export function DirectComfyStudio() {
   const [isLoadingLoras, setIsLoadingLoras] = useState(false);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isCancellingGeneration, setIsCancellingGeneration] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generationProgress, setGenerationProgress] =
     useState<GenerationProgressState | null>(null);
@@ -580,6 +582,8 @@ export function DirectComfyStudio() {
   const historyScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const historyLoadMoreRef = useRef<HTMLDivElement | null>(null);
   const isLoadingHistoryRef = useRef(false);
+  const activeGenerationTaskIdRef = useRef<string | null>(null);
+  const cancelActiveGenerationStreamRef = useRef<(() => void) | null>(null);
 
   const [widthInput, setWidthInput] = useState(String(workflowDefaults.base.width));
   const [heightInput, setHeightInput] = useState(String(workflowDefaults.base.height));
@@ -830,7 +834,7 @@ export function DirectComfyStudio() {
       setRaw(String(fallback));
       return;
     }
-    const parsed = Number(trimmed);
+    const parsed = Number(trimmed.replace(",", "."));
     if (!Number.isFinite(parsed)) {
       apply(fallback);
       setRaw(String(fallback));
@@ -1032,7 +1036,7 @@ export function DirectComfyStudio() {
       integerOnly = false,
     }: { min?: number; max?: number; integerOnly?: boolean } = {},
   ) => {
-    const parsed = Number(raw.trim());
+    const parsed = Number(raw.trim().replace(",", "."));
     if (!Number.isFinite(parsed)) {
       return fallback;
     }
@@ -1374,6 +1378,9 @@ export function DirectComfyStudio() {
     }
 
     setIsGenerating(true);
+    setIsCancellingGeneration(false);
+    activeGenerationTaskIdRef.current = null;
+    cancelActiveGenerationStreamRef.current = null;
     setGenerationProgress(null);
     try {
       const inputPayload = {
@@ -1415,6 +1422,7 @@ export function DirectComfyStudio() {
       if (!taskId) {
         throw new Error("Comfy task id is missing from generate response.");
       }
+      activeGenerationTaskIdRef.current = taskId;
 
       setGenerationProgress({
         taskId,
@@ -1441,7 +1449,14 @@ export function DirectComfyStudio() {
             timeoutId = null;
           }
           eventSource.close();
+          if (activeGenerationTaskIdRef.current === taskId) {
+            activeGenerationTaskIdRef.current = null;
+          }
+          cancelActiveGenerationStreamRef.current = null;
           handler();
+        };
+        cancelActiveGenerationStreamRef.current = () => {
+          finish(() => reject(new Error("Generation cancelled by user.")));
         };
 
         const handleTaskEvent = (rawData: string) => {
@@ -1556,6 +1571,37 @@ export function DirectComfyStudio() {
       setError(nextError instanceof Error ? nextError.message : "Generation failed.");
     } finally {
       setIsGenerating(false);
+      setIsCancellingGeneration(false);
+      activeGenerationTaskIdRef.current = null;
+      cancelActiveGenerationStreamRef.current = null;
+    }
+  };
+
+  const cancelActiveGeneration = async () => {
+    if (isCancellingGeneration) {
+      return;
+    }
+
+    const taskId = activeGenerationTaskIdRef.current ?? generationProgress?.taskId ?? null;
+    if (!taskId) {
+      return;
+    }
+
+    setIsCancellingGeneration(true);
+    try {
+      const response = await fetch(`/api/comfy/task/${encodeURIComponent(taskId)}/cancel`, {
+        method: "POST",
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(data.error ?? `Failed to cancel generation (${response.status})`);
+      }
+      cancelActiveGenerationStreamRef.current?.();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to cancel generation.");
+      setIsCancellingGeneration(false);
     }
   };
 
@@ -2014,11 +2060,9 @@ export function DirectComfyStudio() {
               <label className="text-xs font-medium text-[hsl(var(--aui-foreground))]">Reference Strength
                 <input
                   className={controlClassName}
-                  type="number"
+                  type="text"
                   inputMode="decimal"
-                  step="0.05"
-                  min={0}
-                  max={2}
+                  autoComplete="off"
                   value={referenceStrengthInput}
                   onChange={(event) => setReferenceStrengthInput(event.target.value)}
                   onBlur={() =>
@@ -2240,6 +2284,16 @@ export function DirectComfyStudio() {
                   ? "Generating..."
                   : "Generate"}
             </button>
+            {isGenerating ? (
+              <button
+                className="w-full rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 disabled:opacity-50"
+                disabled={isCancellingGeneration}
+                type="button"
+                onClick={() => void cancelActiveGeneration()}
+              >
+                {isCancellingGeneration ? "Cancelling..." : "Cancel Generation"}
+              </button>
+            ) : null}
 
             {generationProgress ? (
               <div className="rounded-xl border border-[hsl(var(--aui-border))] bg-white/75 px-3 py-2 text-xs">
@@ -2379,10 +2433,13 @@ export function DirectComfyStudio() {
                             fullscreenPointerMovedRef.current = false;
                           }}
                         >
-                          <img
-                            alt={`Generated ${index + 1}`}
-                            className="w-full object-cover"
+                          <Image
                             src={src}
+                            alt={`Generated ${index + 1}`}
+                            width={1024}
+                            height={1024}
+                            sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 33vw"
+                            className="h-auto w-full object-cover"
                           />
                         </button>
                       ))}
@@ -2395,7 +2452,19 @@ export function DirectComfyStudio() {
                   </div>
                 ) : null}
                 {historyHasMore ? (
-                  <div ref={historyLoadMoreRef} className="h-2 w-full" aria-hidden="true" />
+                  <div className="space-y-2">
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        className="rounded-full border border-[hsl(var(--aui-border))] bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(236,242,255,0.95))] px-3 py-1 text-[11px] font-semibold text-[hsl(var(--aui-foreground))] shadow-sm transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => void loadHistoryPage(historyOffset)}
+                        disabled={isLoadingHistory}
+                      >
+                        {isLoadingHistory ? "Loading..." : "Load More"}
+                      </button>
+                    </div>
+                    <div ref={historyLoadMoreRef} className="h-2 w-full" aria-hidden="true" />
+                  </div>
                 ) : history.length > 0 ? (
                   <div className="rounded-xl border border-dashed border-[hsl(var(--aui-border))] bg-white/60 px-3 py-2 text-center text-xs text-[hsl(var(--aui-muted-foreground))]">
                     End of history
@@ -2520,3 +2589,5 @@ export function DirectComfyStudio() {
     </main>
   );
 }
+
+
